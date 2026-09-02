@@ -98,7 +98,7 @@ const Header = ({ navigate }) => {
           <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pancasila_Coat_of_Arms_of_Indonesia.svg/800px-Pancasila_Coat_of_Arms_of_Indonesia.svg.png" alt="Logo" className="w-5 h-5 object-contain filter brightness-0 invert" />
         </div>
         <div>
-          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>BangdesPKP</h1>
+          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>Direktorat Pembangunan Perumahan Perdesaan Kementerian PKP</h1>
           <p className="text-[10px] text-gray-500 font-medium">Support System</p>
         </div>
       </div>
