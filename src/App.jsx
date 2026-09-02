@@ -33,7 +33,7 @@ const fallbackPegawaiData = [
     JenisASN: "PNS", 
     EmailDinas: "rinidm@pkp.go.id",
     SubUnitKerja: "Direktorat Pembangunan Perumahan Perdesaan",
-    KelasJabatan: "Kelas Jabatan 15",
+    KelasJabatan: "15",
     AtasanLangsung: "Direktur Jenderal",
     JabatanAtasanLangsung: "Direktur Jenderal Perumahan"
   },
@@ -45,43 +45,7 @@ const fallbackPegawaiData = [
     JenisASN: "PNS", 
     EmailDinas: "marlina.rumiris@pkp.go.id",
     SubUnitKerja: "Subdit Perencanaan Teknis",
-    KelasJabatan: "Kelas Jabatan 11",
-    AtasanLangsung: "Rini Dyah Mawarty, S.T., M.T.",
-    JabatanAtasanLangsung: "Direktur Pembangunan Perumahan Perdesaan"
-  },
-  { 
-    Nama: "Tarmizi, S.T., M.Si.", 
-    NIP: "197606072000031003", 
-    Golongan: "IV/b", 
-    Jabatan: "Kepala Subdirektorat Wilayah I", 
-    JenisASN: "PNS", 
-    EmailDinas: "tarmizi76@pkp.go.id",
-    SubUnitKerja: "Subdit Wilayah I",
-    KelasJabatan: "Kelas Jabatan 11",
-    AtasanLangsung: "Rini Dyah Mawarty, S.T., M.T.",
-    JabatanAtasanLangsung: "Direktur Pembangunan Perumahan Perdesaan"
-  },
-  { 
-    Nama: "Bramantyo, S.T., M.P.W.K.", 
-    NIP: "198708302010121007", 
-    Golongan: "IV/a", 
-    Jabatan: "Kepala Subdirektorat Wilayah II", 
-    JenisASN: "PNS", 
-    EmailDinas: "bramantyo@pkp.go.id",
-    SubUnitKerja: "Subdit Wilayah II",
-    KelasJabatan: "Kelas Jabatan 11",
-    AtasanLangsung: "Rini Dyah Mawarty, S.T., M.T.",
-    JabatanAtasanLangsung: "Direktur Pembangunan Perumahan Perdesaan"
-  },
-  { 
-    Nama: "Muhammad Yunus S.T.", 
-    NIP: "197604142002121002", 
-    Golongan: "III/d", 
-    Jabatan: "Kepala Subdirektorat Wilayah III", 
-    JenisASN: "PNS", 
-    EmailDinas: "m.yunus@pkp.go.id",
-    SubUnitKerja: "Subdit Wilayah III",
-    KelasJabatan: "Kelas Jabatan 11",
+    KelasJabatan: "11",
     AtasanLangsung: "Rini Dyah Mawarty, S.T., M.T.",
     JabatanAtasanLangsung: "Direktur Pembangunan Perumahan Perdesaan"
   }
@@ -98,7 +62,7 @@ const Header = ({ navigate }) => {
           <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pancasila_Coat_of_Arms_of_Indonesia.svg/800px-Pancasila_Coat_of_Arms_of_Indonesia.svg.png" alt="Logo" className="w-5 h-5 object-contain filter brightness-0 invert" />
         </div>
         <div>
-          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>Direktorat Pembangunan Perumahan Perdesaan Kementerian PKP</h1>
+          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>BangdesPKP</h1>
           <p className="text-[10px] text-gray-500 font-medium">Support System</p>
         </div>
       </div>
@@ -132,7 +96,6 @@ const Dashboard = ({ navigate }) => {
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 md:py-12">
       <div className="flex flex-col lg:flex-row gap-8 lg:gap-16">
         
-        {/* Left Column - Main Intro */}
         <div className="flex-1">
           <div className="mb-10">
             <span className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider mb-3 uppercase shadow-2xs" style={{ backgroundColor: colors.krem, color: colors.midnightGreen }}>
@@ -155,7 +118,6 @@ const Dashboard = ({ navigate }) => {
           </div>
         </div>
 
-        {/* Right Column - Sidebar */}
         <div className="w-full lg:w-[400px] flex flex-col gap-4">
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
             <div className="px-5 py-4 text-white font-bold text-sm flex items-center gap-2" style={{ backgroundColor: colors.midnightGreen }}>
@@ -272,12 +234,28 @@ const ProfileView = ({ navigate }) => {
       });
   }, []);
 
-  const filteredPegawai = pegawaiList.filter(item => 
-    (item.Nama && item.Nama.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (item.NIP && item.NIP.includes(searchTerm)) ||
-    (item.Jabatan && item.Jabatan.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (item.SubUnitKerja && item.SubUnitKerja.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredPegawai = pegawaiList.filter(item => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return true;
+
+    const nama = (item.Nama || '').toLowerCase();
+    const nip = (item.NIP || '').toLowerCase();
+    const jabatan = (item.Jabatan || '').toLowerCase();
+    const subUnit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').toLowerCase();
+
+    // Strict and precise matching for sub-unit fields to prevent unwanted overlap (e.g., Wilayah II vs Wilayah III)
+    if (term.includes('wilayah iii') || term === 'wilayah iii') {
+      return subUnit.includes('wilayah iii');
+    }
+    if (term.includes('wilayah ii') && !term.includes('wilayah iii')) {
+      return subUnit.includes('wilayah ii') && !subUnit.includes('wilayah iii');
+    }
+    if (term.includes('wilayah i') && !term.includes('wilayah ii') && !term.includes('wilayah iii')) {
+      return subUnit.includes('wilayah i') && !subUnit.includes('wilayah ii') && !subUnit.includes('wilayah iii');
+    }
+
+    return nama.includes(term) || nip.includes(term) || jabatan.includes(term) || subUnit.includes(term);
+  });
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
@@ -295,14 +273,13 @@ const ProfileView = ({ navigate }) => {
           <p className="text-sm text-gray-500">Direktorat Pembangunan Perumahan Perdesaan ({pegawaiList.length} Pegawai Terdaftar)</p>
         </div>
 
-        {/* Search box */}
         <div className="w-full md:w-72 relative">
           <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400">
             <Search size={18} />
           </span>
           <input 
             type="text"
-            placeholder="Cari nama, NIP, atau sub unit..."
+            placeholder="Cari nama, NIP, sub unit, atau jabatan..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700 shadow-2xs"
@@ -316,56 +293,64 @@ const ProfileView = ({ navigate }) => {
         <div className="flex flex-col gap-4">
           {filteredPegawai.length > 0 ? (
             filteredPegawai.map((item, index) => {
-              const subUnit = item.SubUnitKerja || item['Sub Unit Kerja'] || 'Subdit Direktorat';
-              const rawKelas = item.KelasJabatan || item['Kelas Jabatan'] || '8';
-              const kelasFormatted = rawKelas.toLowerCase().includes('kelas') ? rawKelas : `Kelas Jabatan ${rawKelas}`;
+              const subUnit = item.SubUnitKerja || item['Sub Unit Kerja'] || '';
+              const rawKelas = item.KelasJabatan || item['Kelas Jabatan'] || '';
+              const kelasFormatted = rawKelas ? (rawKelas.toLowerCase().includes('kelas') ? rawKelas : `Kelas Jabatan ${rawKelas}`) : '';
               const atasan = item.AtasanLangsung || item['Atasan Langsung'] || '-';
-              const jabatanAtasan = item.JabatanAtasanLangsung || item['Jabatan Atasan Langsung'] || '-';
+              const jabatanAtasan = item.JabatanAtasanLangsung || item['Jabatan Atasan Langsung'] || '';
               const email = item.EmailDinas || item['Email Dinas'] || 'email@pkp.go.id';
               const nip = item.NIP || '-';
               const jabatan = item.Jabatan || '-';
 
               return (
                 <div key={index} className="bg-white rounded-2xl border border-gray-100 shadow-xs hover:shadow-md transition-all overflow-hidden p-6">
-                  {/* Top Header Row within Card */}
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-gray-100">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-100">
                     <div>
-                      <h3 className="font-extrabold text-lg text-gray-900 leading-tight mb-1">{item.Nama}</h3>
+                      <h3 className="font-extrabold text-lg md:text-xl text-gray-900 mb-1.5 leading-snug">{item.Nama}</h3>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="text-gray-500 font-medium">NIP {nip}</span>
-                        <span className="px-3 py-1 rounded-full font-bold text-xs shadow-2xs" style={{ backgroundColor: '#E0F2FE', color: '#0369A1' }}>
-                          {subUnit}
-                        </span>
-                        <span className="px-3 py-1 rounded-full font-bold text-xs shadow-2xs" style={{ backgroundColor: '#FEF3C7', color: '#B45309' }}>
-                          {kelasFormatted}
-                        </span>
+                        
+                        {subUnit && (
+                          <span className="px-3 py-1 rounded-full font-bold text-xs" style={{ backgroundColor: '#E2F0F5', color: colors.darkAqua }}>
+                            {subUnit}
+                          </span>
+                        )}
+
+                        {kelasFormatted && (
+                          <span className="px-3 py-1 rounded-full font-bold text-xs" style={{ backgroundColor: colors.krem, color: '#8C7A32' }}>
+                            {kelasFormatted}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Bottom Info Details Grid (Horizontal Layout) */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 text-xs">
+                  <div className="pt-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-xs md:text-sm">
                     <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">JABATAN</div>
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">JABATAN</div>
                       <div className="font-semibold text-gray-800 leading-snug">{jabatan}</div>
                     </div>
+
                     <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">EMAIL DINAS</div>
-                      <div className="font-semibold text-gray-800 flex items-center gap-1.5">
-                        <Mail size={13} className="text-gray-400" /> {email}
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">EMAIL DINAS</div>
+                      <div className="font-semibold text-gray-800 leading-snug flex items-center gap-1.5">
+                        <Mail size={14} className="text-gray-400" /> {email}
                       </div>
                     </div>
+
                     <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">ATASAN LANGSUNG</div>
-                      <div className="font-semibold text-gray-800">{atasan}</div>
-                      <div className="text-[11px] text-gray-400 mt-0.5">{jabatanAtasan}</div>
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">ATASAN LANGSUNG</div>
+                      <div className="font-semibold text-gray-800 leading-snug">{atasan}</div>
+                      {jabatanAtasan && (
+                        <div className="text-[11px] text-gray-400 mt-0.5 leading-tight">{jabatanAtasan}</div>
+                      )}
                     </div>
                   </div>
                 </div>
               );
             })
           ) : (
-            <div className="text-center py-16 text-gray-400 bg-white rounded-2xl border border-gray-100">
+            <div className="col-span-full text-center py-16 text-gray-400 bg-white rounded-2xl border border-gray-100">
               Tidak ada data pegawai yang cocok dengan pencarian Anda.
             </div>
           )}
@@ -411,14 +396,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen font-sans selection:bg-teal-900 selection:text-white" style={{ backgroundColor: '#FAFAFA' }}>
-      <div 
-        className="fixed top-0 right-0 w-1/2 h-screen opacity-10 pointer-events-none z-0"
-        style={{
-          background: `radial-gradient(circle at top right, ${colors.darkAqua} 0%, transparent 70%)`
-        }}
-      />
-      
+    <div className="min-h-screen font-sans selection:bg-teal-900 selection:text-white bg-[#FAFAFA]">
       <div className="relative z-10">
         <Header navigate={setCurrentView} />
         <main>
