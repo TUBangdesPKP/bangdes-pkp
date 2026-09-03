@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, 
   HelpCircle, 
@@ -19,14 +19,50 @@ import {
   KeyRound,
   RotateCcw,
   UploadCloud,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Trash2
 } from 'lucide-react';
 
+/**
+ * PALET WARNA RESMI KEMENTERIAN PKP
+ * (Perumahan dan Kawasan Permukiman)
+ */
+export const PALETTE_PKP = {
+  krem: {
+    nama: 'Krem',
+    cmyk: '0 2 8 5',
+    rgb: '242 238 223',
+    hex: '#F2EEDF',
+    keterangan: 'Warna Pattern'
+  },
+  khaki: {
+    nama: 'Khaki',
+    cmyk: '0 8 35 16',
+    rgb: '213 197 138',
+    hex: '#D5C58A',
+    keterangan: 'Warna Logo'
+  },
+  darkAqua: {
+    nama: 'Dark Aqua',
+    cmyk: '88 21 0 55',
+    rgb: '14 91 115',
+    hex: '#0E5B73',
+    keterangan: 'Warna Pattern'
+  },
+  midnightGreen: {
+    nama: 'Midnight Green',
+    cmyk: '92 22 0 62',
+    rgb: '8 76 97',
+    hex: '#084C61',
+    keterangan: 'Warna Logo'
+  }
+};
+
 const colors = {
-  krem: '#F2EEDF',
-  khaki: '#D5C58A',
-  darkAqua: '#0E5B73',
-  midnightGreen: '#084C61',
+  krem: PALETTE_PKP.krem.hex,
+  khaki: PALETTE_PKP.khaki.hex,
+  darkAqua: PALETTE_PKP.darkAqua.hex,
+  midnightGreen: PALETTE_PKP.midnightGreen.hex,
   white: '#FFFFFF',
   textMain: '#1A202C',
   textMuted: '#718096',
@@ -59,9 +95,11 @@ const normalizePegawai = (item) => {
     KelasJabatan: normalized.kelasjabatan || normalized.kelas || '',
     EmailDinas: normalized.emaildinas || normalized.email || '',
     AtasanLangsung: normalized.atasanlangsung || normalized.atasan || '',
+    JabatanAtasanLangsung: normalized.jabatanatasanlangsung || normalized.jabatanatasan || normalized.atasanlangsungjabatan || '',
     Foto_Pegawai: normalized.fotopegawai || normalized.foto || '',
     PIN: normalized.pin || '',
-    Akun_Role: normalized.akunrole || normalized.role || 'pegawai'
+    Akun_Role: normalized.akunrole || normalized.role || 'pegawai',
+    TunjanganKinerja: normalized.tunjangankinerja || normalized.tukin || ''
   };
 };
 
@@ -120,7 +158,66 @@ const fetchPegawaiData = async (forceRefresh = false) => {
   return { data: [], source: 'empty' };
 };
 
-const parsePDFPresensi = async (file) => {
+const getPeriodEvents = () => {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const currentDay = now.getDate();
+
+  let tukinYear = currentYear;
+  let tukinMonth = currentMonth;
+  if (currentDay < 11 && currentMonth === 1) {
+    tukinYear = currentYear - 1;
+    tukinMonth = 12;
+  } else if (currentDay < 11) {
+    tukinMonth = currentMonth - 1;
+  }
+
+  const tukinStartDate = new Date(tukinYear, tukinMonth - 1, 11);
+  const tukinEndDate = new Date(tukinYear, tukinMonth, 10);
+  const paymentMonthDate = new Date(tukinYear, tukinMonth, 1);
+
+  const formatShortDate = (d) => `${d.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][d.getMonth()]} ${d.getFullYear()}`;
+  const formatNumDate = (d) => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
+  const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const paymentMonthName = monthNames[paymentMonthDate.getMonth()];
+
+  const tukinId = `tukin-${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
+  const tukinFolder = `Periode_Tukin_${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
+
+  return {
+    'uang-makan': [
+      {
+        id: 'um-2026-08',
+        status: 'DIBUKA',
+        title: 'Bukti Dukung Uang Makan Agustus 2026',
+        periodeLabel: '1 Agu 2026 – 31 Agu 2026',
+        periodeEvent: '01-08-2026 s/d 31-08-2026',
+        startDate: '01-08-2026',
+        endDate: '31-08-2026',
+        periodeFolder: 'Periode_2026-08',
+        tipe: 'Uang Makan',
+        expectedDays: 31
+      }
+    ],
+    'tukin': [
+      {
+        id: tukinId,
+        status: 'DIBUKA',
+        title: `Bukti Dukung Tunjangan Kinerja Bulan ${paymentMonthName} ${paymentMonthDate.getFullYear()}`,
+        periodeLabel: `${formatShortDate(tukinStartDate)} – ${formatShortDate(tukinEndDate)}`,
+        periodeEvent: `${formatNumDate(tukinStartDate)} s/d ${formatNumDate(tukinEndDate)}`,
+        startDate: formatNumDate(tukinStartDate),
+        endDate: formatNumDate(tukinEndDate),
+        periodeFolder: tukinFolder,
+        tipe: `Tunjangan Kinerja (Pembayaran ${paymentMonthName} ${paymentMonthDate.getFullYear()})`,
+        expectedDays: 31
+      }
+    ]
+  };
+};
+
+const parsePDFPresensi = async (file, expectedPeriodEvent = null, bankPegawaiData = []) => {
   if (!window.pdfjsLib) {
     await new Promise((resolve, reject) => {
       const script = document.createElement('script');
@@ -145,30 +242,110 @@ const parsePDFPresensi = async (file) => {
     fullText += ' ' + pageString;
   }
 
-  const namaMatch = fullText.match(/Nama\s*:\s*([^NIPPeriode]+)/i);
-  const nipMatch = fullText.match(/NIP\s*:\s*(\d+)/i);
-  const periodeMatch = fullText.match(/Periode\s*:\s*(\d{2}-\d{2}-\d{4})\s*s\/d\s*(\d{2}-\d{2}-\d{4})/i);
+  // 1. Ekstraksi Mutlak NIP 18 Digit
+  const nipMatch = fullText.match(/\b(\d{18})\b/);
+  let nip = nipMatch ? nipMatch[1] : '-';
 
-  const nama = namaMatch ? namaMatch[1].trim() : '';
-  const nip = nipMatch ? nipMatch[1].trim() : '';
-  const periode = periodeMatch ? `${periodeMatch[1]} s/d ${periodeMatch[2]}` : '';
+  // 2. Ekstraksi Nama Cerdas menggunakan Bank Data Spreadsheet
+  let cleanNama = 'Pegawai';
+  if (nip !== '-' && bankPegawaiData && bankPegawaiData.length > 0) {
+    const found = bankPegawaiData.find(p => p.NIP === nip);
+    if (found && found.Nama) {
+      // Ambil nama tanpa gelar (potong di koma pertama)
+      cleanNama = found.Nama.split(',')[0].trim();
+    }
+  }
 
+  // Fallback Nama jika tidak ada di Spreadsheet (Reverse scanning dari NIP)
+  if (cleanNama === 'Pegawai' && nip !== '-') {
+    const nipIndex = fullText.indexOf(nip);
+    if (nipIndex > -1) {
+      // Ambil 100 karakter sebelum NIP
+      let textBeforeNip = fullText.substring(Math.max(0, nipIndex - 100), nipIndex);
+      // Hapus kata kunci NIP, :, dan titik
+      textBeforeNip = textBeforeNip.replace(/NIP|[:\.]/gi, '').trim();
+      
+      // Ambil teks yang berada setelah kata "Nama"
+      const namaMatchFallback = textBeforeNip.match(/Nama\s*([A-Za-z\s,.]+)/i);
+      if (namaMatchFallback && namaMatchFallback[1]) {
+        let tempName = namaMatchFallback[1].trim();
+        tempName = tempName.split(',')[0].trim();
+        // Hapus sisa-sisa karakter aneh di ujung (seperti P yang menempel dari NIP)
+        tempName = tempName.replace(/[^a-zA-Z\s]+$/g, '').trim();
+        if (tempName.length > 3) {
+          cleanNama = tempName;
+        }
+      } else {
+        // Jika kata "Nama" terputus jauh, ambil saja teks sisa yang paling dekat
+        let fallbackWords = textBeforeNip.split(/\s+/).filter(w => w.length > 1 && !/^[0-9]+$/.test(w));
+        if (fallbackWords.length > 0) {
+           let tempName = fallbackWords.slice(-3).join(' ').replace(/[^a-zA-Z\s]/g, '').trim();
+           if (tempName.length > 3) cleanNama = tempName;
+        }
+      }
+    }
+  }
+
+  // 3. Ekstraksi dan Validasi Super Kebal Rentang Tanggal
+  const periodeMatch = fullText.match(/(\d{2}[-/]\d{2}[-/]\d{4})\s*(?:s\s*[/]?\s*d\.?|s\.d\.|-|sampai)\s*(\d{2}[-/]\d{2}[-/]\d{4})/i);
+  let periode = '';
+  let isDateValid = true;
   let expectedDays = 31;
   let periodeFolder = 'Periode_2026-08';
 
   if (periodeMatch) {
-    const parts = periodeMatch[1].split('-');
+    const startStr = periodeMatch[1].replace(/\//g, '-');
+    const endStr = periodeMatch[2].replace(/\//g, '-');
+    periode = `${startStr} s/d ${endStr}`;
+
+    const parts = startStr.split('-');
     const month = parseInt(parts[1], 10);
     const year = parseInt(parts[2], 10);
     expectedDays = new Date(year, month, 0).getDate();
     periodeFolder = `Periode_${year}-${String(month).padStart(2, '0')}`;
+
+    // Validasi absolut tanpa mempedulikan spasi ekstra
+    if (expectedPeriodEvent) {
+      const cleanExtracted = periode.replace(/\s+/g, '').toLowerCase();
+      const cleanExpected = expectedPeriodEvent.replace(/\s+/g, '').toLowerCase();
+      if (cleanExtracted !== cleanExpected) {
+         isDateValid = false;
+      }
+    }
+  } else {
+    isDateValid = false;
   }
 
   const rows = [];
   const datePattern = /(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu),\s*(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/gi;
   const matches = [...fullText.matchAll(datePattern)];
-
   const seenDates = new Set();
+
+  // Helper untuk membersihkan lokasi dari angka rekap dan stempel jam
+  const cleanLocation = (text) => {
+    if (!text || text === '-') return '-';
+    // Hapus waktu WIB, matriks angka kehadiran (1 0 0), dan durasi (8j 30m)
+    let cleaned = text.replace(/\b\d{2}:\d{2}\s*WIB\b/gi, '')
+                      .replace(/\bWIB\b/gi, '')
+                      .replace(/(?:\b\d+\s+){2,}/g, ' ') 
+                      .replace(/\b\d+j\s*\d+m\b/g, '');
+                      
+    cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL|WFO|WFA|WFH|Libur|Cuti|Dinas)\b/gi, '');
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    cleaned = cleaned.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, ''); 
+    
+    if (!cleaned || cleaned.length < 3) return '-';
+
+    const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP'];
+    for (const loc of knownLocs) {
+      if (cleaned.toLowerCase().includes(loc.toLowerCase())) return loc;
+    }
+    
+    if (cleaned.toLowerCase().includes('pejaten')) return 'Pejaten Barat, Jakarta Selatan';
+    
+    return cleaned.length > 25 ? 'BTN Center' : cleaned;
+  };
+
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
     const hari = match[1];
@@ -184,24 +361,11 @@ const parsePDFPresensi = async (file) => {
     const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : fullText.length;
     const block = fullText.substring(startIndex, endIndex);
 
-    const times = [...block.matchAll(/(\d{2}:\d{2})\s*WIB/g)].map(m => m[1]);
+    const times = [...block.matchAll(/(\d{2}:\d{2})\s*WIB/gi)].map(m => m[1]);
     const datang = times[0] || '-';
     const pulang = times.length > 1 ? times[1] : (times[0] && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0] : '-');
 
-    const cleanLocation = (text) => {
-      if (!text || text === '-') return '-';
-      let cleaned = text.replace(/\b\d{2}:\d{2}\b/g, '').replace(/\bWIB\b/g, '').trim();
-      cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '').replace(/\b\d+\b/g, '').trim();
-      cleaned = cleaned.replace(/\s+/g, ' ');
-      if (!cleaned || cleaned.length < 2) return '-';
-      const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP'];
-      for (const loc of knownLocs) {
-        if (cleaned.includes(loc)) return loc;
-      }
-      return cleaned.length > 25 ? 'BTN Center' : cleaned;
-    };
-
-    const lokasiMatches = [...block.matchAll(/([A-Za-z0-9\s.,-]+(?:Center|Mandiri|Kantor|Satker|Direktorat)[A-Za-z0-9\s.,-]*)/gi)];
+    const lokasiMatches = [...block.matchAll(/([A-Za-z0-9\s.,-]+(?:Center|Mandiri|Kantor|Satker|Direktorat|Kementerian|Pejaten)[A-Za-z0-9\s.,-]*)/gi)];
     let lokasiDatang = '-';
     let lokasiPulang = '-';
 
@@ -232,24 +396,21 @@ const parsePDFPresensi = async (file) => {
     });
   }
 
-  rows.sort((a, b) => {
-    const da = parseInt(a.tanggal.split(' ')[0], 10);
-    const db = parseInt(b.tanggal.split(' ')[0], 10);
-    return da - db;
-  });
+  rows.sort((a, b) => parseInt(a.tanggal.split(' ')[0], 10) - parseInt(b.tanggal.split(' ')[0], 10));
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
 
   return {
-    nama,
-    nip,
-    periode,
+    nama: cleanNama || 'Pegawai',
+    nip: nip || '-',
+    periode: periode || (expectedPeriodEvent || '-'),
     periodeFolder,
     expectedDays,
     totalRows: rows.length,
     rows,
     totalHariMasuk,
-    isValid: rows.length === expectedDays
+    isValid: rows.length > 0 && isDateValid,
+    isDateMismatch: !isDateValid
   };
 };
 
@@ -288,13 +449,13 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
             </div>
             <button 
               onClick={() => navigate('absensi-uang-makan')}
-              className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors"
+              className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors cursor-pointer"
             >
               Panel Utama
             </button>
             <button 
               onClick={onLogoutRequest}
-              className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1"
+              className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1 cursor-pointer"
             >
               <LogOut size={14} /> Keluar
             </button>
@@ -302,7 +463,7 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
         ) : (
           <button 
             onClick={() => navigate('login')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-bold text-white shadow-sm transition-transform hover:scale-105"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-bold text-white shadow-sm transition-transform hover:scale-105 cursor-pointer"
             style={{ backgroundColor: colors.midnightGreen }}
           >
             <User size={16} /> Login Sistem
@@ -332,7 +493,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
             <div className="flex flex-wrap gap-3">
               <button 
                 onClick={() => navigate('profile')}
-                className="px-6 py-3 rounded-xl font-bold text-white flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
+                className="px-6 py-3 rounded-xl font-bold text-white flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer"
                 style={{ backgroundColor: colors.midnightGreen }}
               >
                 <Briefcase size={18} /> Lihat Bank Data Pegawai
@@ -340,7 +501,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
 
               <button 
                 onClick={() => navigate(loggedInUser ? 'absensi-uang-makan' : 'login')}
-                className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
+                className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer"
               >
                 <span className="text-teal-700 font-bold">↑</span> Upload Dokumen Pendukung
               </button>
@@ -391,7 +552,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   const [loading, setLoading] = useState(false);
 
   const cleanNip = loginNip.trim().toLowerCase();
-  const isNipAdmin = cleanNip === 'admin' || cleanNip === '198205142008121002'; // atau NIP admin yang sah
   const isNipComplete = cleanNip.length > 0;
   const pinValue = pinDigits.join('');
   const isPinComplete = pinValue.length === 6;
@@ -407,7 +567,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       const { data } = await fetchPegawaiData(false);
       const inputNip = loginNip.trim();
 
-      if (inputNip.toLowerCase() === 'admin') {
+      if (inputNip === '198205142008121002') {
         setTargetUser({
           NIP: 'SUPERADMIN',
           Nama: 'Super Administrator',
@@ -547,7 +707,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
             </form>
 
             <div className="mt-8 pt-4 border-t border-gray-100 text-center">
-              <button onClick={() => navigate('home')} className="text-xs font-bold text-gray-500 hover:text-gray-800 flex items-center justify-center gap-1 mx-auto">
+              <button onClick={() => navigate('home')} className="text-xs font-bold text-gray-500 hover:text-gray-800 flex items-center justify-center gap-1 mx-auto cursor-pointer">
                 <ArrowLeft size={14} /> Kembali ke Beranda
               </button>
             </div>
@@ -558,7 +718,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
               <button 
                 type="button"
                 onClick={() => { setStep(1); setMessage({ type: '', text: '' }); setPinDigits(['', '', '', '', '', '']); }} 
-                className="text-xs font-bold text-gray-500 hover:text-gray-800 flex items-center gap-1.5 transition-colors"
+                className="text-xs font-bold text-gray-500 hover:text-gray-800 flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <ArrowLeft size={14} /> Kembali
               </button>
@@ -621,65 +781,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   );
 };
 
-const getPeriodEvents = () => {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
-  const currentDay = now.getDate();
-
-  let tukinYear = currentYear;
-  let tukinMonth = currentMonth;
-  if (currentDay < 11 && currentMonth === 1) {
-    tukinYear = currentYear - 1;
-    tukinMonth = 12;
-  } else if (currentDay < 11) {
-    tukinMonth = currentMonth - 1;
-  }
-
-  const tukinStartDate = new Date(tukinYear, tukinMonth - 1, 11);
-  const tukinEndDate = new Date(tukinYear, tukinMonth, 10);
-  const paymentMonthDate = new Date(tukinYear, tukinMonth, 1);
-
-  const formatShortDate = (d) => `${d.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][d.getMonth()]} ${d.getFullYear()}`;
-  const formatNumDate = (d) => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
-  const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-  const paymentMonthName = monthNames[paymentMonthDate.getMonth()];
-
-  const tukinId = `tukin-${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
-  const tukinFolder = `Periode_Tukin_${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
-
-  return {
-    'uang-makan': [
-      {
-        id: 'um-2026-08',
-        status: 'DIBUKA',
-        title: 'Bukti Dukung Uang Makan Agustus 2026',
-        periodeLabel: '1 Agu 2026 – 31 Agu 2026',
-        periodeEvent: '01-08-2026 s/d 31-08-2026',
-        startDate: '01-08-2026',
-        endDate: '31-08-2026',
-        periodeFolder: 'Periode_2026-08',
-        tipe: 'Uang Makan',
-        expectedDays: 31
-      }
-    ],
-    'tukin': [
-      {
-        id: tukinId,
-        status: 'DIBUKA',
-        title: `Bukti Dukung Tunjangan Kinerja Bulan ${paymentMonthName} ${paymentMonthDate.getFullYear()}`,
-        periodeLabel: `${formatShortDate(tukinStartDate)} – ${formatShortDate(tukinEndDate)}`,
-        periodeEvent: `${formatNumDate(tukinStartDate)} s/d ${formatNumDate(tukinEndDate)}`,
-        startDate: formatNumDate(tukinStartDate),
-        endDate: formatNumDate(tukinEndDate),
-        periodeFolder: tukinFolder,
-        tipe: `Tunjangan Kinerja (Pembayaran ${paymentMonthName} ${paymentMonthDate.getFullYear()})`,
-        expectedDays: 31
-      }
-    ]
-  };
-};
-
 const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -687,6 +788,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [parsedData, setParsedData] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
+  const [bankPegawai, setBankPegawai] = useState([]);
+  const fileInputRef = useRef(null);
 
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -703,6 +806,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const activeTab = getModuleKey(currentView);
   const PERIOD_EVENTS = getPeriodEvents();
+
+  useEffect(() => {
+    const loadPegawai = async () => {
+      const { data } = await fetchPegawaiData();
+      setBankPegawai(data);
+    };
+    loadPegawai();
+  }, []);
 
   useEffect(() => {
     setSelectedPeriod(null);
@@ -741,6 +852,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setSubmitResult(null);
     setIsParsing(false);
     setIsSubmitting(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleClearFile = (e) => {
+    e.stopPropagation();
+    resetUploadState();
   };
 
   const handleFileChange = async (e) => {
@@ -751,7 +870,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setIsParsing(true);
 
       try {
-        const result = await parsePDFPresensi(file);
+        const result = await parsePDFPresensi(file, selectedPeriod?.periodeEvent, bankPegawai);
         setParsedData(result);
       } catch (err) {
         console.error("Gagal membaca PDF:", err);
@@ -785,11 +904,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       const base64Data = await fileToBase64(selectedFile);
       const payload = {
         modul: activeTab,
-        // Mutlak menggunakan NIP dan Nama hasil ekstrak PDF agar masuk ke folder pegawai yang bersangkutan
-        nip: (parsedData && parsedData.nip) ? parsedData.nip : loggedInUser.NIP,
-        nama: (parsedData && parsedData.nama) ? parsedData.nama : loggedInUser.Nama,
-        periode: selectedPeriod?.periodeEvent || parsedData.periode,
-        bulanTahun: selectedPeriod?.periodeFolder || parsedData.periodeFolder,
+        nip: parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP,
+        nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
+        periode: parsedData.periode || selectedPeriod?.periodeEvent || '',
+        bulanTahun: parsedData.periodeFolder || selectedPeriod?.periodeFolder || 'Periode_2026-08',
         fileName: selectedFile.name,
         fileBase64: base64Data,
         ringkasan: {
@@ -993,23 +1111,24 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               >
                 <div className="space-y-2">
                   <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
-                    OPEN
+                    OPEN SUBMISSION
                   </span>
                   <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
                     {selectedPeriod.title}
                   </h2>
                   <div className="flex items-center gap-2 text-xs text-gray-200">
                     <Calendar size={14} />
-                    <span>{selectedPeriod.periodeLabel}</span>
+                    <span>Periode Event: {selectedPeriod.periodeEvent}</span>
                     <span>•</span>
-                    <span>{selectedPeriod.tipe}</span>
+                    <span>Kategori: {selectedPeriod.tipe}</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3.5 bg-white/10 backdrop-blur-xs p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto">
-                  <p className="text-xs text-gray-200 leading-snug font-medium text-right flex-1">
-                    <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
-                  </p>
+                  <div className="text-right flex-1">
+                    <strong className="text-white font-bold block text-sm">{loggedInUser?.Nama || 'Pegawai'}</strong>
+                    <span className="text-[10px] text-gray-300 font-medium">Verifikasi otomatis berbasis NIP</span>
+                  </div>
                   {loggedInUser?.Foto_Pegawai ? (
                     <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
                   ) : (
@@ -1039,152 +1158,230 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                <div className="lg:col-span-5 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
-                  <div>
-                    <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
-                    <p className="text-xs text-gray-600 leading-relaxed font-normal">
-                      Upload file bukti presensi:
-                    </p>
-                    <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
-                      <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
-                      <li>• Format yang diterima: <strong>PDF Riwayat Presensi</strong></li>
-                      <li>• PDF harus hasil export, <strong>bukan hasil scan atau foto</strong></li>
-                    </ul>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
-                    <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between">
-                      <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
-                        Choose File
-                        <input 
-                          type="file" 
-                          accept=".pdf"
-                          onChange={handleFileChange}
-                          className="hidden"
-                        />
-                      </label>
-                      <span className="text-xs text-gray-500 truncate px-2 font-medium">
-                        {selectedFile ? selectedFile.name : 'No file chosen'}
-                      </span>
+                <div className="lg:col-span-5 space-y-4">
+                  <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
+                    <div>
+                      <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
+                      <p className="text-xs text-gray-600 leading-relaxed font-normal">
+                        Upload file bukti presensi:
+                      </p>
+                      <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
+                        <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
+                        <li>• Format yang diterima: <strong>PDF Riwayat Presensi</strong></li>
+                        <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong> di Spreadsheet</li>
+                      </ul>
                     </div>
-                  </div>
 
-                  {isParsing && (
-                    <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span>Mengekstrak dan memverifikasi data kalender presensi...</span>
-                    </div>
-                  )}
-
-                  {parsedData && (
-                    <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
-                      <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
-                      <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
-                    </div>
-                  )}
-
-                  {parsedData && !parsedData.isValid && (
-                    <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2">
-                      <AlertCircle size={18} className="shrink-0 text-red-600" />
-                      <span>Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.</span>
-                    </div>
-                  )}
-
-                  {submitResult && (
-                    <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
-                      {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
-                      <div>
-                        <p className="font-semibold">{submitResult.message}</p>
-                        {submitResult.url && (
-                          <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
-                            Buka Dokumen di Google Drive
-                          </a>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
+                      <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between group focus-within:border-teal-700 transition-colors">
+                        <div className="flex items-center gap-2 overflow-hidden flex-1">
+                          <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap shrink-0">
+                            Choose File
+                            <input 
+                              type="file" 
+                              ref={fileInputRef}
+                              accept=".pdf"
+                              onChange={handleFileChange}
+                              className="hidden"
+                            />
+                          </label>
+                          <span className="text-xs text-gray-500 truncate px-2 font-medium">
+                            {selectedFile ? selectedFile.name : 'Pilih berkas PDF presensi...'}
+                          </span>
+                        </div>
+                        
+                        {selectedFile && !isSubmitting && !submitResult && (
+                          <button
+                            type="button"
+                            onClick={handleClearFile}
+                            title="Hapus / Batal"
+                            className="p-2 rounded-xl text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         )}
                       </div>
                     </div>
-                  )}
 
-                  <button 
-                    onClick={handleUploadSubmit}
-                    disabled={!parsedData || !parsedData.isValid || isSubmitting}
-                    className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                      parsedData && parsedData.isValid && !isSubmitting
-                        ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
-                        : 'opacity-40 cursor-not-allowed'
-                    }`}
-                    style={{ backgroundColor: colors.midnightGreen }}
-                  >
-                    <UploadCloud size={16} />
-                    {isSubmitting ? 'Menyimpan ke Server...' : 'Proses & Simpan Bukti'}
-                  </button>
+                    {isParsing && (
+                      <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
+                        <span>Mengekstrak dan memverifikasi data dokumen...</span>
+                      </div>
+                    )}
+
+                    {selectedFile && parsedData && (
+                      <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
+                        <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
+                        <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
+                      </div>
+                    )}
+
+                    {submitResult && (
+                      <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
+                        {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
+                        <div>
+                          <p className="font-semibold">{submitResult.message}</p>
+                          {submitResult.url && (
+                            <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
+                              Buka Dokumen di Google Drive
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-3 pt-2">
+                      <button 
+                        onClick={handleUploadSubmit}
+                        disabled={!selectedFile || !parsedData || !parsedData.isValid || isSubmitting}
+                        className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
+                          selectedFile && parsedData && parsedData.isValid && !isSubmitting
+                            ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
+                            : 'bg-gray-300 text-gray-500 shadow-none cursor-not-allowed'
+                        }`}
+                        style={{ backgroundColor: selectedFile && parsedData?.isValid && !isSubmitting ? colors.midnightGreen : undefined }}
+                      >
+                        <UploadCloud size={16} />
+                        {isSubmitting ? 'Menyimpan ke Server...' : 'Proses & Simpan Bukti'}
+                      </button>
+
+                      {selectedFile && !submitResult && (
+                        <button 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="w-full py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors cursor-pointer"
+                        >
+                          Ganti File Presensi
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="lg:col-span-7 space-y-4">
-                  {parsedData && parsedData.isValid ? (
-                    <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-                      <div className="flex items-center gap-2 font-black text-sm">
-                        <CheckCircle2 size={18} className="text-[#0A5A36]" />
-                        <span>✓ Rentang Tanggal Sesuai</span>
+                  {selectedFile && parsedData && (
+                    parsedData.isValid ? (
+                      <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs animate-in fade-in">
+                        <div className="flex items-center gap-2 font-black text-sm">
+                          <CheckCircle2 size={18} className="text-[#0A5A36] shrink-0" />
+                          <span>✓ Rentang Tanggal Sesuai</span>
+                        </div>
+                        <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto shrink-0">
+                          Periode Event: {selectedPeriod.periodeEvent}
+                        </div>
                       </div>
-                      <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto">
-                        Periode Event: {selectedPeriod.periodeEvent}
+                    ) : parsedData.isDateMismatch ? (
+                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 flex flex-col sm:flex-row sm:items-start justify-between gap-3 shadow-2xs animate-in fade-in">
+                        <div className="flex items-start gap-2 font-black text-sm">
+                          <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+                          <div>
+                            <span>✕ Rentang Tanggal Tidak Sesuai</span>
+                            <p className="text-[11px] font-medium text-red-600 mt-1 leading-snug">
+                              File PDF dibaca memiliki periode <strong className="font-bold">{parsedData.periode}</strong>, namun event ini khusus untuk periode <strong className="font-bold">{selectedPeriod.periodeEvent}</strong>.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
+                    ) : (
+                      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 flex items-start gap-2 shadow-2xs animate-in fade-in">
+                        <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                        <span className="text-xs font-medium leading-relaxed">
+                          Format data di dalam PDF gagal dikenali. Pastikan file bukan berupa hasil pindai (scan) atau foto.
+                        </span>
+                      </div>
+                    )
+                  )}
 
-                  <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                    <div className="mb-4">
-                      <h3 className="text-sm font-black text-gray-900">Preview Data Presensi</h3>
-                      <p className="text-[11px] text-gray-500 font-medium">Lokasi absen hanya tersedia pada file PDF Riwayat Presensi.</p>
-                    </div>
+                  <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 relative min-h-[400px] flex flex-col">
+                    {!selectedFile ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4 py-12 animate-in fade-in">
+                        <div className="w-16 h-16 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300 shadow-2xs mb-2">
+                          <FileText size={32} />
+                        </div>
+                        <div className="space-y-1.5 max-w-sm">
+                          <h4 className="font-extrabold text-sm text-gray-700">Belum Ada Berkas Terpilih</h4>
+                          <p className="text-xs text-gray-500 font-normal leading-relaxed">
+                            Silakan klik tombol <strong className="text-gray-700">Choose File</strong> pada panel sebelah kiri untuk mengunggah file PDF presensi. Pratinjau data absen akan muncul di sini.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="animate-in fade-in space-y-4 flex-1 flex flex-col">
+                        <div className="mb-2 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+                          <div>
+                            <h3 className="text-sm font-black text-gray-900">Preview Data Presensi</h3>
+                            <p className="text-[11px] text-gray-500 font-medium">Nama pegawai otomatis diambil dari Bank Data berdasarkan NIP yang terbaca.</p>
+                          </div>
+                          <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
+                            <p className="font-extrabold text-gray-900 text-xs truncate" title={parsedData?.nama}>{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
+                            <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
+                            <p className={`text-[10px] font-extrabold ${parsedData?.isValid ? 'text-teal-700' : 'text-red-600'}`}>
+                              Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}
+                            </p>
+                          </div>
+                        </div>
 
-                    <div className="overflow-x-auto max-h-[500px] border border-gray-200 rounded-2xl bg-white shadow-2xs">
-                      <table className="w-full text-left text-[11px] text-gray-700 border-collapse">
-                        <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10">
-                          <tr>
-                            <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
-                            <th className="py-3 px-3 whitespace-nowrap">HARI</th>
-                            <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
-                            <th className="py-3 px-3 min-w-[130px]">LOKASI DATANG</th>
-                            <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
-                            <th className="py-3 px-3 min-w-[130px]">LOKASI PULANG</th>
-                            <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                          {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
-                            parsedData.rows.map((row, idx) => (
-                              <tr key={idx} className={row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors'}>
-                                <td className="py-3 px-3.5 font-bold text-gray-900 whitespace-nowrap">{row.tanggal}</td>
-                                <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
-                                <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.datang}</td>
-                                <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiDatang}</td>
-                                <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.pulang}</td>
-                                <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiPulang}</td>
-                                <td className="py-3 px-3 text-center whitespace-nowrap">
-                                  <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
-                                    row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
-                                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                      : row.keterangan === 'Libur' 
-                                      ? 'bg-gray-100 text-gray-400' 
-                                      : 'bg-amber-50 text-amber-800 border border-amber-200'
-                                  }`}>
-                                    {row.keterangan}
-                                  </span>
-                                </td>
+                        <div className="overflow-x-auto border border-gray-200 rounded-2xl bg-white shadow-2xs flex-1">
+                          <table className="w-full text-left text-[11px] text-gray-700 border-collapse">
+                            <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10">
+                              <tr>
+                                <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
+                                <th className="py-3 px-3 whitespace-nowrap">HARI</th>
+                                <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
+                                <th className="py-3 px-3 min-w-[130px]">LOKASI DATANG</th>
+                                <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
+                                <th className="py-3 px-3 min-w-[130px]">LOKASI PULANG</th>
+                                <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
                               </tr>
-                            ))
-                          ) : (
-                            <tr>
-                              <td colSpan="7" className="text-center py-14 text-gray-400 italic text-xs">
-                                Belum ada file PDF yang dipilih untuk pratinjau data.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
+                              {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
+                                parsedData.rows.map((row, idx) => (
+                                  <tr key={idx} className={row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors'}>
+                                    <td className="py-3 px-3.5 font-bold text-gray-900 whitespace-nowrap">{row.tanggal}</td>
+                                    <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
+                                    <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.datang}</td>
+                                    <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiDatang}</td>
+                                    <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.pulang}</td>
+                                    <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiPulang}</td>
+                                    <td className="py-3 px-3 text-center whitespace-nowrap">
+                                      <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
+                                        row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
+                                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                          : row.keterangan === 'Libur' 
+                                          ? 'bg-gray-100 text-gray-400' 
+                                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                                      }`}>
+                                        {row.keterangan}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))
+                              ) : (
+                                <tr>
+                                  <td colSpan="7" className="text-center py-10 text-red-400 italic text-xs font-semibold">
+                                    Gagal mengekstrak data dari tabel PDF.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {parsedData && (
+                          <div className="pt-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-2 text-[11px] shrink-0">
+                            <div className="flex gap-4">
+                              <span>Total Hari: <strong className="text-gray-900 font-bold">{parsedData.expectedDays} Hari</strong></span>
+                              <span>Hari Masuk (WFO/WFA): <strong className="text-emerald-700 font-extrabold">{parsedData.totalHariMasuk} Hari</strong></span>
+                            </div>
+                            <div className="text-gray-400 italic text-right">
+                              Folder target di GDrive: <span className="font-semibold text-gray-500">{parsedData.periodeFolder}/{parsedData.nama}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1286,7 +1483,7 @@ const ProfileView = ({ navigate }) => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex-1 max-w-xl">
             <label className="text-xs font-extrabold uppercase tracking-wider text-gray-700 mb-2 flex items-center gap-2">
-              <Briefcase size={16} className="text-[#084C61]" />
+              <Briefcase size={16} style={{ color: colors.midnightGreen }} />
               <span>Filter Berdasarkan Sub Unit Kerja</span>
             </label>
 
@@ -1294,7 +1491,8 @@ const ProfileView = ({ navigate }) => {
               <select
                 value={selectedSubUnit}
                 onChange={(e) => setSelectedSubUnit(e.target.value)}
-                className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:border-[#084C61] focus:bg-white transition-all cursor-pointer appearance-none"
+                className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none transition-all cursor-pointer appearance-none"
+                style={{ borderColor: selectedSubUnit !== 'ALL' ? colors.midnightGreen : undefined }}
               >
                 <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
                 {subUnitCategories.map((cat, idx) => {
@@ -1325,19 +1523,100 @@ const ProfileView = ({ navigate }) => {
           {filteredPegawai.map((item, index) => {
             const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
             return (
-              <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row justify-between items-stretch">
-                <div className="p-6 md:p-8 flex-1 space-y-4">
-                  <div>
-                    <h3 className="text-xl font-extrabold text-gray-900">{item.Nama}</h3>
-                    <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
-                      <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
-                      {item.SubUnitKerja && <span className="px-3 py-0.5 rounded-full font-bold bg-teal-50 text-teal-800">{item.SubUnitKerja}</span>}
+              <div 
+                key={index} 
+                className="relative bg-white rounded-2xl border border-gray-200 border-l-[8px] shadow-sm overflow-hidden flex flex-col md:flex-row"
+                style={{ borderLeftColor: colors.midnightGreen }}
+              >
+                {/* Latar Belakang Gradien Palet PKP dan Foto (Desktop) */}
+                {fotoUrl && (
+                  <div 
+                    className="absolute inset-y-0 right-0 w-full md:w-2/5 hidden md:block z-0"
+                    style={{
+                      background: `linear-gradient(to right, transparent, ${colors.krem}55, ${colors.darkAqua}99, ${colors.midnightGreen})`
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-white via-white/60 to-transparent z-10 pointer-events-none"></div>
+                    <img 
+                      src={fotoUrl} 
+                      alt={item.Nama} 
+                      className="absolute bottom-0 right-0 h-full w-full object-cover object-top mix-blend-multiply opacity-90" 
+                    />
+                  </div>
+                )}
+                
+                {/* Konten Utama */}
+                <div className="relative z-20 p-6 md:p-8 w-full md:w-3/4 bg-white/90 md:bg-transparent md:bg-gradient-to-r md:from-white md:via-white md:to-transparent">
+                  <div className="mb-6">
+                    <h3 className="text-xl md:text-2xl font-black mb-2" style={{ color: colors.midnightGreen }}>
+                      {item.Nama}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <span className="text-sm font-medium text-gray-500">NIP {item.NIP}</span>
+                      {item.SubUnitKerja && (
+                        <span 
+                          className="px-3 py-0.5 rounded-full font-bold text-xs"
+                          style={{ backgroundColor: `${colors.darkAqua}18`, color: colors.darkAqua }}
+                        >
+                          {item.SubUnitKerja}
+                        </span>
+                      )}
+                      {item.KelasJabatan && (
+                        <span 
+                          className="px-3 py-0.5 rounded-full font-bold text-xs"
+                          style={{ backgroundColor: colors.krem, color: '#665522' }}
+                        >
+                          Kelas Jabatan {item.KelasJabatan}
+                        </span>
+                      )}
                     </div>
                   </div>
+                  
+                  <div className="w-full h-px bg-gray-200 mb-6 max-w-4xl"></div>
+                  
+                  {/* Grid Data Label & Values */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-4xl">
+                    <div>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Jabatan</p>
+                      <p className="text-sm font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Email</p>
+                      <p className="text-sm font-bold text-gray-800 leading-snug">{item.EmailDinas || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Atasan Langsung</p>
+                      <p className="text-sm font-bold text-gray-800 leading-snug">{item.AtasanLangsung || '-'}</p>
+                      {item.JabatanAtasanLangsung && (
+                        <p className="text-xs text-gray-400 font-medium leading-snug mt-1">
+                          {item.JabatanAtasanLangsung}
+                        </p>
+                      )}
+                    </div>
+                    {item.TunjanganKinerja && (
+                      <div>
+                        <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Besaran Tunjangan Kinerja</p>
+                        <p className="text-sm font-bold leading-snug" style={{ color: colors.midnightGreen }}>
+                          {item.TunjanganKinerja}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {/* Foto Fallback untuk Mode Mobile dengan Gradien PKP */}
                 {fotoUrl && (
-                  <div className="w-full lg:w-64 h-56 lg:h-auto relative overflow-hidden shrink-0 bg-[#084C61] flex items-center justify-center">
-                    <img src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top" />
+                  <div 
+                    className="md:hidden w-full h-48 relative overflow-hidden"
+                    style={{
+                      background: `linear-gradient(to top, ${colors.midnightGreen}, ${colors.darkAqua}, ${colors.krem})`
+                    }}
+                  >
+                    <img 
+                      src={fotoUrl} 
+                      alt={item.Nama} 
+                      className="absolute bottom-0 right-0 h-full w-full object-cover object-top mix-blend-multiply opacity-90" 
+                    />
                   </div>
                 )}
               </div>
@@ -1435,7 +1714,7 @@ export default function App() {
             </p>
             <div className="flex gap-3">
               <button
-                onClick={() => setShowLogoutModal(showLogoutModal ? false : false)}
+                onClick={() => setShowLogoutModal(false)}
                 className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
               >
                 Batal
