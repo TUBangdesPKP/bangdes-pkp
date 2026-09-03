@@ -21,7 +21,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useMemo } = React;
 
     const colors = {
       krem: '#F2EEDF',
@@ -34,7 +34,130 @@
       bgGray: '#F7FAFC'
     };
 
-    const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1517384244&single=true&output=csv";
+    // Fungsi otomatis mengubah link Google Sheets pubhtml menjadi format output CSV yang valid
+    const ensureCsvUrl = (url) => {
+      if (!url) return '';
+      let cleanUrl = url.trim();
+      if (cleanUrl.includes('/pubhtml')) {
+        cleanUrl = cleanUrl.replace('/pubhtml', '/pub');
+      }
+      if (!cleanUrl.includes('output=csv')) {
+        cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'output=csv';
+      }
+      return cleanUrl;
+    };
+
+    // Link spreadsheet baru yang telah dipublish oleh pengguna
+    const RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pubhtml?gid=1517384244&single=true";
+    const SHEET_CSV_URL = ensureCsvUrl(RAW_SHEET_URL);
+
+    // Parser CSV dengan penanganan UTF-8 BOM dan fleksibilitas nama kolom
+    const parseCSV = (csvText) => {
+      if (!csvText) return [];
+      // Bersihkan karakter BOM tersembunyi (\uFEFF) dari Google Sheets
+      const cleanText = csvText.replace(/^\uFEFF/, '').trim();
+      const rows = [];
+      let currentRow = [];
+      let currentField = '';
+      let insideQuote = false;
+
+      for (let i = 0; i < cleanText.length; i++) {
+        const char = cleanText[i];
+        const nextChar = cleanText[i + 1];
+        if (char === '"') {
+          if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
+          else { insideQuote = !insideQuote; }
+        } else if (char === ',' && !insideQuote) {
+          currentRow.push(currentField.trim());
+          currentField = '';
+        } else if ((char === '\r' || char === '\n') && !insideQuote) {
+          if (char === '\r' && nextChar === '\n') i++;
+          currentRow.push(currentField.trim());
+          if (currentRow.some(f => f !== '')) rows.push(currentRow);
+          currentRow = [];
+          currentField = '';
+        } else {
+          currentField += char;
+        }
+      }
+      if (currentField !== '' || currentRow.length > 0) {
+        currentRow.push(currentField.trim());
+        if (currentRow.some(f => f !== '')) rows.push(currentRow);
+      }
+
+      if (rows.length < 2) return [];
+
+      const rawHeaders = rows[0].map(h => h.replace(/^["']|["']$/g, '').trim());
+
+      const data = [];
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const obj = {};
+        for (let j = 0; j < rawHeaders.length; j++) {
+          const key = rawHeaders[j];
+          obj[key] = row[j] !== undefined ? row[j].replace(/^["']|["']$/g, '').trim() : '';
+        }
+
+        // Normalisasi nama kolom agar kebal variasi spasi/huruf besar-kecil
+        const normalized = {};
+        Object.keys(obj).forEach(k => {
+          const normKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          normalized[normKey] = obj[k];
+        });
+
+        const standardized = {
+          ...obj,
+          NIP: normalized['nip'] || obj['NIP'] || obj['nip'] || '',
+          Nama: normalized['nama'] || normalized['namalengkap'] || obj['Nama'] || obj['nama'] || '',
+          SubUnitKerja: normalized['subunitkerja'] || normalized['subunit'] || obj['SubUnitKerja'] || obj['Sub Unit Kerja'] || '',
+          Jabatan: normalized['jabatan'] || obj['Jabatan'] || obj['jabatan'] || '',
+          KelasJabatan: normalized['kelasjabatan'] || normalized['kelas'] || obj['KelasJabatan'] || obj['Kelas Jabatan'] || '',
+          EmailDinas: normalized['emaildinas'] || normalized['email'] || obj['EmailDinas'] || obj['Email Dinas'] || '',
+          AtasanLangsung: normalized['atasanlangsung'] || normalized['atasan'] || obj['AtasanLangsung'] || obj['Atasan Langsung'] || '',
+          Foto_Pegawai: normalized['fotopegawei'] || normalized['foto'] || normalized['fotoprofil'] || obj['Foto_Pegawai'] || obj['Foto Pegawai'] || '',
+          PIN: normalized['pin'] || obj['PIN'] || obj['pin'] || '',
+          Role: normalized['role'] || normalized['akunrole'] || obj['Akun_Role'] || obj['Role'] || 'pegawai'
+        };
+
+        data.push(standardized);
+      }
+      return data;
+    };
+
+    // Fungsi penarik data dengan fallback multi-proxy untuk mengatasi CORS browser
+    const fetchSpreadsheetData = async (targetUrl = SHEET_CSV_URL) => {
+      const csvUrl = ensureCsvUrl(targetUrl);
+      const sources = [
+        csvUrl, // 1. Akses langsung Google CSV
+        `https://corsproxy.io/?url=${encodeURIComponent(csvUrl)}`, // 2. Reverse proxy CORS 1
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}` // 3. Reverse proxy CORS 2
+      ];
+
+      let lastError = null;
+
+      for (const src of sources) {
+        try {
+          const response = await fetch(src, {
+            headers: { 'Accept': 'text/csv, text/plain, */*' }
+          });
+          if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+          const csvText = await response.text();
+
+          // Pastikan respon adalah data CSV murni, bukan halaman dokumen HTML
+          if (csvText && !csvText.trim().startsWith('<!DOCTYPE') && !csvText.trim().startsWith('<html')) {
+            const parsed = parseCSV(csvText);
+            if (parsed && parsed.length > 0) {
+              return parsed;
+            }
+          }
+        } catch (err) {
+          lastError = err;
+          console.warn(`Gagal memuat dari endpoint (${src}), mencoba rute cadangan...`, err);
+        }
+      }
+
+      throw lastError || new Error("Tidak dapat mengunduh data CSV Google Sheets.");
+    };
 
     const IconBase = ({ size = 20, className = '', children }) => (
       <svg 
@@ -100,6 +223,14 @@
     );
     const FileCheck = (props) => (
       <IconBase {...props}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m9 15 2 2 4-4"/></IconBase>
+    );
+    const KeyIcon = (props) => (
+      <IconBase {...props}>
+        <path d="m21.8 2.2-2 2m-1.5 1.5L13 11" />
+        <path d="m15.5 8.5 2 2" />
+        <circle cx="7.5" cy="16.5" r="5.5" />
+        <circle cx="7.5" cy="16.5" r="1.5" />
+      </IconBase>
     );
 
     const getDriveDirectUrl = (url) => {
@@ -256,120 +387,192 @@
     };
 
     const LoginView = ({ navigate, onLoginSuccess }) => {
+      const [step, setStep] = useState('nip'); // 'nip' atau 'pin'
       const [loginNip, setLoginNip] = useState('');
-      const [loginPin, setLoginPin] = useState('');
+      const [pinDigits, setPinDigits] = useState(['', '', '', '', '', '']);
+      const [matchedUser, setMatchedUser] = useState(null);
       const [message, setMessage] = useState({ type: '', text: '' });
       const [loading, setLoading] = useState(false);
+      const pinInputRefs = React.useRef([]);
 
-      const handleLogin = (e) => {
+      // Tahap 1: Validasi NIP / Shortcut Username Admin
+      const handleNipSubmit = (e) => {
         e.preventDefault();
-        if (!loginNip || !loginPin) {
-          setMessage({ type: 'error', text: 'NIP dan PIN wajib diisi.' });
+        const cleanNip = loginNip.trim();
+        if (!cleanNip) {
+          setMessage({ type: 'error', text: 'Silakan masukkan NIP atau username terlebih dahulu.' });
           return;
         }
 
         setLoading(true);
-        fetch(SHEET_CSV_URL)
-          .then((res) => {
-            if (!res.ok) throw new Error("Gagal mengambil data spreadsheet");
-            return res.text();
-          })
-          .then((csvText) => {
-            const rows = [];
-            let currentRow = [];
-            let currentField = '';
-            let insideQuote = false;
+        setMessage({ type: '', text: '' });
 
-            for (let i = 0; i < csvText.length; i++) {
-              const char = csvText[i];
-              const nextChar = csvText[i + 1];
-              if (char === '"') {
-                if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
-                else { insideQuote = !insideQuote; }
-              } else if (char === ',' && !insideQuote) {
-                currentRow.push(currentField.trim());
-                currentField = '';
-              } else if ((char === '\r' || char === '\n') && !insideQuote) {
-                if (char === '\r' && nextChar === '\n') i++;
-                currentRow.push(currentField.trim());
-                if (currentRow.some(f => f !== '')) rows.push(currentRow);
-                currentRow = [];
-                currentField = '';
-              } else {
-                currentField += char;
+        // Jalan Pintas Khusus Akun Super Administrator (Independen, tidak mengambil data pegawai lain)
+        if (cleanNip.toLowerCase() === 'admin') {
+          const superAdminUser = {
+            NIP: 'SUPERADMIN',
+            Nama: 'Super Administrator',
+            Role: 'admin',
+            SubUnitKerja: 'Direktorat Pembangunan Perumahan Perdesaan',
+            Jabatan: 'Super Administrator Sistem Informasi',
+            KelasJabatan: '17',
+            EmailDinas: 'superadmin.perdesaan@pkp.go.id',
+            AtasanLangsung: 'Direktur Pembangunan Perumahan Perdesaan',
+            Foto_Pegawai: '',
+            PIN: '111111',
+            isShortcutAdmin: true
+          };
+
+          setMatchedUser(superAdminUser);
+          setStep('pin');
+          setPinDigits(['', '', '', '', '', '']);
+          setLoading(false);
+          setMessage({ type: '', text: '' });
+          setTimeout(() => {
+            pinInputRefs.current[0]?.focus();
+          }, 150);
+          return;
+        }
+
+        fetchSpreadsheetData()
+          .then((pegawaiData) => {
+            let foundUser = null;
+            for (let i = 0; i < pegawaiData.length; i++) {
+              const u = pegawaiData[i];
+              const nipVal = (u.NIP || u.nip || '').toString().trim();
+              if (nipVal === cleanNip) {
+                foundUser = u;
+                break;
               }
             }
-            if (currentField !== '' || currentRow.length > 0) {
-              currentRow.push(currentField.trim());
-              if (currentRow.some(f => f !== '')) rows.push(currentRow);
-            }
 
-            if (rows.length > 1) {
-              const headers = rows[0];
-              let foundUser = null;
-
-              for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                const obj = {};
-                for (let j = 0; j < headers.length; j++) {
-                  obj[headers[j]] = row[j] ? row[j] : '';
+            if (foundUser) {
+              setMatchedUser(foundUser);
+              setStep('pin');
+              setPinDigits(['', '', '', '', '', '']);
+              setLoading(false);
+              setMessage({ type: '', text: '' });
+              setTimeout(() => {
+                if (pinInputRefs.current[0]) {
+                  pinInputRefs.current[0].focus();
                 }
-                const nipVal = (obj.NIP || obj['nip'] || '').toString().trim();
-                if (nipVal === loginNip.trim()) {
-                  foundUser = obj;
-                  break;
-                }
-              }
-
-              if (foundUser) {
-                const sheetPin = (foundUser.PIN || foundUser.pin || '').toString().trim();
-                if (sheetPin === loginPin.toString().trim()) {
-                  const userData = {
-                    nip: foundUser.NIP || foundUser.nip,
-                    Nama: foundUser.Nama || 'Pegawai',
-                    role: (foundUser.Akun_Role || foundUser.Role || '').toLowerCase() === 'admin' ? 'admin' : 'pegawai',
-                    subUnit: foundUser.SubUnitKerja || foundUser['Sub Unit Kerja'] || 'Direktorat Pembangunan Perumahan Perdesaan',
-                    jabatan: foundUser.Jabatan || 'Pejabat Fungsional',
-                    atasan: foundUser.AtasanLangsung || foundUser['Atasan Langsung'] || 'Direktur',
-                    kelasJabatan: foundUser.KelasJabatan || foundUser['Kelas Jabatan'] || '8',
-                    email: foundUser.EmailDinas || foundUser['Email Dinas'] || 'email@pkp.go.id',
-                    foto: getDriveDirectUrl(foundUser.Foto_Pegawai || foundUser['Foto_Pegawai'] || '')
-                  };
-                  onLoginSuccess(userData);
-                  setLoading(false);
-                  navigate('absensi-uang-makan');
-                  return;
-                } else {
-                  setLoading(false);
-                  setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
-                }
-              } else {
-                setLoading(false);
-                setMessage({ type: 'error', text: 'NIP tidak ditemukan dalam database.' });
-              }
+              }, 150);
             } else {
               setLoading(false);
-              setMessage({ type: 'error', text: 'Data spreadsheet kosong.' });
+              setMessage({ type: 'error', text: 'NIP tidak ditemukan dalam database kepegawaian.' });
             }
           })
           .catch((err) => {
             console.error(err);
             setLoading(false);
-            setMessage({ type: 'error', text: 'Gagal terhubung ke database spreadsheet.' });
+            setMessage({ type: 'error', text: 'Gagal terhubung ke database spreadsheet. Silakan periksa jaringan.' });
           });
+      };
+
+      // Handler input digit PIN khusus angka & auto-fokus
+      const handlePinChange = (index, value) => {
+        const numericVal = value.replace(/\D/g, '');
+        if (!numericVal) {
+          const newDigits = [...pinDigits];
+          newDigits[index] = '';
+          setPinDigits(newDigits);
+          return;
+        }
+
+        const char = numericVal.slice(-1);
+        const newDigits = [...pinDigits];
+        newDigits[index] = char;
+        setPinDigits(newDigits);
+
+        // Pindah otomatis ke kotak berikutnya
+        if (index < 5 && char) {
+          pinInputRefs.current[index + 1]?.focus();
+        }
+      };
+
+      const handlePinKeyDown = (index, e) => {
+        if (e.key === 'Backspace' && !pinDigits[index] && index > 0) {
+          pinInputRefs.current[index - 1]?.focus();
+        }
+      };
+
+      const handlePinPaste = (e) => {
+        e.preventDefault();
+        const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+        if (!pasted) return;
+        const newDigits = ['', '', '', '', '', ''];
+        for (let i = 0; i < pasted.length; i++) {
+          newDigits[i] = pasted[i];
+        }
+        setPinDigits(newDigits);
+        const nextFocus = Math.min(pasted.length, 5);
+        pinInputRefs.current[nextFocus]?.focus();
+      };
+
+      // Tahap 2: Validasi PIN dan Login
+      const handlePinSubmit = (e) => {
+        e.preventDefault();
+        const enteredPin = pinDigits.join('').trim();
+        if (enteredPin.length < 6) {
+          setMessage({ type: 'error', text: 'Silakan lengkapi 6 digit PIN Anda.' });
+          return;
+        }
+
+        const validPin = (matchedUser.PIN || matchedUser.pin || '').toString().trim();
+        const isShortcut = matchedUser.isShortcutAdmin || matchedUser.NIP === 'SUPERADMIN';
+        const isPinValid = enteredPin === validPin || (isShortcut && enteredPin === '111111');
+
+        if (isPinValid) {
+          const roleNormalized = (matchedUser.Role || matchedUser.Akun_Role || '').toString().trim().toLowerCase();
+          const userData = {
+            nip: matchedUser.NIP || matchedUser.nip || 'SUPERADMIN',
+            Nama: matchedUser.Nama || 'Super Administrator',
+            role: (isShortcut || roleNormalized === 'admin') ? 'admin' : 'pegawai',
+            subUnit: matchedUser.SubUnitKerja || matchedUser['Sub Unit Kerja'] || 'Direktorat Pembangunan Perumahan Perdesaan',
+            jabatan: matchedUser.Jabatan || 'Super Administrator Sistem Informasi',
+            atasan: matchedUser.AtasanLangsung || matchedUser['Atasan Langsung'] || 'Direktur Pembangunan Perumahan Perdesaan',
+            kelasJabatan: matchedUser.KelasJabatan || matchedUser['Kelas Jabatan'] || '17',
+            email: matchedUser.EmailDinas || matchedUser['Email Dinas'] || 'superadmin.perdesaan@pkp.go.id',
+            foto: getDriveDirectUrl(matchedUser.Foto_Pegawai || matchedUser['Foto_Pegawai'] || '')
+          };
+          onLoginSuccess(userData);
+          navigate('absensi-uang-makan');
+        } else {
+          setMessage({ type: 'error', text: 'PIN yang Anda masukkan salah. Silakan coba kembali.' });
+          setPinDigits(['', '', '', '', '', '']);
+          pinInputRefs.current[0]?.focus();
+        }
       };
 
       return (
         <div className="min-h-[85vh] flex items-center justify-center p-4 md:p-8">
           <div className="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-100 p-8">
-            <div className="text-center mb-8">
-              <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm" style={{ backgroundColor: colors.midnightGreen }}>
-                <User size={24} />
-              </div>
-              <h2 className="text-2xl font-black text-gray-900 mb-1">Login Sistem</h2>
-              <p className="text-xs text-gray-500">Gunakan NIP dan PIN terdaftar untuk masuk.</p>
+            
+            {/* Navigasi Kembali */}
+            <div className="mb-6 flex items-center justify-between">
+              {step === 'pin' ? (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setStep('nip');
+                    setMessage({ type: '', text: '' });
+                  }} 
+                  className="text-xs font-semibold text-gray-500 hover:text-gray-800 flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <ArrowLeft size={16} /> Kembali
+                </button>
+              ) : (
+                <button 
+                  type="button"
+                  onClick={() => navigate('home')} 
+                  className="text-xs font-semibold text-gray-500 hover:text-gray-800 flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <ArrowLeft size={16} /> Kembali ke Beranda
+                </button>
+              )}
             </div>
 
+            {/* Banner Pesan / Alert */}
             {message.text && (
               <div className={`p-4 rounded-2xl text-xs mb-6 flex items-center gap-3 ${message.type === 'error' ? 'bg-red-50 text-red-800 border border-red-100' : 'bg-emerald-50 text-emerald-800 border border-emerald-100'}`}>
                 {message.type === 'error' ? <AlertCircle size={18} className="text-red-600 shrink-0" /> : <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />}
@@ -377,46 +580,118 @@
               </div>
             )}
 
-            <form onSubmit={handleLogin} className="space-y-4">
+            {/* STEP 1: Form Input NIP / Username */}
+            {step === 'nip' && (
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">NIP (Nomor Induk Pegawai)</label>
-                <input 
-                  type="text" 
-                  placeholder="Contoh: 199412202025061007..."
-                  value={loginNip}
-                  onChange={(e) => setLoginNip(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700"
-                />
+                <div className="text-center mb-8">
+                  <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm" style={{ backgroundColor: colors.midnightGreen }}>
+                    <User size={26} />
+                  </div>
+                  <h2 className="text-2xl font-black text-gray-900 mb-1">Login Sistem</h2>
+                  <p className="text-xs text-gray-500">Masukkan NIP Anda untuk melanjutkan verifikasi akun.</p>
+                </div>
+
+                <form onSubmit={handleNipSubmit} className="space-y-5">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-2">NIP (Nomor Induk Pegawai)</label>
+                    <input 
+                      type="text" 
+                      maxLength={18}
+                      placeholder="Masukkan NIP"
+                      value={loginNip}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        // Menerima digit angka 18 digit ATAU karakter username 'admin'
+                        if (/^\d*$/.test(val) || /^admin$/i.test(val) || 'admin'.startsWith(val.toLowerCase())) {
+                          setLoginNip(val);
+                        }
+                      }}
+                      className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold tracking-wider focus:outline-none focus:border-teal-700 focus:bg-white transition-all"
+                      autoFocus
+                    />
+                  </div>
+
+                  {(() => {
+                    // Tombol aktif jika NIP sudah 18 digit ATAU mengetik username 'admin'
+                    const isNipComplete = loginNip.length === 18 || loginNip.trim().toLowerCase() === 'admin';
+                    return (
+                      <button 
+                        type="submit"
+                        disabled={loading || !isNipComplete}
+                        className={`w-full py-3.5 rounded-xl text-white font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                          isNipComplete 
+                            ? 'opacity-100 shadow-md hover:opacity-95 active:scale-[0.98] cursor-pointer' 
+                            : 'opacity-40 cursor-not-allowed shadow-none'
+                        }`}
+                        style={{ backgroundColor: colors.midnightGreen }}
+                      >
+                        {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                        <span>{loading ? 'Memeriksa Data Pegawai...' : 'Lanjutkan'}</span>
+                      </button>
+                    );
+                  })()}
+                </form>
               </div>
+            )}
 
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">PIN Keamanan (6 Digit)</label>
-                <input 
-                  type="password" 
-                  maxLength={6}
-                  placeholder="Masukkan PIN 6 digit"
-                  value={loginPin}
-                  onChange={(e) => setLoginPin(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700"
-                />
+            {/* STEP 2: Form Input PIN */}
+            {step === 'pin' && (
+              <div className="py-2">
+                <div className="text-center mb-8">
+                  <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center mb-4 bg-[#DDF1F5] text-[#1E677D] shadow-xs">
+                    <KeyIcon size={28} />
+                  </div>
+                  <h2 className="text-2xl font-black text-gray-900 mb-1.5 tracking-tight">Profil Pegawai</h2>
+                  <p className="text-xs text-gray-600 font-normal">
+                    Halo <strong className="font-bold text-gray-800">{matchedUser?.Nama || 'Administrator'}</strong>, masukkan PIN Anda
+                  </p>
+                </div>
+
+                <form onSubmit={handlePinSubmit} className="space-y-6">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 text-center mb-3.5">
+                      Masukkan PIN
+                    </label>
+                    <div className="flex justify-center gap-2.5 sm:gap-3" onPaste={handlePinPaste}>
+                      {pinDigits.map((digit, idx) => (
+                        <input 
+                          key={idx}
+                          ref={(el) => (pinInputRefs.current[idx] = el)}
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={1}
+                          value={digit}
+                          onChange={(e) => handlePinChange(idx, e.target.value)}
+                          onKeyDown={(e) => handlePinKeyDown(idx, e)}
+                          className="w-11 h-14 sm:w-12 sm:h-14 text-center text-xl font-black rounded-2xl bg-white border border-gray-300 focus:border-[#0E5B73] focus:ring-2 focus:ring-[#0E5B73]/20 focus:outline-none transition-all shadow-2xs"
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const isPinComplete = pinDigits.join('').length === 6;
+                    return (
+                      <button 
+                        type="submit"
+                        disabled={!isPinComplete}
+                        className={`w-full py-3.5 rounded-2xl text-white font-bold text-sm transition-all shadow-sm ${
+                          isPinComplete 
+                            ? 'opacity-100 hover:opacity-95 active:scale-[0.98] cursor-pointer shadow-md' 
+                            : 'opacity-50 cursor-not-allowed'
+                        }`}
+                        style={{ 
+                          backgroundColor: isPinComplete ? colors.midnightGreen : '#849BAA' 
+                        }}
+                      >
+                        Masuk
+                      </button>
+                    );
+                  })()}
+                </form>
               </div>
+            )}
 
-              <button 
-                type="submit"
-                disabled={loading}
-                className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-opacity hover:opacity-90 active:scale-[0.98] mt-4 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                style={{ backgroundColor: colors.midnightGreen }}
-              >
-                {loading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
-                <span>{loading ? 'Memeriksa Data...' : 'Masuk Sistem'}</span>
-              </button>
-            </form>
-
-            <div className="mt-8 pt-4 border-t border-gray-100 text-center">
-              <button onClick={() => navigate('home')} className="text-xs font-bold text-gray-500 hover:text-gray-800 flex items-center justify-center gap-1 mx-auto cursor-pointer">
-                <ArrowLeft size={14} /> Kembali ke Beranda
-              </button>
-            </div>
           </div>
         </div>
       );
@@ -502,7 +777,6 @@
             </div>
           )}
 
-          {}
           <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0">
             <div>
               <div className="mb-8">
@@ -568,7 +842,6 @@
             </div>
           </aside>
 
-          {}
           <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 overflow-y-auto">
             <div className="max-w-6xl mx-auto">
               
@@ -687,64 +960,30 @@
     const ProfileView = ({ navigate }) => {
       const [pegawaiList, setPegawaiList] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [fetchError, setFetchError] = useState(null);
       const [searchTerm, setSearchTerm] = useState('');
       const [selectedSubUnit, setSelectedSubUnit] = useState('ALL');
 
-      useEffect(() => {
-        fetch(SHEET_CSV_URL)
-          .then((res) => res.text())
-          .then((csvText) => {
-            const rows = [];
-            let currentRow = [];
-            let currentField = '';
-            let insideQuote = false;
-
-            for (let i = 0; i < csvText.length; i++) {
-              const char = csvText[i];
-              const nextChar = csvText[i + 1];
-              if (char === '"') {
-                if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
-                else { insideQuote = !insideQuote; }
-              } else if (char === ',' && !insideQuote) {
-                currentRow.push(currentField.trim());
-                currentField = '';
-              } else if ((char === '\r' || char === '\n') && !insideQuote) {
-                if (char === '\r' && nextChar === '\n') i++;
-                currentRow.push(currentField.trim());
-                if (currentRow.some(f => f !== '')) rows.push(currentRow);
-                currentRow = [];
-                currentField = '';
-              } else {
-                currentField += char;
-              }
-            }
-            if (currentField !== '' || currentRow.length > 0) {
-              currentRow.push(currentField.trim());
-              if (currentRow.some(f => f !== '')) rows.push(currentRow);
-            }
-
-            if (rows.length > 1) {
-              const headers = rows[0];
-              const data = [];
-              for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                const obj = {};
-                for (let j = 0; j < headers.length; j++) {
-                  obj[headers[j]] = row[j] ? row[j] : '';
-                }
-                data.push(obj);
-              }
-              if (data.length > 0) setPegawaiList(data);
-            }
+      const loadData = () => {
+        setLoading(true);
+        setFetchError(null);
+        fetchSpreadsheetData()
+          .then((data) => {
+            setPegawaiList(data);
             setLoading(false);
           })
           .catch((err) => {
-            console.warn(err);
+            console.error(err);
+            setFetchError("Gagal menarik data pegawai dari spreadsheet. Pastikan file terbitan publik dan periksa koneksi internet.");
             setLoading(false);
           });
+      };
+
+      useEffect(() => {
+        loadData();
       }, []);
 
-      const subUnitCategories = React.useMemo(() => {
+      const subUnitCategories = useMemo(() => {
         const units = new Set();
         pegawaiList.forEach(item => {
           const unit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').trim();
@@ -780,7 +1019,6 @@
           return /\bwilayah\s+ii\b/i.test(subUnitText) || /\bwilayah\s+ii\b/i.test(jabatan) || nama.includes(term) || nip.includes(term);
         }
 
-        // Pencarian standar langsung seperti semula
         return (
           nama.includes(term) ||
           nip.includes(term) ||
@@ -824,7 +1062,7 @@
             </div>
           </div>
 
-          {}
+          {/* Filter Bar */}
           <div className="mb-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex-1 max-w-xl">
@@ -875,11 +1113,25 @@
             </div>
           </div>
 
-          {}
+          {/* Render State: Loading / Error / Data */}
           {loading ? (
             <div className="text-center py-20 text-gray-500 flex items-center justify-center gap-2">
               <div className="w-5 h-5 border-2 border-teal-800 border-t-transparent rounded-full animate-spin"></div>
-              <span>Memuat data kepegawaian...</span>
+              <span>Memuat data kepegawaian dari spreadsheet...</span>
+            </div>
+          ) : fetchError ? (
+            <div className="text-center py-16 bg-white rounded-3xl border border-red-100 shadow-xs p-8 max-w-lg mx-auto">
+              <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto mb-3">
+                <AlertCircle size={24} />
+              </div>
+              <h3 className="font-extrabold text-base text-gray-900 mb-1">Gagal Memuat Spreadsheet</h3>
+              <p className="text-xs text-gray-500 mb-5 leading-relaxed">{fetchError}</p>
+              <button 
+                onClick={loadData}
+                className="px-5 py-2.5 bg-[#084C61] text-white text-xs font-bold rounded-xl shadow-xs hover:opacity-90 cursor-pointer transition-all inline-flex items-center gap-2"
+              >
+                ↻ Coba Muat Ulang
+              </button>
             </div>
           ) : filteredPegawai.length === 0 ? (
             <div className="text-center py-16 bg-white rounded-3xl border border-gray-200 shadow-xs p-8">
@@ -966,6 +1218,7 @@
         return hash || 'home';
       });
       const [loggedInUser, setLoggedInUser] = useState(null);
+      const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
       useEffect(() => {
         const handleHashChange = () => {
@@ -982,8 +1235,9 @@
         window.scrollTo(0, 0);
       };
 
-      const handleLogout = () => {
+      const handleConfirmLogout = () => {
         setLoggedInUser(null);
+        setShowLogoutConfirm(false);
         navigate('home');
       };
 
@@ -997,7 +1251,16 @@
           case 'absensi-tunjangan-kinerja':
           case 'arsip-surat-tugas':
           case 'arsip-surat-cuti':
-            return loggedInUser ? <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} currentView={currentView} /> : <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+            return loggedInUser ? (
+              <UserDashboardView 
+                loggedInUser={loggedInUser} 
+                onLogout={() => setShowLogoutConfirm(true)} 
+                navigate={navigate} 
+                currentView={currentView} 
+              />
+            ) : (
+              <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />
+            );
           case 'profile':
             return <ProfileView navigate={navigate} />;
           case 'rekap':
@@ -1011,8 +1274,45 @@
 
       return (
         <div className="min-h-screen font-sans bg-[#F7FAFC]">
-          {!isDashboardView && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
+          {!isDashboardView && (
+            <Header 
+              navigate={navigate} 
+              loggedInUser={loggedInUser} 
+              onLogout={() => setShowLogoutConfirm(true)} 
+            />
+          )}
           <main>{renderView()}</main>
+
+          {/* Modal Verifikasi Konfirmasi Logout */}
+          {showLogoutConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+              <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-gray-100 transform transition-all scale-100">
+                <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mb-4">
+                  <LogOut size={24} />
+                </div>
+                <h3 className="text-xl font-extrabold text-gray-900 mb-2">Konfirmasi Keluar</h3>
+                <p className="text-xs text-gray-500 mb-6 leading-relaxed">
+                  Apakah Anda yakin ingin keluar dari akun sistem kepegawaian saat ini?
+                </p>
+                <div className="flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setShowLogoutConfirm(false)}
+                    className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleConfirmLogout}
+                    className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-[0.98] cursor-pointer"
+                  >
+                    Ya, Keluar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
