@@ -11,9 +11,7 @@ import {
   Search,
   Briefcase,
   CheckCircle2,
-  AlertCircle,
-  KeyRound,
-  Upload
+  AlertCircle
 } from 'lucide-react';
 
 const colors = {
@@ -38,7 +36,7 @@ const Header = ({ navigate, loggedInUser, onLogout }) => {
           <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pancasila_Coat_of_Arms_of_Indonesia.svg/800px-Pancasila_Coat_of_Arms_of_Indonesia.svg.png" alt="Logo" className="w-5 h-5 object-contain filter brightness-0 invert" />
         </div>
         <div>
-          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>BangdesPKP</h1>
+          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: colors.midnightGreen }}>Direktorat Pembangunan Perumahan Perdesaan Kementerian PKP</h1>
           <p className="text-[10px] text-gray-500 font-medium">Support System</p>
         </div>
       </div>
@@ -92,10 +90,10 @@ const Dashboard = ({ navigate, loggedInUser }) => {
               Sistem Kepegawaian
             </span>
             <h1 className="text-3xl md:text-4xl font-black mb-4 leading-tight" style={{ color: colors.midnightGreen }}>
-              Direktorat Pembangunan Perumahan Perdesaan, Kementerian PKP
+              Dashboard data dan Informasi Direktorat Pembangunan Perumahan Perdesaan
             </h1>
             <p className="text-gray-600 text-base md:text-lg max-w-xl leading-relaxed font-normal mb-6">
-              Data kepegawaian, pemantauan kedisiplinan berkala, serta arsip dokumentasi resmi Direktorat Pembangunan Perumahan Perdesaan.
+              Rekap Absensi, Cuti Pegawai, Penghitungan Uang Makan dan Tunjangan Kinerja
             </p>
             
             <div className="flex flex-wrap gap-3">
@@ -111,7 +109,7 @@ const Dashboard = ({ navigate, loggedInUser }) => {
                 onClick={() => navigate('upload-uam')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
               >
-                <Upload size={18} className="text-teal-700" /> Upload Bukti Dukung Uang Makan
+                <span className="text-teal-700 font-bold">↑</span> Upload Bukti Dukung Uang Makan
               </button>
             </div>
           </div>
@@ -164,7 +162,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       return;
     }
 
-    // Default admin account simulation or localStorage lookup
     if (loginNip === 'admin' && loginPin === '123456') {
       const adminUser = { nip: 'admin', Nama: 'Super Admin Direktorat', role: 'admin' };
       onLoginSuccess(adminUser);
@@ -328,7 +325,7 @@ const ProfileView = ({ navigate }) => {
     const jabatan = (item.Jabatan || '').toLowerCase();
     const subUnit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').toLowerCase();
 
-    // Strict sub-unit filtering
+    // Strict exact or tokenized match for sub-unit to avoid III matching II
     if (term.includes('subdirektorat wilayah')) {
       return subUnit === term;
     }
@@ -571,35 +568,57 @@ const PlaceholderView = ({ title, navigate }) => {
 };
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('home');
+  const [currentView, setCurrentView] = useState(() => {
+    const hash = window.location.hash.replace('#/', '');
+    return hash || 'home';
+  });
   const [loggedInUser, setLoggedInUser] = useState(null);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#/', '');
+      if (hash) {
+        setCurrentView(hash);
+      } else {
+        setCurrentView('home');
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const navigate = (viewName) => {
+    window.location.hash = viewName === 'home' ? '' : `#/${viewName}`;
+    setCurrentView(viewName);
+    window.scrollTo(0, 0);
+  };
 
   const handleLogout = () => {
     setLoggedInUser(null);
-    setCurrentView('home');
+    navigate('home');
   };
 
   const renderView = () => {
     switch(currentView) {
       case 'home':
-        return <Dashboard navigate={setCurrentView} loggedInUser={loggedInUser} />;
+        return <Dashboard navigate={navigate} loggedInUser={loggedInUser} />;
       case 'rekap':
-        return <PlaceholderView title="Rekap Bulanan" navigate={setCurrentView} />;
+        return <PlaceholderView title="Rekap Bulanan" navigate={navigate} />;
       case 'profile':
-        return <ProfileView navigate={setCurrentView} />;
+        return <ProfileView navigate={navigate} />;
       case 'upload-uam':
-        return <UploadUamView navigate={setCurrentView} loggedInUser={loggedInUser} />;
+        return <UploadUamView navigate={navigate} loggedInUser={loggedInUser} />;
       case 'login':
-        return <LoginView navigate={setCurrentView} onLoginSuccess={setLoggedInUser} />;
+        return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       default:
-        return <Dashboard navigate={setCurrentView} loggedInUser={loggedInUser} />;
+        return <Dashboard navigate={navigate} loggedInUser={loggedInUser} />;
     }
   };
 
   return (
     <div className="min-h-screen font-sans selection:bg-teal-900 selection:text-white bg-[#F7FAFC]">
       <div className="relative z-10">
-        <Header navigate={setCurrentView} loggedInUser={loggedInUser} onLogout={handleLogout} />
+        <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />
         <main>
           {renderView()}
         </main>
