@@ -31,15 +31,6 @@ const colors = {
 
 const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1517384244&single=true&output=csv";
 
-const getDriveDirectUrl = (url) => {
-  if (!url) return '';
-  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://drive.google.com/uc?export=view&id=${match[1]}`;
-  }
-  return url;
-};
-
 const Header = ({ navigate, loggedInUser, onLogout }) => {
   return (
     <header className="w-full bg-white border-b border-gray-100 sticky top-0 z-10 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs">
@@ -180,7 +171,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   const handleLogin = (e) => {
     e.preventDefault();
     if (!loginNip || !loginPin) {
-      setMessage({ type: 'error', text: 'NIP/Username dan PIN wajib diisi.' });
+      setMessage({ type: 'error', text: 'NIP dan PIN wajib diisi.' });
       return;
     }
 
@@ -230,10 +221,8 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
             for (let j = 0; j < headers.length; j++) {
               obj[headers[j]] = row[j] ? row[j] : '';
             }
-            const nipVal = (obj.NIP || obj['nip'] || '').toString().trim();
-            const akunRole = (obj.Akun_Role || obj['Akun_Role'] || '').toString().trim();
-            
-            if (nipVal === loginNip.trim() || (loginNip.trim() === '1' && akunRole.toLowerCase() === 'admin')) {
+            const nipVal = obj.NIP || obj['nip'] || '';
+            if (nipVal.toString().trim() === loginNip.toString().trim()) {
               foundUser = obj;
               break;
             }
@@ -244,14 +233,13 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
             if (sheetPin === loginPin.toString().trim()) {
               const userData = {
                 nip: foundUser.NIP || foundUser.nip,
-                Nama: foundUser.Nama || 'Admin',
-                role: (foundUser.Akun_Role || foundUser.Role || '').toLowerCase() === 'admin' ? 'admin' : 'pegawai',
+                Nama: foundUser.Nama || 'Pegawai',
+                role: (foundUser.Role || foundUser.role || '').toLowerCase() === 'admin' ? 'admin' : 'pegawai',
                 subUnit: foundUser.SubUnitKerja || foundUser['Sub Unit Kerja'] || 'Direktorat Pembangunan Perumahan Perdesaan',
                 jabatan: foundUser.Jabatan || 'Pejabat Fungsional',
                 atasan: foundUser.AtasanLangsung || foundUser['Atasan Langsung'] || 'Direktur',
                 kelasJabatan: foundUser.KelasJabatan || foundUser['Kelas Jabatan'] || '8',
-                email: foundUser.EmailDinas || foundUser['Email Dinas'] || 'email@pkp.go.id',
-                foto: getDriveDirectUrl(foundUser.Foto_Pegawai || foundUser['Foto_Pegawai'] || '')
+                email: foundUser.EmailDinas || foundUser['Email Dinas'] || 'email@pkp.go.id'
               };
               onLoginSuccess(userData);
               setLoading(false);
@@ -263,7 +251,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
             }
           } else {
             setLoading(false);
-            setMessage({ type: 'error', text: 'NIP / Akun tidak ditemukan dalam database.' });
+            setMessage({ type: 'error', text: 'NIP tidak ditemukan dalam database.' });
           }
         } else {
           setLoading(false);
@@ -284,8 +272,8 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
           <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm" style={{ backgroundColor: colors.midnightGreen }}>
             <User size={24} />
           </div>
-          <h2 className="text-2xl font-black text-gray-900 mb-1">Login Sistem</h2>
-          <p className="text-xs text-gray-500">Gunakan NIP atau 1 untuk Admin beserta PIN terdaftar.</p>
+          <h2 className="text-2xl font-black text-gray-900 mb-1">Login Pegawai</h2>
+          <p className="text-xs text-gray-500">Gunakan NIP dan PIN 6 digit terdaftar.</p>
         </div>
 
         {message.text && (
@@ -297,10 +285,10 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-gray-700 mb-2">NIP / Username Admin (1)</label>
+            <label className="block text-xs font-bold text-gray-700 mb-2">NIP</label>
             <input 
               type="text" 
-              placeholder="Contoh: 1 atau 1985..."
+              placeholder="Masukkan NIP..."
               value={loginNip}
               onChange={(e) => setLoginNip(e.target.value)}
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700"
@@ -339,48 +327,35 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   );
 };
 
-const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) => {
+const UserDashboardView = ({ loggedInUser, onLogout, navigate, activeRoute }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploaded, setUploaded] = useState(false);
-  const [pendingTargetView, setPendingTargetView] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(Date.now());
+  const [pendingRoute, setPendingRoute] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  const getModuleKey = (view) => {
-    switch(view) {
-      case 'absensi-uang-makan': return 'uang-makan';
-      case 'absensi-tunjangan-kinerja': return 'tukin';
-      case 'arsip-surat-tugas': return 'spt';
-      case 'arsip-surat-cuti': return 'cuti';
-      default: return 'uang-makan';
-    }
-  };
+  // Reset file selection & upload state completely whenever switching modules
+  useEffect(() => {
+    setSelectedFile(null);
+    setUploaded(false);
+    setFileInputKey(Date.now());
+  }, [activeRoute]);
 
-  const activeTab = getModuleKey(currentView);
-
-  const handleTabClick = (targetView) => {
+  const handleModuleClick = (targetRoute) => {
     if (selectedFile && !uploaded) {
-      setPendingTargetView(targetView);
+      setPendingRoute(targetRoute);
       setShowConfirmModal(true);
     } else {
-      navigate(targetView);
+      navigate(targetRoute);
     }
   };
 
-  const confirmSwitchModule = (proceed) => {
-    if (proceed && pendingTargetView) {
-      setSelectedFile(null);
-      setUploaded(false);
-      navigate(pendingTargetView);
-    }
+  const confirmNavigation = (proceed) => {
     setShowConfirmModal(false);
-    setPendingTargetView(null);
-  };
-
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
-      setUploaded(false);
+    if (proceed && pendingRoute) {
+      navigate(pendingRoute);
     }
+    setPendingRoute(null);
   };
 
   const handleUpload = (e) => {
@@ -389,30 +364,39 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
     setUploaded(true);
   };
 
+  const moduleTitles = {
+    'absensi-uang-makan': 'Modul Input Absensi Uang Makan',
+    'absensi-tunjangan-kinerja': 'Modul Input Absensi Tunjangan Kinerja',
+    'arsip-surat-tugas': 'Arsip dan Input Surat Tugas Dinas',
+    'arsip-surat-cuti': 'Arsip dan Input Surat Cuti Pegawai'
+  };
+
   return (
     <div className="min-h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative">
+      
+      {/* Confirmation Modal Pop-up */}
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-gray-100 animate-in fade-in zoom-in duration-200">
             <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mb-4">
               <AlertCircle size={24} />
             </div>
             <h3 className="text-xl font-black mb-2">Konfirmasi Pindah Modul</h3>
-            <p className="text-xs text-gray-500 mb-6 leading-relaxed">
-              Anda telah memilih dokumen yang belum diunggah. Apakah Anda yakin ingin pindah modul? Perubahan atau berkas yang dipilih akan direset.
+            <p className="text-xs text-gray-500 leading-relaxed mb-6">
+              Anda telah memilih berkas dokumen namun belum mengunggahnya. Apakah Anda yakin ingin pindah modul? Data file yang dipilih saat ini akan direset.
             </p>
             <div className="flex gap-3">
               <button 
-                onClick={() => confirmSwitchModule(false)}
-                className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-colors"
+                onClick={() => confirmNavigation(false)}
+                className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs hover:bg-gray-200 transition-colors"
               >
-                Tidak, Tetap Disini
+                Tidak, Tetap di Sini
               </button>
               <button 
-                onClick={() => confirmSwitchModule(true)}
-                className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-colors shadow-sm"
+                onClick={() => confirmNavigation(true)}
+                className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold text-xs hover:bg-red-700 transition-colors"
               >
-                Ya, Pindah & Reset
+                Ya, Pindah Modul
               </button>
             </div>
           </div>
@@ -427,13 +411,9 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
           </div>
 
           <div className="flex items-center gap-3 mb-8 p-3 rounded-2xl bg-white/5 border border-white/5">
-            {loggedInUser?.foto ? (
-              <img src={loggedInUser.foto} alt="Avatar" className="w-10 h-10 rounded-full object-cover border border-teal-500/30" />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-teal-700 font-bold flex items-center justify-center text-white text-sm">
-                {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'A'}
-              </div>
-            )}
+            <div className="w-10 h-10 rounded-full bg-teal-700 font-bold flex items-center justify-center text-white text-sm">
+              {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'A'}
+            </div>
             <div className="overflow-hidden">
               <div className="font-extrabold text-xs text-white truncate">{loggedInUser?.Nama || 'Pengguna'}</div>
               <div className="text-[10px] text-gray-400 truncate">NIP {loggedInUser?.nip || '-'}</div>
@@ -442,26 +422,26 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
 
           <nav className="space-y-1">
             <button 
-              onClick={() => handleTabClick('absensi-uang-makan')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('absensi-uang-makan')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'absensi-uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <Calendar size={16} /> Absensi Uang Makan
             </button>
             <button 
-              onClick={() => handleTabClick('absensi-tunjangan-kinerja')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('absensi-tunjangan-kinerja')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'absensi-tunjangan-kinerja' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <FileCheck size={16} /> Absensi Tunjangan Kinerja
             </button>
             <button 
-              onClick={() => handleTabClick('arsip-surat-tugas')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('arsip-surat-tugas')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'arsip-surat-tugas' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <FileText size={16} /> Arsip Surat Tugas
             </button>
             <button 
-              onClick={() => handleTabClick('arsip-surat-cuti')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('arsip-surat-cuti')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'arsip-surat-cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <Clock size={16} /> Arsip Surat Cuti
             </button>
@@ -473,7 +453,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
             onClick={() => navigate('home')}
             className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-300 hover:bg-white/5 transition-colors"
           >
-            <ArrowLeft size={14} /> Beranda Utama
+            <ArrowLeft size={14} /> Kembali ke Beranda
           </button>
           <button 
             onClick={onLogout}
@@ -492,8 +472,8 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
             <p className="text-xs text-gray-500">Kelola dan input dokumen pendukung resmi kedinasan Anda.</p>
           </div>
 
-          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm mb-8 relative overflow-hidden flex flex-col lg:flex-row justify-between items-start lg:items-center">
-            <div className="p-6 md:p-8 space-y-4 flex-1 z-10">
+          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8 mb-8 relative overflow-hidden flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+            <div className="space-y-4 flex-1">
               <div>
                 <h2 className="text-2xl font-extrabold text-gray-900">{loggedInUser?.Nama}</h2>
                 <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
@@ -518,17 +498,6 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
                 </div>
               </div>
             </div>
-
-            {loggedInUser?.foto && (
-              <div className="w-full lg:w-72 h-48 lg:h-52 relative overflow-hidden shrink-0 flex items-center justify-end bg-[#084C61]">
-                <div className="absolute inset-0 bg-gradient-to-r from-white via-white/40 to-transparent z-10 hidden lg:block"></div>
-                <img 
-                  src={loggedInUser.foto} 
-                  alt={loggedInUser.Nama} 
-                  className="w-full h-full object-cover object-top opacity-90 mix-blend-luminosity hover:mix-blend-normal transition-all"
-                />
-              </div>
-            )}
           </div>
 
           <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8">
@@ -538,10 +507,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
                   Form Unggah Dokumen Resmi
                 </span>
                 <h3 className="text-xl font-black text-gray-900 mt-2">
-                  {activeTab === 'uang-makan' && 'Modul Input Absensi Uang Makan'}
-                  {activeTab === 'tukin' && 'Modul Input Absensi Tunjangan Kinerja'}
-                  {activeTab === 'spt' && 'Arsip dan Input Surat Tugas Dinas'}
-                  {activeTab === 'cuti' && 'Arsip dan Input Surat Cuti Pegawai'}
+                  {moduleTitles[activeRoute] || 'Form Unggah Dokumen'}
                 </h3>
               </div>
             </div>
@@ -551,32 +517,25 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
                 <label className="block text-xs font-bold text-gray-700 mb-2">Pilih Berkas Dokumen (Format PDF)</label>
                 <div className="border-2 border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50 hover:border-teal-700 transition-colors">
                   <input 
-                    key={activeTab + (selectedFile ? selectedFile.name : 'empty')}
+                    key={fileInputKey}
                     type="file" 
                     accept=".pdf"
-                    onChange={handleFileChange}
+                    onChange={(e) => setSelectedFile(e.target.files[0])}
                     className="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-teal-50 file:text-teal-700 cursor-pointer"
                   />
                 </div>
               </div>
 
               {selectedFile && (
-                <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 text-xs text-teal-900 flex items-center justify-between">
-                  <span>File terpilih: <strong className="font-bold">{selectedFile.name}</strong></span>
-                  <button 
-                    type="button" 
-                    onClick={() => { setSelectedFile(null); setUploaded(false); }}
-                    className="text-red-600 font-bold text-xs hover:underline"
-                  >
-                    Hapus
-                  </button>
+                <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 text-xs text-teal-900 flex items-center gap-3">
+                  File terpilih: <span className="font-bold">{selectedFile.name}</span>
                 </div>
               )}
 
               {uploaded && (
                 <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-emerald-900 flex items-center gap-3">
                   <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                  <span>Berkas berhasil diunggah dan disimpan ke sistem!</span>
+                  <span>Berkas berhasil diunggah dan disimpan ke folder Google Drive "Bukti Dukung Uang Makan"!</span>
                 </div>
               )}
 
@@ -586,7 +545,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate, currentView }) =>
                 className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
                 style={{ backgroundColor: colors.midnightGreen }}
               >
-                Proses & Unggah Dokumen
+                Proses & Unggah Dokumen ke Google Drive
               </button>
             </form>
           </div>
@@ -695,39 +654,17 @@ const ProfileView = ({ navigate }) => {
         <div className="text-center py-20 text-gray-500">Memuat data kepegawaian...</div>
       ) : (
         <div className="flex flex-col gap-4">
-          {filteredPegawai.map((item, index) => {
-            const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || item['Foto_Pegawai'] || '');
-            const subUnit = item.SubUnitKerja || item['Sub Unit Kerja'] || '';
-            const kelas = item.KelasJabatan || item['Kelas Jabatan'] || '';
-            const jabatan = item.Jabatan || '';
-            const email = item.EmailDinas || item['Email Dinas'] || '';
-            const atasan = item.AtasanLangsung || item['Atasan Langsung'] || '';
-
-            return (
-              <div key={index} className="bg-white rounded-2xl border border-gray-100 shadow-xs overflow-hidden flex flex-col md:flex-row justify-between items-stretch">
-                <div className="p-6 flex-1">
-                  <h3 className="font-extrabold text-lg text-gray-900 mb-1">{item.Nama}</h3>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 mb-4">
-                    <span>NIP {item.NIP}</span>
-                    {subUnit && <span className="px-2.5 py-0.5 rounded-full font-bold bg-teal-50 text-teal-800">{subUnit}</span>}
-                    {kelas && <span className="px-2.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-800">Kelas Jabatan {kelas}</span>}
-                  </div>
-                  <div className="pt-4 border-t border-gray-100 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                    <div><span className="font-bold text-gray-400 uppercase text-[10px]">JABATAN</span><div className="font-semibold text-gray-800 mt-0.5">{jabatan}</div></div>
-                    <div><span className="font-bold text-gray-400 uppercase text-[10px]">EMAIL DINAS</span><div className="font-semibold text-gray-800 mt-0.5">{email}</div></div>
-                    <div><span className="font-bold text-gray-400 uppercase text-[10px]">ATASAN LANGSUNG</span><div className="font-semibold text-gray-800 mt-0.5">{atasan}</div></div>
-                  </div>
-                </div>
-
-                {fotoUrl && (
-                  <div className="w-full md:w-56 h-40 md:h-auto relative shrink-0 bg-[#084C61] overflow-hidden flex items-center justify-end">
-                    <div className="absolute inset-0 bg-gradient-to-r from-white via-white/30 to-transparent z-10 hidden md:block"></div>
-                    <img src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top opacity-90" />
-                  </div>
-                )}
+          {filteredPegawai.map((item, index) => (
+            <div key={index} className="bg-white rounded-2xl border border-gray-100 shadow-xs p-6">
+              <h3 className="font-extrabold text-lg text-gray-900 mb-1">{item.Nama}</h3>
+              <p className="text-xs text-gray-500">NIP {item.NIP} • {item.SubUnitKerja || item['Sub Unit Kerja']}</p>
+              <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div><span className="font-bold text-gray-400">JABATAN:</span><div className="font-semibold">{item.Jabatan}</div></div>
+                <div><span className="font-bold text-gray-400">EMAIL:</span><div className="font-semibold">{item.EmailDinas || item['Email Dinas']}</div></div>
+                <div><span className="font-bold text-gray-400">ATASAN:</span><div className="font-semibold">{item.AtasanLangsung || item['Atasan Langsung']}</div></div>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -771,17 +708,17 @@ export default function App() {
     navigate('home');
   };
 
-  const isDashboardView = ['absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
+  const dashboardRoutes = ['absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'];
 
   const renderView = () => {
+    if (dashboardRoutes.includes(currentView)) {
+      if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+      return <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} activeRoute={currentView} />;
+    }
+
     switch(currentView) {
       case 'home':
         return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
-      case 'absensi-uang-makan':
-      case 'absensi-tunjangan-kinerja':
-      case 'arsip-surat-tugas':
-      case 'arsip-surat-cuti':
-        return loggedInUser ? <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} currentView={currentView} /> : <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       case 'profile':
         return <ProfileView navigate={navigate} />;
       case 'rekap':
@@ -793,10 +730,13 @@ export default function App() {
     }
   };
 
+  const isDashboardRoute = dashboardRoutes.includes(currentView);
+
   return (
     <div className="min-h-screen font-sans bg-[#F7FAFC]">
-      {!isDashboardView && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
+      {!isDashboardRoute && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
       <main>{renderView()}</main>
     </div>
   );
 }
+
