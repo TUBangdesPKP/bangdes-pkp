@@ -87,7 +87,7 @@ const Header = ({ navigate, loggedInUser, onLogout }) => {
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-bold text-white shadow-sm transition-transform hover:scale-105"
             style={{ backgroundColor: colors.midnightGreen }}
           >
-            <User size={16} /> Login Pegawai
+            <User size={16} /> Login Admin
           </button>
         )}
       </div>
@@ -125,7 +125,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
                 onClick={() => navigate(loggedInUser ? 'dashboard' : 'login')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
               >
-                <span className="text-teal-700 font-bold">↑</span> Upload Bukti Dukung Uang Makan
+                <span className="text-teal-700 font-bold">↑</span> Upload Dokumen Pendukung
               </button>
             </div>
           </div>
