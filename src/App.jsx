@@ -11,7 +11,15 @@ import {
   Search,
   Briefcase,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Calendar,
+  Clock,
+  LogOut,
+  FileCheck,
+  Send,
+  Upload,
+  ShieldCheck,
+  FolderGit2
 } from 'lucide-react';
 
 const colors = {
@@ -24,6 +32,8 @@ const colors = {
   textMuted: '#718096',
   bgGray: '#F7FAFC'
 };
+
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1517384244&single=true&output=csv";
 
 const Header = ({ navigate, loggedInUser, onLogout }) => {
   return (
@@ -59,10 +69,16 @@ const Header = ({ navigate, loggedInUser, onLogout }) => {
               <p className="text-[10px] text-teal-700 font-semibold">{loggedInUser.role === 'admin' ? 'Super Admin' : 'Pegawai'}</p>
             </div>
             <button 
-              onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
+              onClick={() => navigate('dashboard')}
+              className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors"
             >
-              Keluar
+              Panel Utama
+            </button>
+            <button 
+              onClick={onLogout}
+              className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-1"
+            >
+              <LogOut size={14} /> Keluar
             </button>
           </div>
         ) : (
@@ -79,7 +95,7 @@ const Header = ({ navigate, loggedInUser, onLogout }) => {
   );
 };
 
-const Dashboard = ({ navigate, loggedInUser }) => {
+const DashboardHome = ({ navigate, loggedInUser }) => {
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 md:py-12">
       <div className="flex flex-col lg:flex-row gap-8 lg:gap-16">
@@ -93,7 +109,7 @@ const Dashboard = ({ navigate, loggedInUser }) => {
               Dashboard data dan Informasi Direktorat Pembangunan Perumahan Perdesaan
             </h1>
             <p className="text-gray-600 text-base md:text-lg max-w-xl leading-relaxed font-normal mb-6">
-              Rekap Absensi, Cuti Pegawai, Penghitungan Uang Makan dan Tunjangan Kinerja
+              Data kepegawaian, pemantauan kedisiplinan berkala, serta arsip dokumentasi resmi Direktorat Pembangunan Perumahan Perdesaan.
             </p>
             
             <div className="flex flex-wrap gap-3">
@@ -106,7 +122,7 @@ const Dashboard = ({ navigate, loggedInUser }) => {
               </button>
 
               <button 
-                onClick={() => navigate('upload-uam')}
+                onClick={() => navigate(loggedInUser ? 'dashboard' : 'login')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
               >
                 <span className="text-teal-700 font-bold">↑</span> Upload Bukti Dukung Uang Makan
@@ -154,6 +170,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   const [loginNip, setLoginNip] = useState('');
   const [loginPin, setLoginPin] = useState('');
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -162,28 +179,94 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       return;
     }
 
-    if (loginNip === 'admin' && loginPin === '123456') {
-      const adminUser = { nip: 'admin', Nama: 'Super Admin Direktorat', role: 'admin' };
-      onLoginSuccess(adminUser);
-      navigate('home');
-      return;
-    }
+    setLoading(true);
+    fetch(SHEET_CSV_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error("Gagal mengambil data spreadsheet");
+        return res.text();
+      })
+      .then((csvText) => {
+        const rows = [];
+        let currentRow = [];
+        let currentField = '';
+        let insideQuote = false;
 
-    const accounts = JSON.parse(localStorage.getItem('bangdes_accounts') || '{}');
-    const userAccount = accounts[loginNip];
+        for (let i = 0; i < csvText.length; i++) {
+          const char = csvText[i];
+          const nextChar = csvText[i + 1];
+          if (char === '"') {
+            if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
+            else { insideQuote = !insideQuote; }
+          } else if (char === ',' && !insideQuote) {
+            currentRow.push(currentField.trim());
+            currentField = '';
+          } else if ((char === '\r' || char === '\n') && !insideQuote) {
+            if (char === '\r' && nextChar === '\n') i++;
+            currentRow.push(currentField.trim());
+            if (currentRow.some(f => f !== '')) rows.push(currentRow);
+            currentRow = [];
+            currentField = '';
+          } else {
+            currentField += char;
+          }
+        }
+        if (currentField !== '' || currentRow.length > 0) {
+          currentRow.push(currentField.trim());
+          if (currentRow.some(f => f !== '')) rows.push(currentRow);
+        }
 
-    if (!userAccount) {
-      setMessage({ type: 'error', text: 'Akun NIP tidak ditemukan atau belum terdaftar.' });
-      return;
-    }
+        if (rows.length > 1) {
+          const headers = rows[0];
+          let foundUser = null;
 
-    if (userAccount.pin !== loginPin) {
-      setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
-      return;
-    }
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const obj = {};
+            for (let j = 0; j < headers.length; j++) {
+              obj[headers[j]] = row[j] ? row[j] : '';
+            }
+            const nipVal = obj.NIP || obj['nip'] || '';
+            if (nipVal.toString().trim() === loginNip.toString().trim()) {
+              foundUser = obj;
+              break;
+            }
+          }
 
-    onLoginSuccess(userAccount);
-    navigate('home');
+          if (foundUser) {
+            const sheetPin = (foundUser.PIN || foundUser.pin || '').toString().trim();
+            if (sheetPin === loginPin.toString().trim()) {
+              const userData = {
+                nip: foundUser.NIP || foundUser.nip,
+                Nama: foundUser.Nama || 'Pegawai',
+                role: (foundUser.Role || foundUser.role || '').toLowerCase() === 'admin' ? 'admin' : 'pegawai',
+                subUnit: foundUser.SubUnitKerja || foundUser['Sub Unit Kerja'] || 'Direktorat Pembangunan Perumahan Perdesaan',
+                jabatan: foundUser.Jabatan || 'Pejabat Fungsional',
+                atasan: foundUser.AtasanLangsung || foundUser['Atasan Langsung'] || 'Direktur',
+                kelasJabatan: foundUser.KelasJabatan || foundUser['Kelas Jabatan'] || '8',
+                email: foundUser.EmailDinas || foundUser['Email Dinas'] || 'email@pkp.go.id'
+              };
+              onLoginSuccess(userData);
+              setLoading(false);
+              navigate('dashboard');
+              return;
+            } else {
+              setLoading(false);
+              setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
+            }
+          } else {
+            setLoading(false);
+            setMessage({ type: 'error', text: 'NIP tidak ditemukan dalam database.' });
+          }
+        } else {
+          setLoading(false);
+          setMessage({ type: 'error', text: 'Data spreadsheet kosong.' });
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        setLoading(false);
+        setMessage({ type: 'error', text: 'Gagal terhubung ke database spreadsheet.' });
+      });
   };
 
   return (
@@ -193,8 +276,8 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
           <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm" style={{ backgroundColor: colors.midnightGreen }}>
             <User size={24} />
           </div>
-          <h2 className="text-2xl font-black text-gray-900 mb-1">Login Administrator</h2>
-          <p className="text-xs text-gray-500">Gunakan NIP dan PIN Administrator untuk otorisasi unggah.</p>
+          <h2 className="text-2xl font-black text-gray-900 mb-1">Login Pegawai</h2>
+          <p className="text-xs text-gray-500">Gunakan NIP dan PIN 6 digit terdaftar.</p>
         </div>
 
         {message.text && (
@@ -206,10 +289,10 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-gray-700 mb-2">NIP / ID Administrator</label>
+            <label className="block text-xs font-bold text-gray-700 mb-2">NIP</label>
             <input 
               type="text" 
-              placeholder="Contoh: admin atau 1994..."
+              placeholder="Masukkan NIP..."
               value={loginNip}
               onChange={(e) => setLoginNip(e.target.value)}
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700"
@@ -230,10 +313,11 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 
           <button 
             type="submit"
-            className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-opacity hover:opacity-90 active:scale-[0.98] mt-4"
+            disabled={loading}
+            className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-opacity hover:opacity-90 active:scale-[0.98] mt-4 disabled:opacity-50"
             style={{ backgroundColor: colors.midnightGreen }}
           >
-            Masuk Sistem
+            {loading ? 'Memeriksa Data...' : 'Masuk Sistem'}
           </button>
         </form>
 
@@ -247,19 +331,210 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   );
 };
 
+const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
+  const [activeTab, setActiveTab] = useState('uang-makan');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploaded, setUploaded] = useState(false);
+
+  const handleUpload = (e) => {
+    e.preventDefault();
+    if (!selectedFile) return;
+    setUploaded(true);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans">
+      {/* Dark Sidebar matching reference image */}
+      <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0">
+        <div>
+          <div className="mb-8">
+            <div className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-1">Profil Pegawai</div>
+            <div className="text-xs font-medium text-gray-300">{loggedInUser?.subUnit || 'Direktorat Pembangunan Perumahan Perdesaan'}</div>
+          </div>
+
+          <div className="flex items-center gap-3 mb-8 p-3 rounded-2xl bg-white/5 border border-white/5">
+            <div className="w-10 h-10 rounded-full bg-teal-700 font-bold flex items-center justify-center text-white text-sm">
+              {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'A'}
+            </div>
+            <div className="overflow-hidden">
+              <div className="font-extrabold text-xs text-white truncate">{loggedInUser?.Nama || 'Pengguna'}</div>
+              <div className="text-[10px] text-gray-400 truncate">NIP {loggedInUser?.nip || '-'}</div>
+            </div>
+          </div>
+
+          <nav className="space-y-1">
+            <button 
+              onClick={() => setActiveTab('uang-makan')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+            >
+              <Calendar size={16} /> Absensi Uang Makan
+            </button>
+            <button 
+              onClick={() => setActiveTab('tukin')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+            >
+              <FileCheck size={16} /> Absensi Tunjangan Kinerja
+            </button>
+            <button 
+              onClick={() => setActiveTab('spt')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+            >
+              <FileText size={16} /> Arsip Surat Tugas
+            </button>
+            <button 
+              onClick={() => setActiveTab('cuti')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+            >
+              <Clock size={16} /> Arsip Surat Cuti
+            </button>
+          </nav>
+        </div>
+
+        <div className="pt-6 border-t border-white/10 space-y-2">
+          <button 
+            onClick={() => navigate('home')}
+            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-300 hover:bg-white/5 transition-colors"
+          >
+            <ArrowLeft size={14} /> Kembali ke Beranda
+          </button>
+          <button 
+            onClick={onLogout}
+            className="w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold bg-red-950/40 text-red-300 hover:bg-red-900/50 transition-colors border border-red-900/50"
+          >
+            <LogOut size={14} /> Keluar
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content Area matching reference layout */}
+      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 overflow-y-auto">
+        <div className="max-w-6xl mx-auto">
+          
+          <div className="mb-6">
+            <h1 className="text-xl md:text-2xl font-extrabold text-gray-900">Riwayat & Modul Pengisian</h1>
+            <p className="text-xs text-gray-500">Kelola dan input dokumen pendukung resmi kedinasan Anda.</p>
+          </div>
+
+          {/* Profile Banner Card */}
+          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8 mb-8 relative overflow-hidden flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+            <div className="space-y-4 flex-1">
+              <div>
+                <h2 className="text-2xl font-extrabold text-gray-900">{loggedInUser?.Nama}</h2>
+                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
+                  <span className="text-gray-500">NIP {loggedInUser?.nip}</span>
+                  <span className="px-3 py-0.5 rounded-full font-bold bg-teal-50 text-teal-800">{loggedInUser?.subUnit}</span>
+                  <span className="px-3 py-0.5 rounded-full font-bold bg-amber-50 text-amber-800">Kelas Jabatan {loggedInUser?.kelasJabatan || '8'}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-gray-100 text-xs">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">JABATAN</div>
+                  <div className="font-semibold text-gray-800 mt-0.5">{loggedInUser?.jabatan}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">EMAIL DINAS</div>
+                  <div className="font-semibold text-gray-800 mt-0.5">{loggedInUser?.email}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">ATASAN LANGSUNG</div>
+                  <div className="font-semibold text-gray-800 mt-0.5">{loggedInUser?.atasan}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Statistics summary counters */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
+              <div className="text-[10px] font-bold text-gray-400 uppercase">Periode Kumpul</div>
+              <div className="text-xl font-extrabold text-gray-900 mt-1">17 <span className="text-xs font-normal text-gray-500">berkas</span></div>
+            </div>
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
+              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Dinas</div>
+              <div className="text-xl font-extrabold text-gray-900 mt-1">58 <span className="text-xs font-normal text-gray-500">hari</span></div>
+            </div>
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
+              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Izin</div>
+              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">hari</span></div>
+            </div>
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
+              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Cuti</div>
+              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">hari</span></div>
+            </div>
+            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs col-span-2 md:col-span-1">
+              <div className="text-[10px] font-bold text-gray-400 uppercase">Klaim Lembur</div>
+              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">diajukan</span></div>
+            </div>
+          </div>
+
+          {/* Dynamic Module Input Area */}
+          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8">
+            <div className="flex items-center justify-between pb-6 border-b border-gray-100 mb-6">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase px-3 py-1 bg-teal-50 text-teal-800 rounded-full">
+                  Form Unggah Dokumen Resmi
+                </span>
+                <h3 className="text-xl font-black text-gray-900 mt-2">
+                  {activeTab === 'uang-makan' && 'Modul Input Absensi Uang Makan'}
+                  {activeTab === 'tukin' && 'Modul Input Absensi Tunjangan Kinerja'}
+                  {activeTab === 'spt' && 'Arsip dan Input Surat Tugas Dinas'}
+                  {activeTab === 'cuti' && 'Arsip dan Input Surat Cuti Pegawai'}
+                </h3>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpload} className="space-y-6 max-w-2xl">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">Pilih Berkas Dokumen (Format PDF)</label>
+                <div className="border-2 border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50 hover:border-teal-700 transition-colors">
+                  <input 
+                    type="file" 
+                    accept=".pdf"
+                    onChange={(e) => setSelectedFile(e.target.files[0])}
+                    className="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-teal-50 file:text-teal-700 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {selectedFile && (
+                <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 text-xs text-teal-900 flex items-center gap-3">
+                  File terpilih: <span className="font-bold">{selectedFile.name}</span>
+                </div>
+              )}
+
+              {uploaded && (
+                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-emerald-900 flex items-center gap-3">
+                  <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+                  <span>Berkas berhasil diunggah dan disimpan ke sistem!</span>
+                </div>
+              )}
+
+              <button 
+                type="submit"
+                disabled={!selectedFile}
+                className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
+                style={{ backgroundColor: colors.midnightGreen }}
+              >
+                Proses & Unggah Dokumen
+              </button>
+            </form>
+          </div>
+
+        </div>
+      </main>
+    </div>
+  );
+};
+
 const ProfileView = ({ navigate }) => {
   const [pegawaiList, setPegawaiList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    const googleSheetCsvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1517384244&single=true&output=csv";
-
-    fetch(googleSheetCsvUrl)
-      .then((response) => {
-        if (!response.ok) throw new Error("Gagal mengambil data");
-        return response.text();
-      })
+    fetch(SHEET_CSV_URL)
+      .then((res) => res.text())
       .then((csvText) => {
         const rows = [];
         let currentRow = [];
@@ -269,21 +544,16 @@ const ProfileView = ({ navigate }) => {
         for (let i = 0; i < csvText.length; i++) {
           const char = csvText[i];
           const nextChar = csvText[i + 1];
-
           if (char === '"') {
-            if (insideQuote && nextChar === '"') {
-              currentField += '"';
-              i++;
-            } else {
-              insideQuote = !insideQuote;
-            }
+            if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
+            else { insideQuote = !insideQuote; }
           } else if (char === ',' && !insideQuote) {
             currentRow.push(currentField.trim());
             currentField = '';
           } else if ((char === '\r' || char === '\n') && !insideQuote) {
             if (char === '\r' && nextChar === '\n') i++;
             currentRow.push(currentField.trim());
-            if (currentRow.some(field => field !== '')) rows.push(currentRow);
+            if (currentRow.some(f => f !== '')) rows.push(currentRow);
             currentRow = [];
             currentField = '';
           } else {
@@ -292,7 +562,7 @@ const ProfileView = ({ navigate }) => {
         }
         if (currentField !== '' || currentRow.length > 0) {
           currentRow.push(currentField.trim());
-          if (currentRow.some(field => field !== '')) rows.push(currentRow);
+          if (currentRow.some(f => f !== '')) rows.push(currentRow);
         }
 
         if (rows.length > 1) {
@@ -310,8 +580,8 @@ const ProfileView = ({ navigate }) => {
         }
         setLoading(false);
       })
-      .catch((error) => {
-        console.warn("Gagal mengambil data:", error);
+      .catch((err) => {
+        console.warn(err);
         setLoading(false);
       });
   }, []);
@@ -319,17 +589,13 @@ const ProfileView = ({ navigate }) => {
   const filteredPegawai = pegawaiList.filter(item => {
     const term = searchTerm.trim().toLowerCase();
     if (!term) return true;
-
     const nama = (item.Nama || '').toLowerCase();
     const nip = (item.NIP || '').toLowerCase();
     const jabatan = (item.Jabatan || '').toLowerCase();
     const subUnit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').toLowerCase();
-
-    // Strict exact or tokenized match for sub-unit to avoid III matching II
     if (term.includes('subdirektorat wilayah')) {
       return subUnit === term;
     }
-
     return nama.includes(term) || nip.includes(term) || jabatan.includes(term) || subUnit.includes(term);
   });
 
@@ -337,235 +603,54 @@ const ProfileView = ({ navigate }) => {
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
         <div>
-          <button 
-            onClick={() => navigate('home')}
-            className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 transition-colors"
-          >
-            <ArrowLeft size={16} /> Kembali ke Dashboard
+          <button onClick={() => navigate('home')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2">
+            <ArrowLeft size={16} /> Kembali ke Beranda
           </button>
-          <h2 className="text-2xl md:text-3xl font-black" style={{ color: colors.midnightGreen }}>
-            Bank Data Profil Pegawai
-          </h2>
+          <h2 className="text-2xl md:text-3xl font-black" style={{ color: colors.midnightGreen }}>Bank Data Profil Pegawai</h2>
           <p className="text-sm text-gray-500">Direktorat Pembangunan Perumahan Perdesaan ({pegawaiList.length} Pegawai Terdaftar)</p>
         </div>
-
         <div className="w-full md:w-80 relative">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400">
-            <Search size={18} />
-          </span>
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><Search size={18} /></span>
           <input 
-            type="text"
-            placeholder="Cari nama, NIP, sub unit, atau jabatan..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700 shadow-2xs"
+            type="text" 
+            placeholder="Cari nama, NIP, sub unit..." 
+            value={searchTerm} 
+            onChange={(e) => setSearchTerm(e.target.value)} 
+            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700" 
           />
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center py-20 text-gray-500 font-medium">Memuat data kepegawaian dari Google Spreadsheet...</div>
+        <div className="text-center py-20 text-gray-500">Memuat data kepegawaian...</div>
       ) : (
         <div className="flex flex-col gap-4">
-          {filteredPegawai.length > 0 ? (
-            filteredPegawai.map((item, index) => {
-              const subUnit = item.SubUnitKerja || item['Sub Unit Kerja'] || '';
-              const rawKelas = item.KelasJabatan || item['Kelas Jabatan'] || '';
-              const kelasFormatted = rawKelas ? (rawKelas.toLowerCase().includes('kelas') ? rawKelas : `Kelas Jabatan ${rawKelas}`) : '';
-              const atasan = item.AtasanLangsung || item['Atasan Langsung'] || '-';
-              const jabatanAtasan = item.JabatanAtasanLangsung || item['Jabatan Atasan Langsung'] || '';
-              const email = item.EmailDinas || item['Email Dinas'] || 'email@pkp.go.id';
-              const nip = item.NIP || '-';
-              const jabatan = item.Jabatan || '-';
-
-              return (
-                <div key={index} className="bg-white rounded-2xl border border-gray-100 shadow-xs hover:shadow-md transition-all overflow-hidden p-6">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-100">
-                    <div>
-                      <h3 className="font-extrabold text-lg md:text-xl text-gray-900 mb-1.5 leading-snug">{item.Nama}</h3>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-gray-500 font-medium">NIP {nip}</span>
-                        
-                        {subUnit && (
-                          <span className="px-3 py-1 rounded-full font-bold text-xs" style={{ backgroundColor: '#E2F0F5', color: colors.darkAqua }}>
-                            {subUnit}
-                          </span>
-                        )}
-
-                        {kelasFormatted && (
-                          <span className="px-3 py-1 rounded-full font-bold text-xs" style={{ backgroundColor: colors.krem, color: '#8C7A32' }}>
-                            {kelasFormatted}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 grid grid-cols-1 md:grid-cols-3 gap-6 text-xs md:text-sm">
-                    <div>
-                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">JABATAN</div>
-                      <div className="font-semibold text-gray-800 leading-snug">{jabatan}</div>
-                    </div>
-
-                    <div>
-                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">EMAIL DINAS</div>
-                      <div className="font-semibold text-gray-800 leading-snug flex items-center gap-1.5">
-                        <FileText size={14} className="text-gray-400" /> {email}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400 mb-1">ATASAN LANGSUNG</div>
-                      <div className="font-semibold text-gray-800 leading-snug">{atasan}</div>
-                      {jabatanAtasan && (
-                        <div className="text-[11px] text-gray-400 mt-0.5 leading-tight">{jabatanAtasan}</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="col-span-full text-center py-16 text-gray-400 bg-white rounded-2xl border border-gray-100">
-              Tidak ada data pegawai yang cocok dengan pencarian Anda.
+          {filteredPegawai.map((item, index) => (
+            <div key={index} className="bg-white rounded-2xl border border-gray-100 shadow-xs p-6">
+              <h3 className="font-extrabold text-lg text-gray-900 mb-1">{item.Nama}</h3>
+              <p className="text-xs text-gray-500">NIP {item.NIP} • {item.SubUnitKerja || item['Sub Unit Kerja']}</p>
+              <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div><span className="font-bold text-gray-400">JABATAN:</span><div className="font-semibold">{item.Jabatan}</div></div>
+                <div><span className="font-bold text-gray-400">EMAIL:</span><div className="font-semibold">{item.EmailDinas || item['Email Dinas']}</div></div>
+                <div><span className="font-bold text-gray-400">ATASAN:</span><div className="font-semibold">{item.AtasanLangsung || item['Atasan Langsung']}</div></div>
+              </div>
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
 };
 
-const UploadUamView = ({ navigate, loggedInUser }) => {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploaded, setUploaded] = useState(false);
-
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
-    }
-  };
-
-  const handleUpload = (e) => {
-    e.preventDefault();
-    if (!selectedFile) return;
-    setUploaded(true);
-  };
-
-  return (
-    <div className="max-w-6xl mx-auto px-4 md:px-8 py-8">
-      <button 
-        onClick={() => navigate('home')}
-        className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-6 transition-colors"
-      >
-        <ArrowLeft size={16} /> Kembali ke Beranda
-      </button>
-
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-xl overflow-hidden p-6 md:p-10">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-8 border-b border-gray-100 mb-8">
-          <div>
-            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold mb-2 uppercase" style={{ backgroundColor: colors.krem, color: colors.midnightGreen }}>
-              Uang Makan Agustus 2026
-            </span>
-            <h2 className="text-2xl md:text-3xl font-black text-gray-900">Upload Bukti Dukung Uang Makan</h2>
-            <p className="text-sm text-gray-500 mt-1">Periode Event: 1/8/2026 s/d 31/8/2026</p>
-          </div>
-
-          <div className="bg-emerald-50 border border-emerald-200 px-4 py-2.5 rounded-2xl flex items-center gap-2 text-emerald-800 text-xs font-bold">
-            <CheckCircle2 size={16} /> Rentang Tanggal Sesuai
-          </div>
-        </div>
-
-        {!loggedInUser || loggedInUser.role !== 'admin' ? (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center text-amber-900 mb-8">
-            <AlertCircle size={28} className="mx-auto mb-2 text-amber-600" />
-            <h3 className="font-extrabold text-base mb-1">Otorisasi Administrator Diperlukan</h3>
-            <p className="text-xs text-amber-700 max-w-md mx-auto mb-4">
-              Anda harus masuk sebagai Super Admin untuk melakukan unggah berkas bukti dukung uang makan.
-            </p>
-            <button 
-              onClick={() => navigate('login')}
-              className="px-6 py-2.5 rounded-xl text-white font-bold text-xs shadow-md"
-              style={{ backgroundColor: colors.midnightGreen }}
-            >
-              Login Administrator Sekarang
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleUpload} className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="space-y-6">
-              <div>
-                <h3 className="font-extrabold text-base text-gray-900 mb-1">Pilih Berkas Presensi</h3>
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  Unggah file hasil export dari eOffice atau myPKP berformat PDF Riwayat Presensi. Pastikan bukan hasil scan atau foto.
-                </p>
-              </div>
-
-              <div className="border-2 border-dashed border-gray-200 rounded-2xl p-6 text-center hover:border-teal-700 transition-colors bg-gray-50/50">
-                <input 
-                  type="file" 
-                  accept=".pdf"
-                  onChange={handleFileChange}
-                  className="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100 cursor-pointer"
-                />
-              </div>
-
-              {selectedFile && (
-                <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 text-xs text-teal-900 flex items-center gap-3">
-                  File terpilih: <span className="font-bold">{selectedFile.name}</span>
-                </div>
-              )}
-
-              {uploaded && (
-                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-emerald-900 flex items-center gap-3">
-                  <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                  <span>Berkas bukti dukung berhasil diunggah dan disimpan ke sistem!</span>
-                </div>
-              )}
-
-              <button 
-                type="submit"
-                disabled={!selectedFile}
-                className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
-                style={{ backgroundColor: colors.midnightGreen }}
-              >
-                Proses & Unggah Bukti Dukung
-              </button>
-            </div>
-
-            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
-              <h4 className="font-extrabold text-sm text-gray-800 mb-3">Ketentuan Berkas:</h4>
-              <ul className="space-y-2 text-xs text-gray-600 list-disc list-inside leading-relaxed">
-                <li>Format dokumen wajib PDF asli dari sistem absensi kedinasan.</li>
-                <li>Periode rekapitulasi mencakup bulan Agustus 2026.</li>
-                <li>Pastikan data jam masuk dan pulang terbaca dengan jelas untuk verifikasi uang makan.</li>
-              </ul>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const PlaceholderView = ({ title, navigate }) => {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
-      <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-6 shadow-xs" style={{ color: colors.midnightGreen }}>
-        <FileText size={32} />
-      </div>
-      <h2 className="text-2xl font-bold mb-2" style={{ color: colors.midnightGreen }}>Halaman {title}</h2>
-      <p className="text-gray-500 mb-8 max-w-md">Fitur {title} sedang dipersiapkan.</p>
-      <button 
-        onClick={() => navigate('home')}
-        className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 shadow-sm transition-opacity hover:opacity-90"
-        style={{ backgroundColor: colors.midnightGreen }}
-      >
-        <ArrowLeft size={16} /> Kembali ke Beranda
-      </button>
-    </div>
-  );
-};
+const PlaceholderView = ({ title, navigate }) => (
+  <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+    <h2 className="text-2xl font-bold mb-2" style={{ color: colors.midnightGreen }}>{title}</h2>
+    <p className="text-gray-500 mb-8">Fitur ini sedang dipersiapkan.</p>
+    <button onClick={() => navigate('home')} className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2" style={{ backgroundColor: colors.midnightGreen }}>
+      <ArrowLeft size={16} /> Kembali ke Beranda
+    </button>
+  </div>
+);
 
 export default function App() {
   const [currentView, setCurrentView] = useState(() => {
@@ -577,11 +662,7 @@ export default function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#/', '');
-      if (hash) {
-        setCurrentView(hash);
-      } else {
-        setCurrentView('home');
-      }
+      setCurrentView(hash || 'home');
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -601,28 +682,24 @@ export default function App() {
   const renderView = () => {
     switch(currentView) {
       case 'home':
-        return <Dashboard navigate={navigate} loggedInUser={loggedInUser} />;
-      case 'rekap':
-        return <PlaceholderView title="Rekap Bulanan" navigate={navigate} />;
+        return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
+      case 'dashboard':
+        return loggedInUser ? <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} /> : <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       case 'profile':
         return <ProfileView navigate={navigate} />;
-      case 'upload-uam':
-        return <UploadUamView navigate={navigate} loggedInUser={loggedInUser} />;
+      case 'rekap':
+        return <PlaceholderView title="Rekap Bulanan" navigate={navigate} />;
       case 'login':
         return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       default:
-        return <Dashboard navigate={navigate} loggedInUser={loggedInUser} />;
+        return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
     }
   };
 
   return (
-    <div className="min-h-screen font-sans selection:bg-teal-900 selection:text-white bg-[#F7FAFC]">
-      <div className="relative z-10">
-        <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />
-        <main>
-          {renderView()}
-        </main>
-      </div>
+    <div className="min-h-screen font-sans bg-[#F7FAFC]">
+      {currentView !== 'dashboard' && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
+      <main>{renderView()}</main>
     </div>
   );
 }
