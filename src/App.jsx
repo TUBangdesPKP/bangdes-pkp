@@ -15,11 +15,7 @@ import {
   Calendar,
   Clock,
   LogOut,
-  FileCheck,
-  Send,
-  Upload,
-  ShieldCheck,
-  FolderGit2
+  FileCheck
 } from 'lucide-react';
 
 const colors = {
@@ -69,7 +65,7 @@ const Header = ({ navigate, loggedInUser, onLogout }) => {
               <p className="text-[10px] text-teal-700 font-semibold">{loggedInUser.role === 'admin' ? 'Super Admin' : 'Pegawai'}</p>
             </div>
             <button 
-              onClick={() => navigate('dashboard')}
+              onClick={() => navigate('absensi-uang-makan')}
               className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors"
             >
               Panel Utama
@@ -122,7 +118,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
               </button>
 
               <button 
-                onClick={() => navigate(loggedInUser ? 'dashboard' : 'login')}
+                onClick={() => navigate(loggedInUser ? 'absensi-uang-makan' : 'login')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02]"
               >
                 <span className="text-teal-700 font-bold">↑</span> Upload Dokumen Pendukung
@@ -247,7 +243,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
               };
               onLoginSuccess(userData);
               setLoading(false);
-              navigate('dashboard');
+              navigate('absensi-uang-makan');
               return;
             } else {
               setLoading(false);
@@ -331,10 +327,36 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   );
 };
 
-const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
-  const [activeTab, setActiveTab] = useState('uang-makan');
+const UserDashboardView = ({ loggedInUser, onLogout, navigate, activeRoute }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploaded, setUploaded] = useState(false);
+  const [fileInputKey, setFileInputKey] = useState(Date.now());
+  const [pendingRoute, setPendingRoute] = useState(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  // Reset file selection & upload state completely whenever switching modules
+  useEffect(() => {
+    setSelectedFile(null);
+    setUploaded(false);
+    setFileInputKey(Date.now());
+  }, [activeRoute]);
+
+  const handleModuleClick = (targetRoute) => {
+    if (selectedFile && !uploaded) {
+      setPendingRoute(targetRoute);
+      setShowConfirmModal(true);
+    } else {
+      navigate(targetRoute);
+    }
+  };
+
+  const confirmNavigation = (proceed) => {
+    setShowConfirmModal(false);
+    if (proceed && pendingRoute) {
+      navigate(pendingRoute);
+    }
+    setPendingRoute(null);
+  };
 
   const handleUpload = (e) => {
     e.preventDefault();
@@ -342,9 +364,45 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
     setUploaded(true);
   };
 
+  const moduleTitles = {
+    'absensi-uang-makan': 'Modul Input Absensi Uang Makan',
+    'absensi-tunjangan-kinerja': 'Modul Input Absensi Tunjangan Kinerja',
+    'arsip-surat-tugas': 'Arsip dan Input Surat Tugas Dinas',
+    'arsip-surat-cuti': 'Arsip dan Input Surat Cuti Pegawai'
+  };
+
   return (
-    <div className="min-h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans">
-      {/* Dark Sidebar matching reference image */}
+    <div className="min-h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative">
+      
+      {/* Confirmation Modal Pop-up */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-gray-100 animate-in fade-in zoom-in duration-200">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mb-4">
+              <AlertCircle size={24} />
+            </div>
+            <h3 className="text-xl font-black mb-2">Konfirmasi Pindah Modul</h3>
+            <p className="text-xs text-gray-500 leading-relaxed mb-6">
+              Anda telah memilih berkas dokumen namun belum mengunggahnya. Apakah Anda yakin ingin pindah modul? Data file yang dipilih saat ini akan direset.
+            </p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => confirmNavigation(false)}
+                className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs hover:bg-gray-200 transition-colors"
+              >
+                Tidak, Tetap di Sini
+              </button>
+              <button 
+                onClick={() => confirmNavigation(true)}
+                className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold text-xs hover:bg-red-700 transition-colors"
+              >
+                Ya, Pindah Modul
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0">
         <div>
           <div className="mb-8">
@@ -364,26 +422,26 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
 
           <nav className="space-y-1">
             <button 
-              onClick={() => setActiveTab('uang-makan')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('absensi-uang-makan')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'absensi-uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <Calendar size={16} /> Absensi Uang Makan
             </button>
             <button 
-              onClick={() => setActiveTab('tukin')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('absensi-tunjangan-kinerja')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'absensi-tunjangan-kinerja' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <FileCheck size={16} /> Absensi Tunjangan Kinerja
             </button>
             <button 
-              onClick={() => setActiveTab('spt')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('arsip-surat-tugas')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'arsip-surat-tugas' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <FileText size={16} /> Arsip Surat Tugas
             </button>
             <button 
-              onClick={() => setActiveTab('cuti')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+              onClick={() => handleModuleClick('arsip-surat-cuti')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all ${activeRoute === 'arsip-surat-cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
             >
               <Clock size={16} /> Arsip Surat Cuti
             </button>
@@ -406,7 +464,6 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
         </div>
       </aside>
 
-      {/* Main Content Area matching reference layout */}
       <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 overflow-y-auto">
         <div className="max-w-6xl mx-auto">
           
@@ -415,7 +472,6 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
             <p className="text-xs text-gray-500">Kelola dan input dokumen pendukung resmi kedinasan Anda.</p>
           </div>
 
-          {/* Profile Banner Card */}
           <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8 mb-8 relative overflow-hidden flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
             <div className="space-y-4 flex-1">
               <div>
@@ -444,31 +500,6 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
             </div>
           </div>
 
-          {/* Statistics summary counters */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
-              <div className="text-[10px] font-bold text-gray-400 uppercase">Periode Kumpul</div>
-              <div className="text-xl font-extrabold text-gray-900 mt-1">17 <span className="text-xs font-normal text-gray-500">berkas</span></div>
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
-              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Dinas</div>
-              <div className="text-xl font-extrabold text-gray-900 mt-1">58 <span className="text-xs font-normal text-gray-500">hari</span></div>
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
-              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Izin</div>
-              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">hari</span></div>
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs">
-              <div className="text-[10px] font-bold text-gray-400 uppercase">Hari Cuti</div>
-              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">hari</span></div>
-            </div>
-            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-2xs col-span-2 md:col-span-1">
-              <div className="text-[10px] font-bold text-gray-400 uppercase">Klaim Lembur</div>
-              <div className="text-xl font-extrabold text-gray-900 mt-1">0 <span className="text-xs font-normal text-gray-500">diajukan</span></div>
-            </div>
-          </div>
-
-          {/* Dynamic Module Input Area */}
           <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 md:p-8">
             <div className="flex items-center justify-between pb-6 border-b border-gray-100 mb-6">
               <div>
@@ -476,10 +507,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
                   Form Unggah Dokumen Resmi
                 </span>
                 <h3 className="text-xl font-black text-gray-900 mt-2">
-                  {activeTab === 'uang-makan' && 'Modul Input Absensi Uang Makan'}
-                  {activeTab === 'tukin' && 'Modul Input Absensi Tunjangan Kinerja'}
-                  {activeTab === 'spt' && 'Arsip dan Input Surat Tugas Dinas'}
-                  {activeTab === 'cuti' && 'Arsip dan Input Surat Cuti Pegawai'}
+                  {moduleTitles[activeRoute] || 'Form Unggah Dokumen'}
                 </h3>
               </div>
             </div>
@@ -489,6 +517,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
                 <label className="block text-xs font-bold text-gray-700 mb-2">Pilih Berkas Dokumen (Format PDF)</label>
                 <div className="border-2 border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50 hover:border-teal-700 transition-colors">
                   <input 
+                    key={fileInputKey}
                     type="file" 
                     accept=".pdf"
                     onChange={(e) => setSelectedFile(e.target.files[0])}
@@ -506,7 +535,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
               {uploaded && (
                 <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-emerald-900 flex items-center gap-3">
                   <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                  <span>Berkas berhasil diunggah dan disimpan ke sistem!</span>
+                  <span>Berkas berhasil diunggah dan disimpan ke folder Google Drive "Bukti Dukung Uang Makan"!</span>
                 </div>
               )}
 
@@ -516,7 +545,7 @@ const UserDashboardView = ({ loggedInUser, onLogout, navigate }) => {
                 className="w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
                 style={{ backgroundColor: colors.midnightGreen }}
               >
-                Proses & Unggah Dokumen
+                Proses & Unggah Dokumen ke Google Drive
               </button>
             </form>
           </div>
@@ -679,12 +708,17 @@ export default function App() {
     navigate('home');
   };
 
+  const dashboardRoutes = ['absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'];
+
   const renderView = () => {
+    if (dashboardRoutes.includes(currentView)) {
+      if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+      return <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} activeRoute={currentView} />;
+    }
+
     switch(currentView) {
       case 'home':
         return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
-      case 'dashboard':
-        return loggedInUser ? <UserDashboardView loggedInUser={loggedInUser} onLogout={handleLogout} navigate={navigate} /> : <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       case 'profile':
         return <ProfileView navigate={navigate} />;
       case 'rekap':
@@ -696,9 +730,11 @@ export default function App() {
     }
   };
 
+  const isDashboardRoute = dashboardRoutes.includes(currentView);
+
   return (
     <div className="min-h-screen font-sans bg-[#F7FAFC]">
-      {currentView !== 'dashboard' && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
+      {!isDashboardRoute && <Header navigate={navigate} loggedInUser={loggedInUser} onLogout={handleLogout} />}
       <main>{renderView()}</main>
     </div>
   );
