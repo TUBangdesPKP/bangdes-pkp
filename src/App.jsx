@@ -21,7 +21,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const colors = {
       krem: '#F2EEDF',
@@ -34,129 +34,103 @@
       bgGray: '#F7FAFC'
     };
 
-    // Fungsi otomatis mengubah link Google Sheets pubhtml menjadi format output CSV yang valid
-    const ensureCsvUrl = (url) => {
+    // Endpoint Web App Google Apps Script JSON resmi
+    const APPS_SCRIPT_JSON_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG3IhQ1X2s2n0h44yRhRQuW9tQtxxiXfnUNiQicfpJBGbQwrApYlXw/exec";
+
+    const normalizePegawai = (item) => {
+      if (!item || typeof item !== 'object') return null;
+      const norm = {};
+      Object.keys(item).forEach(k => {
+        const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+        norm[cleanKey] = item[k];
+      });
+
+      return {
+        ...item,
+        NIP: (norm['nip'] || item.NIP || item.nip || '').toString().trim(),
+        Nama: (norm['nama'] || norm['namalengkap'] || item.Nama || item.nama || '').toString().trim(),
+        SubUnitKerja: (norm['subunitkerja'] || norm['subunit'] || item.SubUnitKerja || item['Sub Unit Kerja'] || '').toString().trim(),
+        Jabatan: (norm['jabatan'] || item.Jabatan || item.jabatan || '').toString().trim(),
+        KelasJabatan: (norm['kelasjabatan'] || norm['kelas'] || item.KelasJabatan || item['Kelas Jabatan'] || '').toString().trim(),
+        EmailDinas: (norm['emaildinas'] || norm['email'] || item.EmailDinas || item['Email Dinas'] || '').toString().trim(),
+        AtasanLangsung: (norm['atasanlangsung'] || norm['atasan'] || item.AtasanLangsung || item['Atasan Langsung'] || '').toString().trim(),
+        Foto_Pegawai: (norm['fotopegawei'] || norm['foto'] || norm['fotoprofil'] || item.Foto_Pegawai || item['Foto Pegawai'] || '').toString().trim(),
+        PIN: (norm['pin'] || item.PIN || item.pin || '').toString().trim(),
+        Role: (norm['role'] || norm['akunrole'] || item.Role || item.Akun_Role || 'pegawai').toString().trim().toLowerCase()
+      };
+    };
+
+    const getDriveDirectUrl = (url) => {
       if (!url) return '';
-      let cleanUrl = url.trim();
-      if (cleanUrl.includes('/pubhtml')) {
-        cleanUrl = cleanUrl.replace('/pubhtml', '/pub');
+      const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        return `https://drive.google.com/uc?export=view&id=${match[1]}`;
       }
-      if (!cleanUrl.includes('output=csv')) {
-        cleanUrl += (cleanUrl.includes('?') ? '&' : '?') + 'output=csv';
+      const matchId = url.match(/id=([a-zA-Z0-9_-]+)/);
+      if (matchId && matchId[1]) {
+        return `https://drive.google.com/uc?export=view&id=${matchId[1]}`;
       }
-      return cleanUrl;
+      return url;
     };
 
-    // Link spreadsheet baru yang telah dipublish oleh pengguna
-    const RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pubhtml?gid=1517384244&single=true";
-    const SHEET_CSV_URL = ensureCsvUrl(RAW_SHEET_URL);
-
-    // Parser CSV dengan penanganan UTF-8 BOM dan fleksibilitas nama kolom
-    const parseCSV = (csvText) => {
-      if (!csvText) return [];
-      // Bersihkan karakter BOM tersembunyi (\uFEFF) dari Google Sheets
-      const cleanText = csvText.replace(/^\uFEFF/, '').trim();
-      const rows = [];
-      let currentRow = [];
-      let currentField = '';
-      let insideQuote = false;
-
-      for (let i = 0; i < cleanText.length; i++) {
-        const char = cleanText[i];
-        const nextChar = cleanText[i + 1];
-        if (char === '"') {
-          if (insideQuote && nextChar === '"') { currentField += '"'; i++; }
-          else { insideQuote = !insideQuote; }
-        } else if (char === ',' && !insideQuote) {
-          currentRow.push(currentField.trim());
-          currentField = '';
-        } else if ((char === '\r' || char === '\n') && !insideQuote) {
-          if (char === '\r' && nextChar === '\n') i++;
-          currentRow.push(currentField.trim());
-          if (currentRow.some(f => f !== '')) rows.push(currentRow);
-          currentRow = [];
-          currentField = '';
-        } else {
-          currentField += char;
+    const fetchPegawaiData = async () => {
+      // 1. Cek cache lokal peramban terlebih dahulu
+      let cachedData = null;
+      try {
+        const rawCache = localStorage.getItem('cached_pkp_json_v2');
+        if (rawCache) {
+          const parsed = JSON.parse(rawCache);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            cachedData = parsed.map(normalizePegawai).filter(Boolean);
+          }
         }
-      }
-      if (currentField !== '' || currentRow.length > 0) {
-        currentRow.push(currentField.trim());
-        if (currentRow.some(f => f !== '')) rows.push(currentRow);
+      } catch (e) {
+        // Abaikan batasan localStorage pada sandbox
       }
 
-      if (rows.length < 2) return [];
-
-      const rawHeaders = rows[0].map(h => h.replace(/^["']|["']$/g, '').trim());
-
-      const data = [];
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        const obj = {};
-        for (let j = 0; j < rawHeaders.length; j++) {
-          const key = rawHeaders[j];
-          obj[key] = row[j] !== undefined ? row[j].replace(/^["']|["']$/g, '').trim() : '';
-        }
-
-        // Normalisasi nama kolom agar kebal variasi spasi/huruf besar-kecil
-        const normalized = {};
-        Object.keys(obj).forEach(k => {
-          const normKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-          normalized[normKey] = obj[k];
+      // 2. Coba fetch langsung ke Google Apps Script Web App
+      try {
+        const directResp = await fetch(APPS_SCRIPT_JSON_URL, {
+          method: 'GET',
+          redirect: 'follow'
         });
-
-        const standardized = {
-          ...obj,
-          NIP: normalized['nip'] || obj['NIP'] || obj['nip'] || '',
-          Nama: normalized['nama'] || normalized['namalengkap'] || obj['Nama'] || obj['nama'] || '',
-          SubUnitKerja: normalized['subunitkerja'] || normalized['subunit'] || obj['SubUnitKerja'] || obj['Sub Unit Kerja'] || '',
-          Jabatan: normalized['jabatan'] || obj['Jabatan'] || obj['jabatan'] || '',
-          KelasJabatan: normalized['kelasjabatan'] || normalized['kelas'] || obj['KelasJabatan'] || obj['Kelas Jabatan'] || '',
-          EmailDinas: normalized['emaildinas'] || normalized['email'] || obj['EmailDinas'] || obj['Email Dinas'] || '',
-          AtasanLangsung: normalized['atasanlangsung'] || normalized['atasan'] || obj['AtasanLangsung'] || obj['Atasan Langsung'] || '',
-          Foto_Pegawai: normalized['fotopegawei'] || normalized['foto'] || normalized['fotoprofil'] || obj['Foto_Pegawai'] || obj['Foto Pegawai'] || '',
-          PIN: normalized['pin'] || obj['PIN'] || obj['pin'] || '',
-          Role: normalized['role'] || normalized['akunrole'] || obj['Akun_Role'] || obj['Role'] || 'pegawai'
-        };
-
-        data.push(standardized);
+        if (directResp.ok) {
+          const jsonData = await directResp.json();
+          if (Array.isArray(jsonData) && jsonData.length > 0) {
+            const normalized = jsonData.map(normalizePegawai).filter(Boolean);
+            try { localStorage.setItem('cached_pkp_json_v2', JSON.stringify(jsonData)); } catch(e){}
+            return { data: normalized, source: 'live' };
+          }
+        }
+      } catch (err) {
+        // Lanjut ke fallback proxy
       }
-      return data;
-    };
 
-    // Fungsi penarik data dengan fallback multi-proxy untuk mengatasi CORS browser
-    const fetchSpreadsheetData = async (targetUrl = SHEET_CSV_URL) => {
-      const csvUrl = ensureCsvUrl(targetUrl);
-      const sources = [
-        csvUrl, // 1. Akses langsung Google CSV
-        `https://corsproxy.io/?url=${encodeURIComponent(csvUrl)}`, // 2. Reverse proxy CORS 1
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}` // 3. Reverse proxy CORS 2
-      ];
-
-      let lastError = null;
-
-      for (const src of sources) {
-        try {
-          const response = await fetch(src, {
-            headers: { 'Accept': 'text/csv, text/plain, */*' }
-          });
-          if (!response.ok) throw new Error(`HTTP status ${response.status}`);
-          const csvText = await response.text();
-
-          // Pastikan respon adalah data CSV murni, bukan halaman dokumen HTML
-          if (csvText && !csvText.trim().startsWith('<!DOCTYPE') && !csvText.trim().startsWith('<html')) {
-            const parsed = parseCSV(csvText);
-            if (parsed && parsed.length > 0) {
-              return parsed;
+      // 3. Fallback via AllOrigins Proxy jika CORS browser membatasi redirect Google Script
+      try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(APPS_SCRIPT_JSON_URL)}&timestamp=${Date.now()}`;
+        const proxyResp = await fetch(proxyUrl);
+        if (proxyResp.ok) {
+          const wrapper = await proxyResp.json();
+          if (wrapper && wrapper.contents) {
+            const jsonData = JSON.parse(wrapper.contents);
+            if (Array.isArray(jsonData) && jsonData.length > 0) {
+              const normalized = jsonData.map(normalizePegawai).filter(Boolean);
+              try { localStorage.setItem('cached_pkp_json_v2', JSON.stringify(jsonData)); } catch(e){}
+              return { data: normalized, source: 'live' };
             }
           }
-        } catch (err) {
-          lastError = err;
-          console.warn(`Gagal memuat dari endpoint (${src}), mencoba rute cadangan...`, err);
         }
+      } catch (err) {
+        // Lanjut ke fallback cache
       }
 
-      throw lastError || new Error("Tidak dapat mengunduh data CSV Google Sheets.");
+      // 4. Jika jaringan terputus namun ada cache, kembalikan cache
+      if (cachedData && cachedData.length > 0) {
+        return { data: cachedData, source: 'cache' };
+      }
+
+      return { data: [], source: 'error' };
     };
 
     const IconBase = ({ size = 20, className = '', children }) => (
@@ -232,19 +206,6 @@
         <circle cx="7.5" cy="16.5" r="1.5" />
       </IconBase>
     );
-
-    const getDriveDirectUrl = (url) => {
-      if (!url) return '';
-      const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) {
-        return `https://drive.google.com/uc?export=view&id=${match[1]}`;
-      }
-      const matchId = url.match(/id=([a-zA-Z0-9_-]+)/);
-      if (matchId && matchId[1]) {
-        return `https://drive.google.com/uc?export=view&id=${matchId[1]}`;
-      }
-      return url;
-    };
 
     const Header = ({ navigate, loggedInUser, onLogout }) => {
       return (
@@ -393,7 +354,7 @@
       const [matchedUser, setMatchedUser] = useState(null);
       const [message, setMessage] = useState({ type: '', text: '' });
       const [loading, setLoading] = useState(false);
-      const pinInputRefs = React.useRef([]);
+      const pinInputRefs = useRef([]);
 
       // Tahap 1: Validasi NIP / Shortcut Username Admin
       const handleNipSubmit = (e) => {
@@ -407,7 +368,7 @@
         setLoading(true);
         setMessage({ type: '', text: '' });
 
-        // Jalan Pintas Khusus Akun Super Administrator (Independen, tidak mengambil data pegawai lain)
+        // Shortcut Khusus Akun Super Administrator Independen
         if (cleanNip.toLowerCase() === 'admin') {
           const superAdminUser = {
             NIP: 'SUPERADMIN',
@@ -434,12 +395,20 @@
           return;
         }
 
-        fetchSpreadsheetData()
-          .then((pegawaiData) => {
+        // Penarikan data langsung dari Google Apps Script JSON
+        fetchPegawaiData()
+          .then((result) => {
+            const pegawaiData = result.data || [];
+            if (!pegawaiData || pegawaiData.length === 0) {
+              setLoading(false);
+              setMessage({ type: 'error', text: 'Tidak dapat memuat database JSON. Periksa koneksi atau izin deploy web app.' });
+              return;
+            }
+
             let foundUser = null;
             for (let i = 0; i < pegawaiData.length; i++) {
               const u = pegawaiData[i];
-              const nipVal = (u.NIP || u.nip || '').toString().trim();
+              const nipVal = (u.NIP || '').toString().trim();
               if (nipVal === cleanNip) {
                 foundUser = u;
                 break;
@@ -453,19 +422,16 @@
               setLoading(false);
               setMessage({ type: '', text: '' });
               setTimeout(() => {
-                if (pinInputRefs.current[0]) {
-                  pinInputRefs.current[0].focus();
-                }
+                pinInputRefs.current[0]?.focus();
               }, 150);
             } else {
               setLoading(false);
               setMessage({ type: 'error', text: 'NIP tidak ditemukan dalam database kepegawaian.' });
             }
           })
-          .catch((err) => {
-            console.error(err);
+          .catch(() => {
             setLoading(false);
-            setMessage({ type: 'error', text: 'Gagal terhubung ke database spreadsheet. Silakan periksa jaringan.' });
+            setMessage({ type: 'error', text: 'Gagal memuat database JSON. Silakan coba kembali.' });
           });
       };
 
@@ -484,7 +450,6 @@
         newDigits[index] = char;
         setPinDigits(newDigits);
 
-        // Pindah otomatis ke kotak berikutnya
         if (index < 5 && char) {
           pinInputRefs.current[index + 1]?.focus();
         }
@@ -518,22 +483,22 @@
           return;
         }
 
-        const validPin = (matchedUser.PIN || matchedUser.pin || '').toString().trim();
+        const validPin = (matchedUser.PIN || '').toString().trim();
         const isShortcut = matchedUser.isShortcutAdmin || matchedUser.NIP === 'SUPERADMIN';
         const isPinValid = enteredPin === validPin || (isShortcut && enteredPin === '111111');
 
         if (isPinValid) {
-          const roleNormalized = (matchedUser.Role || matchedUser.Akun_Role || '').toString().trim().toLowerCase();
+          const roleNormalized = (matchedUser.Role || '').toString().trim().toLowerCase();
           const userData = {
-            nip: matchedUser.NIP || matchedUser.nip || 'SUPERADMIN',
+            nip: matchedUser.NIP || 'SUPERADMIN',
             Nama: matchedUser.Nama || 'Super Administrator',
             role: (isShortcut || roleNormalized === 'admin') ? 'admin' : 'pegawai',
-            subUnit: matchedUser.SubUnitKerja || matchedUser['Sub Unit Kerja'] || 'Direktorat Pembangunan Perumahan Perdesaan',
-            jabatan: matchedUser.Jabatan || 'Super Administrator Sistem Informasi',
-            atasan: matchedUser.AtasanLangsung || matchedUser['Atasan Langsung'] || 'Direktur Pembangunan Perumahan Perdesaan',
-            kelasJabatan: matchedUser.KelasJabatan || matchedUser['Kelas Jabatan'] || '17',
-            email: matchedUser.EmailDinas || matchedUser['Email Dinas'] || 'superadmin.perdesaan@pkp.go.id',
-            foto: getDriveDirectUrl(matchedUser.Foto_Pegawai || matchedUser['Foto_Pegawai'] || '')
+            subUnit: matchedUser.SubUnitKerja || 'Direktorat Pembangunan Perumahan Perdesaan',
+            jabatan: matchedUser.Jabatan || 'Pejabat Fungsional',
+            atasan: matchedUser.AtasanLangsung || 'Direktur Pembangunan Perumahan Perdesaan',
+            kelasJabatan: matchedUser.KelasJabatan || '8',
+            email: matchedUser.EmailDinas || 'admin@pkp.go.id',
+            foto: getDriveDirectUrl(matchedUser.Foto_Pegawai || '')
           };
           onLoginSuccess(userData);
           navigate('absensi-uang-makan');
@@ -601,7 +566,6 @@
                       value={loginNip}
                       onChange={(e) => {
                         const val = e.target.value;
-                        // Menerima digit angka 18 digit ATAU karakter username 'admin'
                         if (/^\d*$/.test(val) || /^admin$/i.test(val) || 'admin'.startsWith(val.toLowerCase())) {
                           setLoginNip(val);
                         }
@@ -612,7 +576,6 @@
                   </div>
 
                   {(() => {
-                    // Tombol aktif jika NIP sudah 18 digit ATAU mengetik username 'admin'
                     const isNipComplete = loginNip.length === 18 || loginNip.trim().toLowerCase() === 'admin';
                     return (
                       <button 
@@ -959,22 +922,22 @@
 
     const ProfileView = ({ navigate }) => {
       const [pegawaiList, setPegawaiList] = useState([]);
+      const [dataSource, setDataSource] = useState('live');
       const [loading, setLoading] = useState(true);
-      const [fetchError, setFetchError] = useState(null);
       const [searchTerm, setSearchTerm] = useState('');
       const [selectedSubUnit, setSelectedSubUnit] = useState('ALL');
 
       const loadData = () => {
         setLoading(true);
-        setFetchError(null);
-        fetchSpreadsheetData()
-          .then((data) => {
-            setPegawaiList(data);
+        fetchPegawaiData()
+          .then((result) => {
+            setPegawaiList(result.data || []);
+            setDataSource(result.source || 'live');
             setLoading(false);
           })
-          .catch((err) => {
-            console.error(err);
-            setFetchError("Gagal menarik data pegawai dari spreadsheet. Pastikan file terbitan publik dan periksa koneksi internet.");
+          .catch(() => {
+            setPegawaiList([]);
+            setDataSource('error');
             setLoading(false);
           });
       };
@@ -986,14 +949,14 @@
       const subUnitCategories = useMemo(() => {
         const units = new Set();
         pegawaiList.forEach(item => {
-          const unit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').trim();
+          const unit = (item.SubUnitKerja || '').trim();
           if (unit) units.add(unit);
         });
         return Array.from(units).sort();
       }, [pegawaiList]);
 
       const filteredPegawai = pegawaiList.filter(item => {
-        const subUnit = (item.SubUnitKerja || item['Sub Unit Kerja'] || '').trim();
+        const subUnit = (item.SubUnitKerja || '').trim();
 
         // 1. Filter Dropdown Sub Unit Kerja
         if (selectedSubUnit !== 'ALL' && subUnit !== selectedSubUnit) {
@@ -1005,16 +968,15 @@
         if (!term) return true;
 
         const nama = (item.Nama || '').toLowerCase();
-        const nip = (item.NIP || item.nip || '').toString().toLowerCase();
+        const nip = (item.NIP || '').toString().toLowerCase();
         const jabatan = (item.Jabatan || '').toLowerCase();
         const subUnitText = subUnit.toLowerCase();
 
-        // Presisi khusus untuk 'wilayah i' agar tidak mencocokkan 'wilayah ii' atau 'wilayah iii'
+        // Presisi khusus untuk kata 'wilayah i' agar tidak mencocokkan 'wilayah ii' atau 'wilayah iii'
         if (/\bwilayah\s+i\b/i.test(term)) {
           return /\bwilayah\s+i\b/i.test(subUnitText) || /\bwilayah\s+i\b/i.test(jabatan) || nama.includes(term) || nip.includes(term);
         }
 
-        // Presisi khusus untuk 'wilayah ii' agar tidak mencocokkan 'wilayah iii'
         if (/\bwilayah\s+ii\b/i.test(term)) {
           return /\bwilayah\s+ii\b/i.test(subUnitText) || /\bwilayah\s+ii\b/i.test(jabatan) || nama.includes(term) || nip.includes(term);
         }
@@ -1038,6 +1000,12 @@
               <p className="text-sm text-gray-500">
                 Direktorat Pembangunan Perumahan Perdesaan ({filteredPegawai.length} dari {pegawaiList.length} Pegawai Ditampilkan)
               </p>
+              {dataSource === 'error' && (
+                <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-800 text-[11px] font-semibold">
+                  <span>⚠️ Gagal memuat data dari Web App JSON. Pastikan akses Google Script sudah disetel ke "Anyone".</span>
+                  <button onClick={loadData} className="underline hover:text-red-950 ml-1 cursor-pointer font-bold">Coba Sinkron Ulang</button>
+                </div>
+              )}
             </div>
             
             {/* Input Pencarian */}
@@ -1079,7 +1047,7 @@
                   >
                     <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
                     {subUnitCategories.map((cat, idx) => {
-                      const count = pegawaiList.filter(p => (p.SubUnitKerja || p['Sub Unit Kerja'] || '').trim() === cat).length;
+                      const count = pegawaiList.filter(p => (p.SubUnitKerja || '').trim() === cat).length;
                       return (
                         <option key={idx} value={cat}>
                           {cat} ({count} Pegawai)
@@ -1117,21 +1085,7 @@
           {loading ? (
             <div className="text-center py-20 text-gray-500 flex items-center justify-center gap-2">
               <div className="w-5 h-5 border-2 border-teal-800 border-t-transparent rounded-full animate-spin"></div>
-              <span>Memuat data kepegawaian dari spreadsheet...</span>
-            </div>
-          ) : fetchError ? (
-            <div className="text-center py-16 bg-white rounded-3xl border border-red-100 shadow-xs p-8 max-w-lg mx-auto">
-              <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto mb-3">
-                <AlertCircle size={24} />
-              </div>
-              <h3 className="font-extrabold text-base text-gray-900 mb-1">Gagal Memuat Spreadsheet</h3>
-              <p className="text-xs text-gray-500 mb-5 leading-relaxed">{fetchError}</p>
-              <button 
-                onClick={loadData}
-                className="px-5 py-2.5 bg-[#084C61] text-white text-xs font-bold rounded-xl shadow-xs hover:opacity-90 cursor-pointer transition-all inline-flex items-center gap-2"
-              >
-                ↻ Coba Muat Ulang
-              </button>
+              <span>Memuat data kepegawaian dari Google Apps Script JSON...</span>
             </div>
           ) : filteredPegawai.length === 0 ? (
             <div className="text-center py-16 bg-white rounded-3xl border border-gray-200 shadow-xs p-8">
@@ -1152,12 +1106,12 @@
           ) : (
             <div className="flex flex-col gap-6">
               {filteredPegawai.map((item, index) => {
-                const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || item['Foto_Pegawai'] || '');
-                const subUnit = item.SubUnitKerja || item['Sub Unit Kerja'] || '';
-                const kelas = item.KelasJabatan || item['Kelas Jabatan'] || '';
+                const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+                const subUnit = item.SubUnitKerja || '';
+                const kelas = item.KelasJabatan || '';
                 const jabatan = item.Jabatan || '';
-                const email = item.EmailDinas || item['Email Dinas'] || '';
-                const atasan = item.AtasanLangsung || item['Atasan Langsung'] || '';
+                const email = item.EmailDinas || '';
+                const atasan = item.AtasanLangsung || '';
 
                 return (
                   <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row justify-between items-stretch hover:shadow-md transition-shadow">
@@ -1283,7 +1237,7 @@
           )}
           <main>{renderView()}</main>
 
-          {/* Modal Verifikasi Konfirmasi Logout */}
+          {/* Modal Verifikasi Konfirmasi Keluar (Logout) */}
           {showLogoutConfirm && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
               <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-gray-100 transform transition-all scale-100">
