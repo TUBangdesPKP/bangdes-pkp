@@ -38,7 +38,6 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG
 
 const getDriveDirectUrl = (url) => {
   if (!url) return '';
-  // Menggunakan endpoint lh3 yang lebih handal untuk render gambar mentah di web
   const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   if (match && match[1]) {
     return `https://lh3.googleusercontent.com/d/${match[1]}=s600`;
@@ -443,6 +442,35 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   const pinValue = pinDigits.join('');
   const isPinComplete = pinValue.length === 6;
 
+  // Modul pemverifikasi PIN independen yang bisa dipanggil secara otomatis
+  const verifyAndLogin = async (pinToVerify) => {
+    setLoading(true);
+    setMessage({ type: '', text: '' });
+
+    // Memberikan jeda waktu buatan untuk menampilkan animasi memproses
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    const isSuperAdmin = targetUser && targetUser.NIP === 'SUPERADMIN';
+    if (isSuperAdmin && pinToVerify === '111111') {
+      setLoading(false);
+      onLoginSuccess(targetUser);
+      navigate('rekap');
+      return;
+    }
+
+    const sheetPin = (targetUser?.PIN || '').toString().trim();
+    if (sheetPin === pinToVerify || pinToVerify === '123456') {
+      setLoading(false);
+      onLoginSuccess(targetUser);
+      navigate('rekap');
+    } else {
+      setLoading(false);
+      setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
+      setPinDigits(['', '', '', '', '', '']);
+      setTimeout(() => document.getElementById('pin-box-0')?.focus(), 50);
+    }
+  };
+
   const handleNipSubmit = async (e) => {
     e.preventDefault();
     if (!isNipComplete) return;
@@ -503,6 +531,14 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       const nextInput = document.getElementById(`pin-box-${index + 1}`);
       if (nextInput) nextInput.focus();
     }
+
+    // Auto-submit saat digit ke-6 selesai diisi
+    if (val && index === 5) {
+      const completePin = newPinDigits.join('');
+      if (completePin.length === 6) {
+        verifyAndLogin(completePin);
+      }
+    }
   };
 
   const handlePinKeyDown = (index, e) => {
@@ -521,30 +557,20 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       newDigits[i] = pasted[i];
     }
     setPinDigits(newDigits);
-    const nextFocus = Math.min(pasted.length, 5);
-    document.getElementById(`pin-box-${nextFocus}`)?.focus();
+    
+    // Auto-submit jika hasil paste memenuhi 6 digit
+    if (pasted.length === 6) {
+      verifyAndLogin(pasted);
+    } else {
+      const nextFocus = Math.min(pasted.length, 5);
+      document.getElementById(`pin-box-${nextFocus}`)?.focus();
+    }
   };
 
   const handlePinSubmit = (e) => {
     e.preventDefault();
     if (!isPinComplete) return;
-
-    const isSuperAdmin = targetUser && targetUser.NIP === 'SUPERADMIN';
-    if (isSuperAdmin && pinValue === '111111') {
-      onLoginSuccess(targetUser);
-      navigate('rekap');
-      return;
-    }
-
-    const sheetPin = (targetUser?.PIN || '').toString().trim();
-    if (sheetPin === pinValue || pinValue === '123456') {
-      onLoginSuccess(targetUser);
-      navigate('rekap');
-    } else {
-      setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
-      setPinDigits(['', '', '', '', '', '']);
-      setTimeout(() => document.getElementById('pin-box-0')?.focus(), 50);
-    }
+    verifyAndLogin(pinValue);
   };
 
   return (
@@ -572,6 +598,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
                 <label className="block text-xs font-bold text-gray-700 mb-2">NIP Pegawai</label>
                 <input 
                   type="text" 
+                  autoFocus // Menambahkan autofokus ke field ini
                   placeholder="Masukkan NIP"
                   value={loginNip}
                   onChange={(e) => setLoginNip(e.target.value)}
@@ -642,7 +669,8 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
                       value={digit}
                       onChange={(e) => handlePinChange(index, e.target.value)}
                       onKeyDown={(e) => handlePinKeyDown(index, e)}
-                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold bg-white border border-gray-300 rounded-xl focus:outline-none focus:border-[#0E5B73] focus:ring-2 focus:ring-[#DDF1F5] transition-all shadow-2xs"
+                      disabled={loading}
+                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold bg-white border border-gray-300 rounded-xl focus:outline-none focus:border-[#0E5B73] focus:ring-2 focus:ring-[#DDF1F5] transition-all shadow-2xs disabled:bg-gray-100 disabled:text-gray-400"
                     />
                   ))}
                 </div>
@@ -650,15 +678,22 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 
               <button 
                 type="submit"
-                disabled={!isPinComplete}
-                className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all ${
-                  isPinComplete 
+                disabled={!isPinComplete || loading}
+                className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
+                  isPinComplete && !loading
                     ? 'text-white opacity-100 hover:opacity-95 active:scale-[0.99] cursor-pointer' 
                     : 'text-white/90 opacity-50 cursor-not-allowed'
                 }`}
-                style={{ backgroundColor: isPinComplete ? PALETTE_PKP.midnightGreen : '#849BAA' }}
+                style={{ backgroundColor: (isPinComplete || loading) ? PALETTE_PKP.midnightGreen : '#849BAA' }}
               >
-                Masuk
+                {loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Memverifikasi...
+                  </>
+                ) : (
+                  'Masuk'
+                )}
               </button>
             </form>
           </div>
