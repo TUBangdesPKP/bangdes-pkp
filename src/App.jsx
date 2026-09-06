@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   FileText, 
   HelpCircle, 
@@ -61,9 +61,9 @@ const normalizePegawai = (item) => {
     EmailDinas: normalized.emaildinas || normalized.email || '',
     AtasanLangsung: normalized.atasanlangsung || normalized.atasan || '',
     JabatanAtasan: normalized.jabatanatasanlangsung || normalized.jabatanatasan || '',
-    TunjanganKinerja: normalized.tunjangankinerja || normalized.tukin || '',
     Foto_Pegawai: normalized.fotopegawai || normalized.foto || '',
     PIN: normalized.pin || '',
+    Tukin: normalized.tunjangankinerja || normalized.tukin || '',
     Akun_Role: normalized.akunrole || normalized.role || 'pegawai'
   };
 };
@@ -123,6 +123,18 @@ const fetchPegawaiData = async (forceRefresh = false) => {
   return { data: [], source: 'empty' };
 };
 
+const parseIndoDate = (dateString) => {
+  const parts = dateString.split(' ');
+  if (parts.length < 3) return new Date(0);
+  const day = parseInt(parts[0], 10);
+  const monthStr = parts[1].toLowerCase();
+  const year = parseInt(parts[2], 10);
+  const months = ['jan', 'feb', 'mar', 'apr', 'mei', 'jun', 'jul', 'agu', 'sep', 'okt', 'nov', 'des'];
+  let month = months.findIndex(m => monthStr.includes(m));
+  if (month === -1) month = 0;
+  return new Date(year, month, day);
+};
+
 const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
   if (!window.pdfjsLib) {
     await new Promise((resolve, reject) => {
@@ -148,48 +160,49 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
     fullText += ' ' + pageString;
   }
 
-  // 1. Ekstrak NIP 18 Digit Mutlak
-  const nipMatch = fullText.match(/\b(\d{18})\b/);
+  const nipMatch = fullText.match(/(\d{18})/);
   let nip = nipMatch ? nipMatch[1] : '-';
-
-  // 2. Smart Lookup Nama dari Bank Data (Spreadsheet)
   let cleanNama = 'Pegawai';
+
   if (nip !== '-') {
-    try {
-      const cached = localStorage.getItem('cached_pegawai_json');
-      if (cached) {
-        const pegawaiList = JSON.parse(cached);
-        const user = pegawaiList.find(p => p.NIP === nip);
-        if (user && user.Nama) {
-          cleanNama = user.Nama.split(',')[0].trim();
+    const cached = localStorage.getItem('cached_pegawai_json');
+    if (cached) {
+      try {
+        const bankData = JSON.parse(cached);
+        const found = bankData.find(p => p.NIP === nip);
+        if (found && found.Nama) {
+          cleanNama = found.Nama;
         }
+      } catch (e) {
+        console.error("Gagal membaca cache:", e);
       }
-    } catch (e) {
-      console.error("Gagal smart lookup nama:", e);
     }
   }
 
-  // Fallback nama jika bank data gagal
-  if (cleanNama === 'Pegawai' && nip !== '-') {
-    const fallbackMatch = fullText.match(new RegExp(`(?:Nama\\s*|:\\s*)([A-Za-z\\s,.]+?)\\s*(?:NIP|:|${nip})`, 'i'));
-    if (fallbackMatch && fallbackMatch[1]) {
-      cleanNama = fallbackMatch[1].replace(/[:]/g, '').split(',')[0].trim();
-    }
-  }
+  const periodPattern = /(\d{2})\s*[-/]\s*(\d{2})\s*[-/]\s*(\d{4})\s*[a-zA-Z/]+\s*(\d{2})\s*[-/]\s*(\d{2})\s*[-/]\s*(\d{4})/;
+  const periodeMatch = fullText.match(periodPattern);
 
-  // 3. Ekstrak dan Validasi Periode (Toleransi Spasi Ekstra)
-  const periodeMatch = fullText.match(/(\d{2}-\d{2}-\d{4})\s*(?:s\s*\/\s*d|-|sampai)\s*(\d{2}-\d{2}-\d{4})/i);
-  let periode = periodeMatch ? `${periodeMatch[1]} s/d ${periodeMatch[2]}` : '';
-  
+  let periode = '-';
   let expectedDays = 31;
   let periodeFolder = 'Periode_2026-08';
 
   if (periodeMatch) {
-    const parts = periodeMatch[1].split('-');
-    const month = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
+    periode = `${periodeMatch[1]}-${periodeMatch[2]}-${periodeMatch[3]} s/d ${periodeMatch[4]}-${periodeMatch[5]}-${periodeMatch[6]}`;
+    const month = parseInt(periodeMatch[2], 10);
+    const year = parseInt(periodeMatch[3], 10);
     expectedDays = new Date(year, month, 0).getDate();
     periodeFolder = `Periode_${year}-${String(month).padStart(2, '0')}`;
+  } else {
+    if (expectedPeriodEvent) {
+      periode = expectedPeriodEvent;
+      const parts = expectedPeriodEvent.match(/(\d{2})-(\d{2})-(\d{4})/);
+      if (parts) {
+        const month = parseInt(parts[2], 10);
+        const year = parseInt(parts[3], 10);
+        expectedDays = new Date(year, month, 0).getDate();
+        periodeFolder = `Periode_${year}-${String(month).padStart(2, '0')}`;
+      }
+    }
   }
 
   const rows = [];
@@ -219,13 +232,9 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
     const cleanLocation = (text) => {
       if (!text || text === '-') return '-';
       let cleaned = text.replace(/\b\d{2}:\d{2}\b/g, '').replace(/\bWIB\b/g, '').trim();
-      cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '')
-                       .replace(/\b\d+\b/g, '')
-                       .replace(/\b\d+j\s*\d+m\b/g, '')
-                       .trim();
+      cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '').replace(/\b\d+\b/g, '').trim();
       cleaned = cleaned.replace(/\s+/g, ' ');
       if (!cleaned || cleaned.length < 2) return '-';
-      
       const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP'];
       for (const loc of knownLocs) {
         if (cleaned.includes(loc)) return loc;
@@ -264,40 +273,23 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
     });
   }
 
-  // Algoritma Pengurutan Tanggal Berdasarkan Bulan (Chronological Sort)
-  const monthMap = {
-    'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'mei': 4, 'jun': 5,
-    'jul': 6, 'agu': 7, 'sep': 8, 'okt': 9, 'nov': 10, 'des': 11
-  };
-  
-  rows.sort((a, b) => {
-    const parseIndoDate = (dateStr) => {
-      const parts = dateStr.toLowerCase().split(' ');
-      if (parts.length !== 3) return 0;
-      const day = parseInt(parts[0], 10);
-      const month = monthMap[parts[1].substring(0, 3)] || 0;
-      const year = parseInt(parts[2], 10);
-      return new Date(year, month, day).getTime();
-    };
-    return parseIndoDate(a.tanggal) - parseIndoDate(b.tanggal);
-  });
+  rows.sort((a, b) => parseIndoDate(a.tanggal) - parseIndoDate(b.tanggal));
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
 
-  // Strict date range validation (mengabaikan spasi sampah)
   let isDateValid = true;
-  if (expectedPeriodEvent && periode) {
-    const cleanPdfPeriod = periode.replace(/\s+/g, '');
-    const cleanTargetPeriod = expectedPeriodEvent.replace(/\s+/g, '');
-    if (cleanPdfPeriod !== cleanTargetPeriod) {
+  if (expectedPeriodEvent && periode !== '-') {
+    const compactExpected = expectedPeriodEvent.replace(/\s+/g, '');
+    const compactActual = periode.replace(/\s+/g, '');
+    if (compactActual !== compactExpected) {
       isDateValid = false;
     }
   }
 
   return {
-    nama: cleanNama || 'Pegawai',
-    nip: nip || '-',
-    periode: periode || (expectedPeriodEvent || '-'),
+    nama: cleanNama,
+    nip: nip,
+    periode: periode,
     periodeFolder,
     expectedDays,
     totalRows: rows.length,
@@ -325,11 +317,11 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
       </div>
       
       <div className="hidden md:flex items-center gap-6 text-sm font-medium" style={{ color: PALETTE_PKP.midnightGreen }}>
-        <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
-        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
+        <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity">Beranda</button>
+        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity">
           <MessageCircle size={16} /> Bantuan
         </button>
-        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
+        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity">
           <HelpCircle size={16} /> FAQ
         </button>
       </div>
@@ -342,7 +334,7 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
               <p className="text-[10px] text-teal-700 font-semibold">{loggedInUser.Akun_Role === 'admin' ? 'Super Admin' : 'Pegawai'}</p>
             </div>
             <button 
-              onClick={() => navigate('absensi-uang-makan')}
+              onClick={() => navigate('rekap')}
               className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors cursor-pointer"
             >
               Panel Utama
@@ -394,7 +386,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
               </button>
 
               <button 
-                onClick={() => navigate(loggedInUser ? 'absensi-uang-makan' : 'login')}
+                onClick={() => navigate(loggedInUser ? 'rekap' : 'login')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer"
               >
                 <span className="text-teal-700 font-bold">↑</span> Upload Dokumen Pendukung
@@ -461,7 +453,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       const { data } = await fetchPegawaiData(false);
       const inputNip = loginNip.trim();
 
-      if (inputNip === '198205142008121002') {
+      if (inputNip.toLowerCase() === 'admin') {
         setTargetUser({
           NIP: 'SUPERADMIN',
           Nama: 'Super Administrator',
@@ -539,14 +531,14 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
     const isSuperAdmin = targetUser && targetUser.NIP === 'SUPERADMIN';
     if (isSuperAdmin && pinValue === '111111') {
       onLoginSuccess(targetUser);
-      navigate('absensi-uang-makan');
+      navigate('rekap');
       return;
     }
 
     const sheetPin = (targetUser?.PIN || '').toString().trim();
     if (sheetPin === pinValue || pinValue === '123456') {
       onLoginSuccess(targetUser);
-      navigate('absensi-uang-makan');
+      navigate('rekap');
     } else {
       setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
       setPinDigits(['', '', '', '', '', '']);
@@ -576,7 +568,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 
             <form onSubmit={handleNipSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">NIP</label>
+                <label className="block text-xs font-bold text-gray-700 mb-2">NIP Pegawai</label>
                 <input 
                   type="text" 
                   placeholder="Masukkan NIP"
@@ -619,7 +611,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
             </div>
 
             <div className="text-center mb-8">
-              <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-xs" style={{ backgroundColor: PALETTE_PKP.darkAqua }}>
+              <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-4 text-[#0E5B73] bg-[#DDF1F5] shadow-xs">
                 <KeyRound size={28} />
               </div>
               <h2 className="text-2xl font-black text-gray-900 mb-1">Profil Pegawai</h2>
@@ -649,7 +641,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
                       value={digit}
                       onChange={(e) => handlePinChange(index, e.target.value)}
                       onKeyDown={(e) => handlePinKeyDown(index, e)}
-                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold bg-white border border-gray-300 rounded-xl focus:outline-none focus:border-[#084C61] focus:ring-2 focus:ring-[#DDF1F5] transition-all shadow-2xs"
+                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold bg-white border border-gray-300 rounded-xl focus:outline-none focus:border-[#0E5B73] focus:ring-2 focus:ring-[#DDF1F5] transition-all shadow-2xs"
                     />
                   ))}
                 </div>
@@ -676,65 +668,76 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
 };
 
 const getPeriodEvents = () => {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
-  const currentDay = now.getDate();
-
-  let tukinYear = currentYear;
-  let tukinMonth = currentMonth;
-  if (currentDay < 11 && currentMonth === 1) {
-    tukinYear = currentYear - 1;
-    tukinMonth = 12;
-  } else if (currentDay < 11) {
-    tukinMonth = currentMonth - 1;
+  const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  
+  const uangMakanPeriods = [];
+  for (let i = 0; i < 12; i++) {
+    const year = 2026;
+    const month = i + 1;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const strMonth = String(month).padStart(2, '0');
+    
+    uangMakanPeriods.push({
+      id: `um-${year}-${strMonth}`,
+      status: 'DIBUKA',
+      title: `Bukti Dukung Uang Makan ${monthNames[i]} ${year}`,
+      periodeLabel: `1 ${monthNames[i].substring(0,3)} ${year} – ${daysInMonth} ${monthNames[i].substring(0,3)} ${year}`,
+      periodeEvent: `01-${strMonth}-${year} s/d ${daysInMonth}-${strMonth}-${year}`,
+      startDate: `01-${strMonth}-${year}`,
+      endDate: `${daysInMonth}-${strMonth}-${year}`,
+      periodeFolder: `Periode_${year}-${strMonth}`,
+      tipe: 'Uang Makan',
+      expectedDays: daysInMonth
+    });
   }
 
-  const tukinStartDate = new Date(tukinYear, tukinMonth - 1, 11);
-  const tukinEndDate = new Date(tukinYear, tukinMonth, 10);
-  const paymentMonthDate = new Date(tukinYear, tukinMonth, 1);
+  const tukinPeriods = [];
+  for (let i = 0; i < 12; i++) {
+    const year = 2026;
+    const paymentMonthIndex = i; // 0 (Jan) to 11 (Des)
 
-  const formatShortDate = (d) => `${d.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][d.getMonth()]} ${d.getFullYear()}`;
-  const formatNumDate = (d) => `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
-  const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-  const paymentMonthName = monthNames[paymentMonthDate.getMonth()];
+    // Logika rentang: Tanggal 11 dua bulan lalu s.d Tanggal 10 satu bulan lalu
+    const startDate = new Date(year, paymentMonthIndex - 2, 11);
+    const endDate = new Date(year, paymentMonthIndex - 1, 10);
 
-  const tukinId = `tukin-${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
-  const tukinFolder = `Periode_Tukin_${tukinYear}-${String(tukinMonth).padStart(2, '0')}`;
+    const startDay = startDate.getDate();
+    const startMonthName = monthNames[startDate.getMonth()];
+    const startYear = startDate.getFullYear();
+    const startStrMonth = String(startDate.getMonth() + 1).padStart(2, '0');
+
+    const endDay = endDate.getDate();
+    const endMonthName = monthNames[endDate.getMonth()];
+    const endYear = endDate.getFullYear();
+    const endStrMonth = String(endDate.getMonth() + 1).padStart(2, '0');
+
+    const paymentMonthName = monthNames[paymentMonthIndex];
+
+    // Hitung ekspektasi jumlah hari pada rentang tersebut
+    const expectedDays = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+
+    tukinPeriods.push({
+      id: `tukin-${year}-${String(paymentMonthIndex + 1).padStart(2, '0')}`,
+      status: 'DIBUKA',
+      title: `Bukti Dukung Tunjangan Kinerja Bulan ${paymentMonthName} ${year}`,
+      periodeLabel: `${startDay} ${startMonthName.substring(0,3)} ${startYear} – ${endDay} ${endMonthName.substring(0,3)} ${endYear}`,
+      periodeEvent: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear} s/d ${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
+      startDate: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear}`,
+      endDate: `${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
+      periodeFolder: `Periode_Tukin_${year}-${String(paymentMonthIndex + 1).padStart(2, '0')}`,
+      tipe: 'Tunjangan Kinerja',
+      expectedDays: expectedDays
+    });
+  }
 
   return {
-    'uang-makan': [
-      {
-        id: 'um-2026-08',
-        status: 'DIBUKA',
-        title: 'Bukti Dukung Uang Makan Agustus 2026',
-        periodeLabel: '1 Agu 2026 – 31 Agu 2026',
-        periodeEvent: '01-08-2026 s/d 31-08-2026',
-        startDate: '01-08-2026',
-        endDate: '31-08-2026',
-        periodeFolder: 'Periode_2026-08',
-        tipe: 'Uang Makan',
-        expectedDays: 31
-      }
-    ],
-    'tukin': [
-      {
-        id: tukinId,
-        status: 'DIBUKA',
-        title: `Bukti Dukung Tunjangan Kinerja Bulan ${paymentMonthName} ${paymentMonthDate.getFullYear()}`,
-        periodeLabel: `${formatShortDate(tukinStartDate)} – ${formatShortDate(tukinEndDate)}`,
-        periodeEvent: `${formatNumDate(tukinStartDate)} s/d ${formatNumDate(tukinEndDate)}`,
-        startDate: formatNumDate(tukinStartDate),
-        endDate: formatNumDate(tukinEndDate),
-        periodeFolder: tukinFolder,
-        tipe: `Tunjangan Kinerja (Pembayaran ${paymentMonthName} ${paymentMonthDate.getFullYear()})`,
-        expectedDays: 31
-      }
-    ]
+    'uang-makan': uangMakanPeriods,
+    'tukin': tukinPeriods,
+    'spt': [],
+    'cuti': []
   };
 };
 
-const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView }) => {
+const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
@@ -742,11 +745,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
 
-  const [activeStep, setActiveStep] = useState(3);
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-
-  const fileInputRef = useRef(null);
 
   const getModuleKey = (view) => {
     switch(view) {
@@ -754,7 +754,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       case 'absensi-tunjangan-kinerja': return 'tukin';
       case 'arsip-surat-tugas': return 'spt';
       case 'arsip-surat-cuti': return 'cuti';
-      default: return 'uang-makan';
+      case 'rekap': return 'rekap';
+      default: return 'rekap';
     }
   };
 
@@ -762,31 +763,30 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const PERIOD_EVENTS = getPeriodEvents();
 
   useEffect(() => {
-    setSelectedPeriod(null);
-    resetUploadState();
-    setActiveStep(3);
-  }, [currentView]);
+    // Menghilangkan logika reset otomatis saat berada di Tahap 1
+    // agar data tidak hilang saat user menekan tombol 'Back' di browser.
+    if (activeStep > 1 && !selectedPeriod) {
+      navigate(currentView, 1);
+    }
+  }, [activeStep, currentView, navigate, selectedPeriod]);
 
   const handleTabClick = (targetView) => {
     if (selectedFile && !submitResult) {
-      setPendingTargetView(targetView);
+      setPendingTargetView({ view: targetView, step: 1 });
       setShowConfirmModal(true);
     } else {
       setSelectedPeriod(null);
       resetUploadState();
-      navigate(targetView);
+      navigate(targetView, 1);
     }
   };
 
   const confirmSwitchModule = (proceed) => {
     if (proceed) {
-      if (pendingTargetView === 'BACK_TO_PERIODS') {
+      if (pendingTargetView) {
         setSelectedPeriod(null);
         resetUploadState();
-      } else if (pendingTargetView) {
-        setSelectedPeriod(null);
-        resetUploadState();
-        navigate(pendingTargetView);
+        navigate(pendingTargetView.view, pendingTargetView.step || 1);
       }
     }
     setShowConfirmModal(false);
@@ -799,15 +799,16 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setSubmitResult(null);
     setIsParsing(false);
     setIsSubmitting(false);
-    setActiveStep(3);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
   };
 
   const handleClearFile = (e) => {
     e.stopPropagation();
-    resetUploadState();
+    const fileInput = document.getElementById('pdf-upload-input');
+    if (fileInput) fileInput.value = '';
+    setSelectedFile(null);
+    setParsedData(null);
+    setSubmitResult(null);
+    setIsParsing(false);
   };
 
   const handleFileChange = async (e) => {
@@ -823,7 +824,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       } catch (err) {
         console.error("Gagal membaca PDF:", err);
         alert("Gagal membaca struktur PDF presensi. Pastikan file bukan hasil scan atau foto.");
-        resetUploadState();
+        setSelectedFile(null);
+        setParsedData(null);
       } finally {
         setIsParsing(false);
       }
@@ -890,7 +892,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
   return (
-    <div className="min-h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative">
+    <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       {showConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-gray-100 animate-in fade-in zoom-in duration-200">
@@ -919,7 +921,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
-      <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0">
+      <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
             <div className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-1">Profil Pegawai</div>
@@ -941,6 +943,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           </div>
 
           <nav className="space-y-1">
+            <button 
+              onClick={() => handleTabClick('rekap')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'rekap' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
+            >
+              <FileBarChart size={16} /> Rekap Bulanan
+            </button>
             <button 
               onClick={() => handleTabClick('absensi-uang-makan')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
@@ -968,12 +976,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           </nav>
         </div>
 
-        <div className="pt-6 border-t border-white/10 space-y-2">
+        <div className="pt-6 border-t border-white/10 space-y-2 mt-8">
           <button 
             onClick={() => navigate('home')}
             className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-300 hover:bg-white/5 transition-colors cursor-pointer"
           >
-            <ArrowLeft size={14} /> Beranda Utama
+            <ArrowLeft size={14} /> Kembali Beranda Utama
           </button>
           <button 
             onClick={onLogoutRequest}
@@ -984,126 +992,88 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 overflow-y-auto">
+      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
         <div className="max-w-7xl mx-auto">
-          
-          {!selectedPeriod ? (
-            <div>
-              <div className="mb-6">
-                <h1 className="text-xl md:text-2xl font-extrabold text-gray-900">
-                  {activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja'}
-                </h1>
-                <p className="text-xs text-gray-500">Pilih periode pengumpulan bukti dukung yang sedang dibuka.</p>
+          {activeTab === 'rekap' ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4 animate-in fade-in duration-500">
+              <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
+                <FileBarChart size={32} />
               </div>
-
-              <div className="space-y-4">
-                {currentPeriodList.map((period) => (
-                  <div 
-                    key={period.id}
-                    className="bg-white rounded-3xl border border-gray-200 p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#143E50] transition-colors"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                          {period.status}
-                        </span>
-                      </div>
-                      <h3 className="text-lg md:text-xl font-black text-gray-900">{period.title}</h3>
-                      <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
-                        <span className="flex items-center gap-1.5">
-                          <Calendar size={14} className="text-gray-400" />
-                          {period.periodeLabel}
-                        </span>
-                        <span>•</span>
-                        <span>{period.tipe}</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setSelectedPeriod(period);
-                        resetUploadState();
-                      }}
-                      className="px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform hover:scale-105 active:scale-95 cursor-pointer"
-                      style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                    >
-                      <UploadCloud size={16} />
-                      <span>Submit</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <h2 className="text-2xl md:text-3xl font-black mb-3" style={{ color: PALETTE_PKP.midnightGreen }}>Selamat Datang di Modul Rekap</h2>
+              <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Halaman rekapitulasi data kedisiplinan dan kinerja bulanan sedang dalam penyiapan. Silakan pilih modul lain pada menu di sebelah kiri.</p>
             </div>
           ) : (
             <div>
-              <button 
-                onClick={() => {
-                  if (selectedFile && !submitResult) {
-                    setPendingTargetView('BACK_TO_PERIODS');
-                    setShowConfirmModal(true);
-                  } else {
-                    setSelectedPeriod(null);
-                    resetUploadState();
-                  }
-                }}
-                className="text-xs font-bold text-gray-500 hover:text-gray-900 flex items-center gap-1 mb-4 transition-colors cursor-pointer"
-              >
-                <span>— Kembali</span>
-              </button>
-
               <div 
-                className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative overflow-hidden shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
-                style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md"
+                style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
               >
                 <div className="space-y-2">
                   <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
                     OPEN SUBMISSION
                   </span>
                   <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
-                    {selectedPeriod.title}
+                    {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
                   </h2>
                   <div className="flex items-center gap-2 text-xs text-gray-200">
                     <Calendar size={14} />
-                    <span>Periode Event: {selectedPeriod.periodeEvent}</span>
-                    <span>•</span>
-                    <span>Kategori: {selectedPeriod.tipe.split(' ')[0]} {selectedPeriod.tipe.split(' ')[1]}</span>
+                    <span>{selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}</span>
+                    {selectedPeriod && (
+                      <>
+                        <span>•</span>
+                        <span>{selectedPeriod.tipe}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3.5 bg-white/10 backdrop-blur-xs p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto">
-                  <div className="text-right flex-1">
-                    <p className="text-xs text-gray-200 leading-snug font-medium">
-                      <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
-                    </p>
-                    <p className="text-[9px] text-teal-200 mt-1">Sistem otomatis pencocokan NIP</p>
-                  </div>
-                  {loggedInUser?.Foto_Pegawai ? (
-                    <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                  ) : (
-                    <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm border-2 border-white/40">
-                      {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                {selectedPeriod && (
+                  <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                    <div className="text-right flex-1">
+                      <p className="text-xs text-gray-200 leading-snug font-medium">
+                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
+                      </p>
+                      <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
                     </div>
-                  )}
-                </div>
+                    {loggedInUser?.Foto_Pegawai ? (
+                      <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                        {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Navigation Steps (1-6) */}
-              <div className="flex items-center justify-center gap-3 mb-8">
+              <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
                 {[1, 2, 3, 4, 5, 6].map((num) => {
-                  const isActive = num === activeStep;
+                  const isActive = activeStep === num;
+                  const isDisabled = !selectedPeriod && num > 1;
                   return (
                     <button
                       key={num}
                       type="button"
-                      onClick={() => setActiveStep(num)}
-                      title={!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini'}
-                      className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all cursor-pointer shadow-xs ${
+                      disabled={isDisabled}
+                      onClick={() => {
+                        if (num === 1) {
+                          navigate(currentView, 1);
+                        } else {
+                          navigate(currentView, num);
+                        }
+                      }}
+                      title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
                         isActive
-                          ? `bg-[${PALETTE_PKP.midnightGreen}] text-white ring-4 ring-teal-900/15 scale-105`
-                          : 'bg-[#DDF1F5] text-[#0E5B73] hover:bg-[#C2E0F4] hover:scale-105'
+                          ? 'text-white ring-4 shadow-sm scale-105'
+                          : isDisabled
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                          : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
                       }`}
-                      style={isActive ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                      style={{ 
+                        backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
+                        ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
+                      }}
                     >
                       {num}
                     </button>
@@ -1111,57 +1081,100 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 })}
               </div>
 
-              {activeStep === 3 ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
-                  {/* Left Column: Upload Form (4 cols) */}
+              {activeStep === 1 ? (
+                <div className="space-y-4 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  {currentPeriodList.map((period) => {
+                    const isSelected = selectedPeriod?.id === period.id;
+                    return (
+                      <div 
+                        key={period.id}
+                        onClick={() => {
+                          // Hanya reset file upload JIKA user memilih bulan (periode) yang BERBEDA
+                          if (selectedPeriod?.id !== period.id) {
+                            setSelectedPeriod(period);
+                            resetUploadState();
+                          }
+                          navigate(currentView, 2);
+                        }}
+                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[${PALETTE_PKP.midnightGreen}] ${isSelected ? `border-[${PALETTE_PKP.midnightGreen}] ring-1 ring-[${PALETTE_PKP.midnightGreen}] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                              {period.status}
+                            </span>
+                            {isSelected && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                <CheckCircle2 size={10} /> Dipilih
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="text-lg font-black text-gray-900 group-hover:text-[#084C61] transition-colors">{period.title}</h3>
+                          <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
+                            <span className="flex items-center gap-1.5">
+                              <Calendar size={14} className="text-gray-400" />
+                              {period.periodeLabel}
+                            </span>
+                            <span>•</span>
+                            <span>{period.tipe}</span>
+                          </div>
+                        </div>
+
+                        <div className="px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform group-active:scale-95 bg-[#143E50]">
+                          <UploadCloud size={16} />
+                          <span>Pilih & Lanjut</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : activeStep === 2 && selectedPeriod ? (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in zoom-in-95 duration-300">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
                     <div>
                       <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
-                      <p className="text-xs text-gray-600 leading-relaxed font-normal">
-                        Upload file bukti presensi:
-                      </p>
+                      <p className="text-xs text-gray-600 leading-relaxed font-normal">Upload file bukti presensi:</p>
                       <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
                         <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
                         <li>• Format yang diterima: <strong>PDF Riwayat Presensi</strong></li>
-                        <li>• Sistem mencocokkan <strong>Nama berdasarkan NIP</strong> di Spreadsheet</li>
+                        <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong> di Spreadsheet</li>
                       </ul>
                     </div>
 
                     <div>
                       <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
-                      <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between shadow-2xs group hover:border-teal-700 transition-all">
-                        <label className="px-3.5 py-1.5 bg-gray-50 hover:bg-gray-100 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
+                      <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
+                        <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
                           Choose File
                           <input 
+                            id="pdf-upload-input"
                             type="file" 
-                            ref={fileInputRef}
                             accept=".pdf"
                             onChange={handleFileChange}
                             className="hidden"
                           />
                         </label>
-                        <div className="flex items-center gap-1 overflow-hidden">
-                          <span className="text-xs text-gray-500 truncate px-2 font-medium">
-                            {selectedFile ? selectedFile.name : 'Pilih berkas PDF presensi...'}
-                          </span>
-                          {selectedFile && (
-                            <button 
-                              type="button" 
-                              onClick={handleClearFile}
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                              title="Hapus file"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
+                        <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
+                          {selectedFile ? selectedFile.name : 'Pilih berkas PDF...'}
+                        </span>
+                        {selectedFile && (
+                          <button 
+                            type="button"
+                            onClick={handleClearFile}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                            title="Hapus berkas"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </div>
 
                     {isParsing && (
                       <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
                         <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                        <span>Mengekstrak dan memverifikasi presensi...</span>
+                        <span>Mengekstrak dan memverifikasi data kalender presensi...</span>
                       </div>
                     )}
 
@@ -1169,6 +1182,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
                         <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
                         <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
+                      </div>
+                    )}
+
+                    {parsedData && !parsedData.isValid && (
+                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2">
+                        <AlertCircle size={18} className="shrink-0 text-red-600" />
+                        <span>
+                          {parsedData.isDateMismatch 
+                            ? `Periode file PDF (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
+                            : 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.'}
+                        </span>
                       </div>
                     )}
 
@@ -1186,35 +1210,22 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       </div>
                     )}
 
-                    <div className="space-y-3">
-                      <button 
-                        onClick={handleUploadSubmit}
-                        disabled={!parsedData || !parsedData.isValid || isSubmitting}
-                        className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                          parsedData && parsedData.isValid && !isSubmitting
-                            ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
-                            : 'opacity-40 cursor-not-allowed'
-                        }`}
-                        style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                      >
-                        <UploadCloud size={16} />
-                        {isSubmitting ? 'Menyimpan ke Server...' : 'Proses & Simpan Bukti'}
-                      </button>
-                      
-                      {selectedFile && (
-                        <button 
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-full py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-all text-center cursor-pointer shadow-xs border border-gray-200"
-                        >
-                          Ganti File Presensi
-                        </button>
-                      )}
-                    </div>
+                    <button 
+                      onClick={handleUploadSubmit}
+                      disabled={!parsedData || !parsedData.isValid || isSubmitting}
+                      className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
+                        parsedData && parsedData.isValid && !isSubmitting
+                          ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
+                          : 'opacity-40 cursor-not-allowed'
+                      }`}
+                      style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                    >
+                      <UploadCloud size={16} />
+                      {isSubmitting ? 'Menyimpan ke Server...' : 'Proses & Simpan Bukti'}
+                    </button>
                   </div>
 
-                  {/* Right Column: Table Preview (8 cols) */}
                   <div className="lg:col-span-8 space-y-4">
-                    {/* Date Status Banner */}
                     {parsedData && parsedData.isValid ? (
                       <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
                         <div className="flex items-center gap-2 font-black text-sm">
@@ -1231,39 +1242,35 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <AlertCircle size={18} className="text-red-600" />
                           <span>⚠️ Periode File Tidak Sesuai</span>
                         </div>
-                        <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200 self-start sm:self-auto">
+                        <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
                           PDF: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
                         </div>
                       </div>
                     ) : null}
 
-                    {/* Table Card */}
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
                       <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
                           <h3 className="text-sm font-black text-gray-900">Preview Data Presensi</h3>
-                          <p className="text-[11px] text-gray-500 font-medium">
-                            {parsedData ? "Verifikasi identitas dan rentang tanggal dari file PDF." : "Nama pegawai otomatis diambil dari Bank Data berdasarkan NIP yang terbaca."}
-                          </p>
+                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file PDF.</p>
                         </div>
-                        <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5">
+                        <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
                           <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
                           <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
                           <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
                         </div>
                       </div>
 
-                      {/* Wrapper for vertical & horizontal scroll with 450px max-height */}
-                      <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs">
-                        <table className="w-full text-left text-[11px] text-gray-700 border-collapse">
+                      <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
+                        <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
                           <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
                             <tr>
-                              <th className="py-3 px-4 whitespace-nowrap">TANGGAL</th>
+                              <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
                               <th className="py-3 px-3 whitespace-nowrap">HARI</th>
-                              <th className="py-3 px-3 whitespace-nowrap text-center">DATANG</th>
-                              <th className="py-3 px-3 min-w-[150px]">LOKASI DATANG</th>
-                              <th className="py-3 px-3 whitespace-nowrap text-center">PULANG</th>
-                              <th className="py-3 px-3 min-w-[150px]">LOKASI PULANG</th>
+                              <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
+                              <th className="py-3 px-3 min-w-[130px]">LOKASI DATANG</th>
+                              <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
+                              <th className="py-3 px-3 min-w-[130px]">LOKASI PULANG</th>
                               <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
                             </tr>
                           </thead>
@@ -1271,11 +1278,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                             {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
                               parsedData.rows.map((row, idx) => (
                                 <tr key={idx} className={row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors'}>
-                                  <td className="py-3 px-4 font-bold text-gray-900 whitespace-nowrap">{row.tanggal}</td>
+                                  <td className="py-3 px-3.5 font-bold text-gray-900 whitespace-nowrap">{row.tanggal}</td>
                                   <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap text-center font-semibold ${row.datang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.datang}</td>
+                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.datang}</td>
                                   <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiDatang}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap text-center font-semibold ${row.pulang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.pulang}</td>
+                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.pulang}</td>
                                   <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiPulang}</td>
                                   <td className="py-3 px-3 text-center whitespace-nowrap">
                                     <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
@@ -1292,49 +1299,48 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               ))
                             ) : (
                               <tr>
-                                <td colSpan="7" className="text-center py-20 text-gray-400 italic text-xs bg-gray-50/30">
-                                  Belum ada file PDF yang dipilih untuk pratinjau data.
+                                <td colSpan="7" className="text-center py-24 text-gray-400 bg-gray-50/50">
+                                  <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
+                                    <FileText size={32} />
+                                    <div>
+                                      <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
+                                      <p className="text-xs">Silakan unggah dokumen PDF Riwayat Presensi Anda<br/>melalui panel di sebelah kiri.</p>
+                                    </div>
+                                  </div>
                                 </td>
                               </tr>
                             )}
                           </tbody>
                         </table>
                       </div>
-                      
-                      <div className="pt-4 mt-2 flex flex-wrap items-center justify-between gap-3 text-xs border-t border-gray-100">
-                        <div className="flex items-center gap-4 text-gray-600">
-                          <span>Total Hari: <strong className="text-gray-900 font-bold">{parsedData ? parsedData.expectedDays : '31'} Hari</strong></span>
-                          <span>Hari Masuk (WFO/WFA): <strong className="text-emerald-700 font-extrabold">{parsedData ? parsedData.totalHariMasuk : '0'} Hari</strong></span>
-                        </div>
-                        <div className="text-[10px] text-gray-400 italic">
-                          Folder target di GDrive: <strong className="text-gray-600">{parsedData ? `${parsedData.periodeFolder}/${parsedData.nama}` : `${selectedPeriod.periodeFolder}/Belum Ada Berkas`}</strong>
-                        </div>
+
+                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
+                        <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
+                        <span className="text-gray-500">Hari Masuk (WFO/WFA): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
+                        <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
                       </div>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="bg-white rounded-3xl border border-gray-200 shadow-sm p-12 text-center flex flex-col items-center justify-center min-h-[400px] animate-in fade-in duration-300">
-                  <div className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6">
-                    <AlertCircle size={32} />
+                <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 animate-in fade-in zoom-in duration-300 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm">
+                  <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
+                    <FileBarChart size={32} />
                   </div>
-                  <h3 className="text-2xl font-black text-gray-900 mb-2">Tahap {activeStep} Sedang Dalam Pengembangan</h3>
-                  <p className="text-sm text-gray-500 max-w-md mx-auto mb-8">
-                    Fitur untuk formulir tahap ini masih dalam tahap integrasi sistem. Silakan kembali ke Tahap 3 (Upload PDF).
-                  </p>
+                  <h2 className="text-2xl font-black mb-3 text-gray-900">Tahap {activeStep} dalam Pengembangan</h2>
+                  <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Fitur untuk tahap ini sedang dalam proses penyusunan data. Silakan kembali ke tahap awal pengumpulan.</p>
                   <button 
-                    onClick={() => setActiveStep(3)}
-                    className="px-6 py-3 rounded-xl text-white font-bold text-sm shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                    onClick={() => navigate(currentView, 1)}
+                    className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" 
                     style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
                   >
-                    <ArrowLeft size={16} /> Kembali ke Tahap 3
+                    <ArrowLeft size={16} /> Kembali ke Tahap 1
                   </button>
                 </div>
               )}
 
             </div>
           )}
-
         </div>
       </main>
     </div>
@@ -1346,13 +1352,11 @@ const ProfileView = ({ navigate }) => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSubUnit, setSelectedSubUnit] = useState('ALL');
-  const [dataSource, setDataSource] = useState('');
 
   const loadData = async () => {
     setLoading(true);
-    const { data, source } = await fetchPegawaiData(true);
+    const { data } = await fetchPegawaiData(true);
     setPegawaiList(data);
-    setDataSource(source);
     setLoading(false);
   };
 
@@ -1392,7 +1396,7 @@ const ProfileView = ({ navigate }) => {
   });
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 bg-[#F7FAFC] min-h-screen">
+    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <div>
           <button onClick={() => navigate('home')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 cursor-pointer">
@@ -1403,13 +1407,13 @@ const ProfileView = ({ navigate }) => {
             <button
               onClick={loadData}
               title="Perbarui Data"
-              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors cursor-pointer shadow-sm bg-white"
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors cursor-pointer"
             >
               <RotateCcw size={16} />
             </button>
           </div>
-          <p className="text-sm text-gray-500 mt-1">
-            Direktorat Pembangunan Perumahan Perdesaan ({filteredPegawai.length} dari {pegawaiList.length} Pegawai)
+          <p className="text-sm text-gray-500">
+            Direktorat Pembangunan Perumahan Perdesaan ({filteredPegawai.length} dari {pegawaiList.length} Pegawai Ditampilkan)
           </p>
         </div>
 
@@ -1420,7 +1424,7 @@ const ProfileView = ({ navigate }) => {
             placeholder="Cari nama, NIP, sub unit kerja..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-[#084C61] shadow-2xs transition-all"
+            className="w-full pl-10 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700 shadow-2xs transition-all"
           />
         </div>
       </div>
@@ -1432,11 +1436,13 @@ const ProfileView = ({ navigate }) => {
               <Briefcase size={16} style={{ color: PALETTE_PKP.midnightGreen }} />
               <span>Filter Berdasarkan Sub Unit Kerja</span>
             </label>
+
             <div className="relative">
               <select
                 value={selectedSubUnit}
                 onChange={(e) => setSelectedSubUnit(e.target.value)}
-                className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:border-[#084C61] focus:bg-white transition-all cursor-pointer appearance-none"
+                className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:bg-white transition-all cursor-pointer appearance-none"
+                style={{ focusBorderColor: PALETTE_PKP.midnightGreen }}
               >
                 <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
                 {subUnitCategories.map((cat, idx) => {
@@ -1455,7 +1461,7 @@ const ProfileView = ({ navigate }) => {
 
       {loading ? (
         <div className="text-center py-20 text-gray-500 flex items-center justify-center gap-2">
-          <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: PALETTE_PKP.darkAqua, borderTopColor: 'transparent' }}></div>
+          <div className="w-5 h-5 border-2 border-teal-800 border-t-transparent rounded-full animate-spin"></div>
           <span>Memuat data kepegawaian...</span>
         </div>
       ) : filteredPegawai.length === 0 ? (
@@ -1466,66 +1472,66 @@ const ProfileView = ({ navigate }) => {
         <div className="flex flex-col gap-6">
           {filteredPegawai.map((item, index) => {
             const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+            const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
+
             return (
-              <div key={index} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row relative group hover:shadow-md transition-shadow">
-                {/* Thick Left Border Accent */}
-                <div className="absolute left-0 top-0 bottom-0 w-2" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
+              <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative">
                 
-                {/* Content Section */}
-                <div className="flex-1 p-6 md:p-8 pl-8 flex flex-col justify-between">
+                <div className="w-2 hidden lg:block shrink-0" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
+                
+                <div className="p-6 md:p-8 flex-1 flex flex-col justify-center z-10">
                   <div className="mb-6">
-                    <h3 className="text-2xl font-black text-gray-900 mb-2 tracking-tight">{item.Nama}</h3>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="text-gray-500 font-medium mr-2">NIP {item.NIP}</span>
+                    <h3 className="text-2xl font-black text-gray-900" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
+                    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+                      <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
                       {item.SubUnitKerja && (
-                        <span className="px-3 py-1 rounded-full font-bold text-white shadow-sm" style={{ backgroundColor: PALETTE_PKP.darkAqua }}>
+                        <span className="px-3 py-1 rounded-full font-bold text-white shadow-xs" style={{ backgroundColor: PALETTE_PKP.darkAqua }}>
                           {item.SubUnitKerja}
                         </span>
                       )}
                       {item.KelasJabatan && (
-                        <span className="px-3 py-1 rounded-full font-bold text-[#084C61] shadow-sm" style={{ backgroundColor: PALETTE_PKP.krem }}>
+                        <span className="px-3 py-1 rounded-full font-bold text-gray-800 shadow-xs" style={{ backgroundColor: PALETTE_PKP.krem }}>
                           Kelas Jabatan {item.KelasJabatan}
                         </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="border-t border-gray-100 pt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div className="w-full h-px bg-gray-100 mb-6"></div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 text-sm">
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-1">Jabatan</p>
-                      <p className="text-sm font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Jabatan</p>
+                      <p className="font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-1">Email Dinas</p>
-                      <p className="text-sm font-semibold text-gray-800">{item.EmailDinas || '-'}</p>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Email</p>
+                      <p className="font-bold text-gray-800 leading-snug">{item.EmailDinas || '-'}</p>
                     </div>
-                    <div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-1">Atasan Langsung</p>
-                      <p className="text-sm font-bold text-gray-800">{item.AtasanLangsung || '-'}</p>
-                      {item.JabatanAtasan && (
-                        <p className="text-[11px] font-medium text-gray-400 leading-tight mt-0.5">{item.JabatanAtasan}</p>
-                      )}
+                    <div className={hasTukin ? '' : 'lg:col-span-2'}>
+                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Atasan Langsung</p>
+                      <p className="font-bold text-gray-800 leading-snug mb-1">{item.AtasanLangsung || '-'}</p>
+                      <p className="text-xs text-gray-400 font-medium leading-tight">{item.JabatanAtasan || ''}</p>
                     </div>
-                    {item.TunjanganKinerja && (
-                      <div className="sm:col-span-2 lg:col-span-3 border-t border-gray-50 pt-3 mt-1">
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-0.5">Besaran Tunjangan Kinerja</p>
-                        <p className="text-base font-black" style={{ color: PALETTE_PKP.midnightGreen }}>{item.TunjanganKinerja}</p>
+                    {hasTukin && (
+                      <div>
+                        <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Besaran Tunjangan Kinerja</p>
+                        <p className="font-black text-lg tracking-tight" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Tukin}</p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Photo Section with Gradient Blend */}
-                <div className="w-full md:w-64 h-56 md:h-auto relative shrink-0 bg-gray-50">
-                  <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-white via-transparent to-transparent z-10 pointer-events-none"></div>
-                  {fotoUrl ? (
-                    <img src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top filter contrast-110" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-gray-100">
-                      <User size={64} className="text-gray-300" />
-                    </div>
-                  )}
-                </div>
+                {fotoUrl && (
+                  <div className="w-full lg:w-80 h-64 lg:h-auto relative shrink-0 overflow-hidden group">
+                    <div className="absolute inset-0 bg-gradient-to-t lg:bg-gradient-to-r from-white via-white/80 to-transparent z-10 pointer-events-none"></div>
+                    
+                    <div className="absolute inset-0 z-0 mix-blend-multiply opacity-40 transition-opacity group-hover:opacity-20" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
+                    <div className="absolute inset-0 z-0 mix-blend-color opacity-20 transition-opacity group-hover:opacity-0" style={{ backgroundColor: PALETTE_PKP.darkAqua }}></div>
+                    
+                    <img src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top relative z-0" />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1536,10 +1542,17 @@ const ProfileView = ({ navigate }) => {
 };
 
 export default function App() {
-  const [currentView, setCurrentView] = useState(() => {
-    const hash = window.location.hash.replace('#/', '');
-    return hash || 'home';
-  });
+  const getHashData = () => {
+    const rawHash = window.location.hash.replace('#/', '');
+    const [view, queryStr] = rawHash.split('?');
+    const params = new URLSearchParams(queryStr || '');
+    return {
+      view: view || 'home',
+      step: params.get('step') ? parseInt(params.get('step'), 10) : 1
+    };
+  };
+
+  const [routeData, setRouteData] = useState(getHashData());
   const [loggedInUser, setLoggedInUser] = useState(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
@@ -1547,17 +1560,20 @@ export default function App() {
     fetchPegawaiData(false);
 
     const handleHashChange = () => {
-      const hash = window.location.hash.replace('#/', '');
-      setCurrentView(hash || 'home');
+      setRouteData(getHashData());
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  const navigate = (viewName) => {
-    window.location.hash = viewName === 'home' ? '' : `#/${viewName}`;
-    setCurrentView(viewName);
-    window.scrollTo(0, 0);
+  const navigate = (viewName, step = 1) => {
+    let hash = viewName === 'home' ? '' : `#/${viewName}`;
+    if (step > 1) {
+      hash += `?step=${step}`;
+    }
+    window.location.hash = hash;
+    setRouteData({ view: viewName, step });
+    if (step === 1) window.scrollTo(0, 0);
   };
 
   const handleLogoutConfirm = () => {
@@ -1566,40 +1582,37 @@ export default function App() {
     navigate('home');
   };
 
-  const isDashboardView = ['absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
+  const currentView = routeData.view;
+  const activeStep = routeData.step;
+  const isDashboardView = ['rekap', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
 
   const renderView = () => {
     switch (currentView) {
       case 'home':
         return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
+      case 'rekap':
       case 'absensi-uang-makan':
       case 'absensi-tunjangan-kinerja':
       case 'arsip-surat-tugas':
       case 'arsip-surat-cuti':
-        return loggedInUser ? (
+        if (!loggedInUser) {
+          return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+        }
+        return (
           <UserDashboardView
             loggedInUser={loggedInUser}
             onLogoutRequest={() => setShowLogoutModal(true)}
             navigate={navigate}
             currentView={currentView}
+            activeStep={activeStep}
           />
-        ) : (
-          <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />
         );
       case 'profile':
         return <ProfileView navigate={navigate} />;
       case 'login':
         return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
       default:
-        return (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
-            <h2 className="text-2xl font-bold mb-2" style={{ color: PALETTE_PKP.midnightGreen }}>Halaman Tahap Pengembangan</h2>
-            <p className="text-gray-500 mb-8">Fitur ini sedang dipersiapkan untuk pembaruan berikutnya.</p>
-            <button onClick={() => navigate('home')} className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
-              <ArrowLeft size={16} /> Kembali ke Beranda
-            </button>
-          </div>
-        );
+        return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
     }
   };
 
