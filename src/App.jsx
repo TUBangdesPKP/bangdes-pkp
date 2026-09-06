@@ -408,7 +408,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
           </div>
 
           <div 
-            onClick={() => navigate('rekap')}
+            onClick={() => navigate(loggedInUser ? 'rekap' : 'login')}
             className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98]" 
             style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
           >
@@ -694,9 +694,8 @@ const getPeriodEvents = () => {
   const tukinPeriods = [];
   for (let i = 0; i < 12; i++) {
     const year = 2026;
-    const paymentMonthIndex = i; // 0 (Jan) to 11 (Des)
+    const paymentMonthIndex = i;
 
-    // Logika rentang: Tanggal 11 dua bulan lalu s.d Tanggal 10 satu bulan lalu
     const startDate = new Date(year, paymentMonthIndex - 2, 11);
     const endDate = new Date(year, paymentMonthIndex - 1, 10);
 
@@ -711,8 +710,6 @@ const getPeriodEvents = () => {
     const endStrMonth = String(endDate.getMonth() + 1).padStart(2, '0');
 
     const paymentMonthName = monthNames[paymentMonthIndex];
-
-    // Hitung ekspektasi jumlah hari pada rentang tersebut
     const expectedDays = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
 
     tukinPeriods.push({
@@ -763,8 +760,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const PERIOD_EVENTS = getPeriodEvents();
 
   useEffect(() => {
-    // Menghilangkan logika reset otomatis saat berada di Tahap 1
-    // agar data tidak hilang saat user menekan tombol 'Back' di browser.
     if (activeStep > 1 && !selectedPeriod) {
       navigate(currentView, 1);
     }
@@ -1089,14 +1084,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       <div 
                         key={period.id}
                         onClick={() => {
-                          // Hanya reset file upload JIKA user memilih bulan (periode) yang BERBEDA
                           if (selectedPeriod?.id !== period.id) {
                             setSelectedPeriod(period);
                             resetUploadState();
                           }
                           navigate(currentView, 2);
                         }}
-                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[${PALETTE_PKP.midnightGreen}] ${isSelected ? `border-[${PALETTE_PKP.midnightGreen}] ring-1 ring-[${PALETTE_PKP.midnightGreen}] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? 'border-[#084C61] ring-1 ring-[#084C61] shadow-md' : 'border-gray-200 shadow-xs'}`}
                       >
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
@@ -1471,16 +1465,42 @@ const ProfileView = ({ navigate }) => {
       ) : (
         <div className="flex flex-col gap-6">
           {filteredPegawai.map((item, index) => {
-            const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+            let fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+            // Mengubah endpoint Google Drive agar gambar bisa dirender langsung tanpa error CORS
+            if (fotoUrl.includes('drive.google.com')) {
+              const match = fotoUrl.match(/id=([a-zA-Z0-9_-]+)/);
+              if (match && match[1]) {
+                fotoUrl = `https://lh3.googleusercontent.com/d/${match[1]}=s400`;
+              }
+            }
+
             const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
 
             return (
-              <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative">
+              <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col relative min-h-[200px] transition-all hover:shadow-md">
                 
-                <div className="w-2 hidden lg:block shrink-0" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
+                {/* Garis Aksen Kiri */}
+                <div className="absolute left-0 top-0 bottom-0 w-2.5 z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
                 
-                <div className="p-6 md:p-8 flex-1 flex flex-col justify-center z-10">
-                  <div className="mb-6">
+                {/* Latar Belakang Foto Pegawai (Menyatu di Kanan) */}
+                {fotoUrl && (
+                  <div className="absolute right-0 top-0 bottom-0 w-48 sm:w-64 md:w-72 lg:w-80 z-0 select-none pointer-events-none">
+                    {/* Gradien dari Putih ke Transparan agar ujung kiri foto membaur mulus */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-white via-white/70 to-transparent z-10"></div>
+                    {/* Layer opacity ekstra untuk melembutkan warna foto agar tidak terlalu mencolok */}
+                    <div className="absolute inset-0 bg-white/20 z-10"></div> 
+                    <img 
+                      src={fotoUrl} 
+                      alt={item.Nama} 
+                      className="w-full h-full object-cover object-top opacity-95"
+                      onError={(e) => { e.target.style.display = 'none'; }}
+                    />
+                  </div>
+                )}
+
+                {/* Kontainer Utama Teks - Dibatasi lebarnya (w-[75%]) agar tidak menabrak foto di kanan */}
+                <div className="p-6 md:p-8 pl-7 md:pl-10 flex flex-col justify-center relative z-10 w-full sm:w-[80%] lg:w-[75%] xl:w-[70%]">
+                  <div className="mb-5">
                     <h3 className="text-2xl font-black text-gray-900" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
                     <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
                       <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
@@ -1497,9 +1517,10 @@ const ProfileView = ({ navigate }) => {
                     </div>
                   </div>
 
-                  <div className="w-full h-px bg-gray-100 mb-6"></div>
+                  {/* Garis Pemisah (Hanya sepanjang kontainer teks, tidak menimpa foto) */}
+                  <div className="w-full h-px bg-gray-200 mb-5"></div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5 text-sm">
                     <div>
                       <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Jabatan</p>
                       <p className="font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
@@ -1508,13 +1529,13 @@ const ProfileView = ({ navigate }) => {
                       <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Email</p>
                       <p className="font-bold text-gray-800 leading-snug">{item.EmailDinas || '-'}</p>
                     </div>
-                    <div className={hasTukin ? '' : 'lg:col-span-2'}>
+                    <div>
                       <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Atasan Langsung</p>
-                      <p className="font-bold text-gray-800 leading-snug mb-1">{item.AtasanLangsung || '-'}</p>
+                      <p className="font-bold text-gray-800 leading-snug mb-0.5">{item.AtasanLangsung || '-'}</p>
                       <p className="text-xs text-gray-400 font-medium leading-tight">{item.JabatanAtasan || ''}</p>
                     </div>
                     {hasTukin && (
-                      <div>
+                      <div className="sm:col-span-2 lg:col-span-3 mt-1">
                         <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Besaran Tunjangan Kinerja</p>
                         <p className="font-black text-lg tracking-tight" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Tukin}</p>
                       </div>
@@ -1522,16 +1543,6 @@ const ProfileView = ({ navigate }) => {
                   </div>
                 </div>
 
-                {fotoUrl && (
-                  <div className="w-full lg:w-80 h-64 lg:h-auto relative shrink-0 overflow-hidden group">
-                    <div className="absolute inset-0 bg-gradient-to-t lg:bg-gradient-to-r from-white via-white/80 to-transparent z-10 pointer-events-none"></div>
-                    
-                    <div className="absolute inset-0 z-0 mix-blend-multiply opacity-40 transition-opacity group-hover:opacity-20" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
-                    <div className="absolute inset-0 z-0 mix-blend-color opacity-20 transition-opacity group-hover:opacity-0" style={{ backgroundColor: PALETTE_PKP.darkAqua }}></div>
-                    
-                    <img src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top relative z-0" />
-                  </div>
-                )}
               </div>
             );
           })}
