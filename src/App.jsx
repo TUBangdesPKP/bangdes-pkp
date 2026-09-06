@@ -38,9 +38,10 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG
 
 const getDriveDirectUrl = (url) => {
   if (!url) return '';
-  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  // Menggunakan endpoint lh3 yang lebih handal untuk render gambar mentah di web
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   if (match && match[1]) {
-    return `https://drive.google.com/uc?export=view&id=${match[1]}`;
+    return `https://lh3.googleusercontent.com/d/${match[1]}=s600`;
   }
   return url;
 };
@@ -302,7 +303,7 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
 
 const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
   return (
-    <header className="w-full bg-white border-b border-gray-100 sticky top-0 z-10 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs">
+    <header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300" style={{ backgroundColor: PALETTE_PKP.krem }}>
       <div 
         className="flex items-center gap-3 cursor-pointer group"
         onClick={() => navigate('home')}
@@ -317,18 +318,18 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
       </div>
       
       <div className="hidden md:flex items-center gap-6 text-sm font-medium" style={{ color: PALETTE_PKP.midnightGreen }}>
-        <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity">Beranda</button>
-        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+        <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
+        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
         </button>
-        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <HelpCircle size={16} /> FAQ
         </button>
       </div>
 
       <div className="flex items-center gap-3">
         {loggedInUser ? (
-          <div className="flex items-center gap-3 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-200">
+          <div className="flex items-center gap-3 bg-white/70 px-3 py-1.5 rounded-xl border border-gray-200 shadow-xs">
             <div className="text-right hidden sm:block">
               <p className="text-xs font-extrabold text-gray-800">{loggedInUser.Nama}</p>
               <p className="text-[10px] text-teal-700 font-semibold">{loggedInUser.Akun_Role === 'admin' ? 'Super Admin' : 'Pegawai'}</p>
@@ -408,7 +409,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
           </div>
 
           <div 
-            onClick={() => navigate(loggedInUser ? 'rekap' : 'login')}
+            onClick={() => navigate('rekap')}
             className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98]" 
             style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
           >
@@ -1090,7 +1091,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           }
                           navigate(currentView, 2);
                         }}
-                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? 'border-[#084C61] ring-1 ring-[#084C61] shadow-md' : 'border-gray-200 shadow-xs'}`}
+                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[${PALETTE_PKP.midnightGreen}] ${isSelected ? `border-[${PALETTE_PKP.midnightGreen}] ring-1 ring-[${PALETTE_PKP.midnightGreen}] shadow-md` : 'border-gray-200 shadow-xs'}`}
                       >
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
@@ -1390,164 +1391,172 @@ const ProfileView = ({ navigate }) => {
   });
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-        <div>
-          <button onClick={() => navigate('home')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 cursor-pointer">
-            <ArrowLeft size={16} /> Kembali ke Beranda
-          </button>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl md:text-3xl font-black" style={{ color: PALETTE_PKP.midnightGreen }}>Bank Data Profil Pegawai</h2>
-            <button
-              onClick={loadData}
-              title="Perbarui Data"
-              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors cursor-pointer"
-            >
-              <RotateCcw size={16} />
-            </button>
+    <div className="h-screen flex flex-col bg-[#F7FAFC] overflow-hidden">
+      
+      {/* AREA ATAS: TETAP MENGAMBANG (FIXED) */}
+      <div className="shrink-0 bg-[#F7FAFC] z-20 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.1)] border-b border-gray-200/50">
+        <div className="max-w-7xl mx-auto px-4 md:px-8 pt-8 pb-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <div>
+              <button onClick={() => navigate('home')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 cursor-pointer">
+                <ArrowLeft size={16} /> Kembali ke Beranda
+              </button>
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl md:text-3xl font-black" style={{ color: PALETTE_PKP.midnightGreen }}>Bank Data Profil Pegawai</h2>
+                <button
+                  onClick={loadData}
+                  title="Perbarui Data"
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  <RotateCcw size={16} />
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">
+                Direktorat Pembangunan Perumahan Perdesaan ({filteredPegawai.length} dari {pegawaiList.length} Pegawai Ditampilkan)
+              </p>
+            </div>
+
+            <div className="w-full md:w-80 relative">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><Search size={18} /></span>
+              <input
+                type="text"
+                placeholder="Cari nama, NIP, sub unit kerja..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700 shadow-2xs transition-all"
+              />
+            </div>
           </div>
-          <p className="text-sm text-gray-500">
-            Direktorat Pembangunan Perumahan Perdesaan ({filteredPegawai.length} dari {pegawaiList.length} Pegawai Ditampilkan)
-          </p>
-        </div>
 
-        <div className="w-full md:w-80 relative">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><Search size={18} /></span>
-          <input
-            type="text"
-            placeholder="Cari nama, NIP, sub unit kerja..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-teal-700 shadow-2xs transition-all"
-          />
-        </div>
-      </div>
+          <div className="bg-white p-4 md:p-5 rounded-2xl border border-gray-200 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex-1 max-w-xl">
+                <label className="text-xs font-extrabold uppercase tracking-wider text-gray-700 mb-2 flex items-center gap-2">
+                  <Briefcase size={16} style={{ color: PALETTE_PKP.midnightGreen }} />
+                  <span>Filter Berdasarkan Sub Unit Kerja</span>
+                </label>
 
-      <div className="mb-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex-1 max-w-xl">
-            <label className="text-xs font-extrabold uppercase tracking-wider text-gray-700 mb-2 flex items-center gap-2">
-              <Briefcase size={16} style={{ color: PALETTE_PKP.midnightGreen }} />
-              <span>Filter Berdasarkan Sub Unit Kerja</span>
-            </label>
-
-            <div className="relative">
-              <select
-                value={selectedSubUnit}
-                onChange={(e) => setSelectedSubUnit(e.target.value)}
-                className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:bg-white transition-all cursor-pointer appearance-none"
-                style={{ focusBorderColor: PALETTE_PKP.midnightGreen }}
-              >
-                <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
-                {subUnitCategories.map((cat, idx) => {
-                  const count = pegawaiList.filter((p) => (p.SubUnitKerja || '').trim() === cat).length;
-                  return (
-                    <option key={idx} value={cat}>
-                      {cat} ({count} Pegawai)
-                    </option>
-                  );
-                })}
-              </select>
+                <div className="relative">
+                  <select
+                    value={selectedSubUnit}
+                    onChange={(e) => setSelectedSubUnit(e.target.value)}
+                    className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:bg-white transition-all cursor-pointer appearance-none"
+                    style={{ focusBorderColor: PALETTE_PKP.midnightGreen }}
+                  >
+                    <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
+                    {subUnitCategories.map((cat, idx) => {
+                      const count = pegawaiList.filter((p) => (p.SubUnitKerja || '').trim() === cat).length;
+                      return (
+                        <option key={idx} value={cat}>
+                          {cat} ({count} Pegawai)
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="text-center py-20 text-gray-500 flex items-center justify-center gap-2">
-          <div className="w-5 h-5 border-2 border-teal-800 border-t-transparent rounded-full animate-spin"></div>
-          <span>Memuat data kepegawaian...</span>
-        </div>
-      ) : filteredPegawai.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-gray-200 shadow-xs p-8">
-          <h3 className="font-extrabold text-base text-gray-900 mb-1">Pegawai Tidak Ditemukan</h3>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-6">
-          {filteredPegawai.map((item, index) => {
-            let fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
-            // Mengubah endpoint Google Drive agar gambar bisa dirender langsung tanpa error CORS
-            if (fotoUrl.includes('drive.google.com')) {
-              const match = fotoUrl.match(/id=([a-zA-Z0-9_-]+)/);
-              if (match && match[1]) {
-                fotoUrl = `https://lh3.googleusercontent.com/d/${match[1]}=s400`;
-              }
-            }
+      {/* AREA BAWAH: DAFTAR KARTU YANG BISA DIGULIR (SCROLLABLE) */}
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
+        <div className="max-w-7xl mx-auto pb-10">
+          {loading ? (
+            <div className="text-center py-20 text-gray-500 flex items-center justify-center gap-2">
+              <div className="w-5 h-5 border-2 border-teal-800 border-t-transparent rounded-full animate-spin"></div>
+              <span>Memuat data kepegawaian...</span>
+            </div>
+          ) : filteredPegawai.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-3xl border border-gray-200 shadow-xs p-8">
+              <h3 className="font-extrabold text-base text-gray-900 mb-1">Pegawai Tidak Ditemukan</h3>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-6">
+              {filteredPegawai.map((item, index) => {
+                const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+                const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
 
-            const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
+                return (
+                  <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative min-h-[220px]">
+                    
+                    {/* Garis Aksen Kiri */}
+                    <div className="w-2 hidden lg:block shrink-0 relative z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
+                    
+                    {/* Kontainer Teks Utama */}
+                    <div className="p-6 md:p-8 flex-1 flex flex-col justify-center relative z-20">
+                      
+                      {/* Bagian Atas: Nama dan Lencana */}
+                      <div className="mb-5 lg:w-[70%] pr-4">
+                        <h3 className="text-2xl font-black text-gray-900 leading-tight mb-2" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
+                          <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
+                          {item.SubUnitKerja && (
+                            <span className="px-3 py-1 rounded-full font-bold text-white shadow-xs" style={{ backgroundColor: PALETTE_PKP.darkAqua }}>
+                              {item.SubUnitKerja}
+                            </span>
+                          )}
+                          {item.KelasJabatan && (
+                            <span className="px-3 py-1 rounded-full font-bold text-gray-800 shadow-xs" style={{ backgroundColor: PALETTE_PKP.krem }}>
+                              Kelas Jabatan {item.KelasJabatan}
+                            </span>
+                          )}
+                        </div>
+                      </div>
 
-            return (
-              <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col relative min-h-[200px] transition-all hover:shadow-md">
-                
-                {/* Garis Aksen Kiri */}
-                <div className="absolute left-0 top-0 bottom-0 w-2.5 z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
-                
-                {/* Latar Belakang Foto Pegawai (Menyatu di Kanan) */}
-                {fotoUrl && (
-                  <div className="absolute right-0 top-0 bottom-0 w-48 sm:w-64 md:w-72 lg:w-80 z-0 select-none pointer-events-none">
-                    {/* Gradien dari Putih ke Transparan agar ujung kiri foto membaur mulus */}
-                    <div className="absolute inset-0 bg-gradient-to-r from-white via-white/70 to-transparent z-10"></div>
-                    {/* Layer opacity ekstra untuk melembutkan warna foto agar tidak terlalu mencolok */}
-                    <div className="absolute inset-0 bg-white/20 z-10"></div> 
-                    <img 
-                      src={fotoUrl} 
-                      alt={item.Nama} 
-                      className="w-full h-full object-cover object-top opacity-95"
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                    />
-                  </div>
-                )}
+                      {/* Garis Pemisah (Divider) yang dipotong lebarnya */}
+                      <div className="w-full lg:w-[70%] h-px bg-gray-100 mb-5 relative z-20"></div>
 
-                {/* Kontainer Utama Teks - Dibatasi lebarnya (w-[75%]) agar tidak menabrak foto di kanan */}
-                <div className="p-6 md:p-8 pl-7 md:pl-10 flex flex-col justify-center relative z-10 w-full sm:w-[80%] lg:w-[75%] xl:w-[70%]">
-                  <div className="mb-5">
-                    <h3 className="text-2xl font-black text-gray-900" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
-                    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
-                      <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
-                      {item.SubUnitKerja && (
-                        <span className="px-3 py-1 rounded-full font-bold text-white shadow-xs" style={{ backgroundColor: PALETTE_PKP.darkAqua }}>
-                          {item.SubUnitKerja}
-                        </span>
-                      )}
-                      {item.KelasJabatan && (
-                        <span className="px-3 py-1 rounded-full font-bold text-gray-800 shadow-xs" style={{ backgroundColor: PALETTE_PKP.krem }}>
-                          Kelas Jabatan {item.KelasJabatan}
-                        </span>
-                      )}
+                      {/* Bagian Bawah: Data Struktural dengan jarak yang diperlebar */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-10 gap-y-6 text-sm relative z-20 lg:w-[70%]">
+                        <div>
+                          <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Jabatan</p>
+                          <p className="font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Email</p>
+                          <p className="font-bold text-gray-800 leading-snug break-words">{item.EmailDinas || '-'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Atasan Langsung</p>
+                          <p className="font-bold text-gray-800 leading-snug mb-1">{item.AtasanLangsung || '-'}</p>
+                          <p className="text-[11px] text-gray-400 font-medium leading-relaxed">{item.JabatanAtasan || ''}</p>
+                        </div>
+                        {hasTukin && (
+                          <div className="sm:col-span-2 lg:col-span-3 pt-2">
+                            <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Besaran Tunjangan Kinerja</p>
+                            <p className="font-black text-lg tracking-tight" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Tukin}</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Garis Pemisah (Hanya sepanjang kontainer teks, tidak menimpa foto) */}
-                  <div className="w-full h-px bg-gray-200 mb-5"></div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5 text-sm">
-                    <div>
-                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Jabatan</p>
-                      <p className="font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Email</p>
-                      <p className="font-bold text-gray-800 leading-snug">{item.EmailDinas || '-'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Atasan Langsung</p>
-                      <p className="font-bold text-gray-800 leading-snug mb-0.5">{item.AtasanLangsung || '-'}</p>
-                      <p className="text-xs text-gray-400 font-medium leading-tight">{item.JabatanAtasan || ''}</p>
-                    </div>
-                    {hasTukin && (
-                      <div className="sm:col-span-2 lg:col-span-3 mt-1">
-                        <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1">Besaran Tunjangan Kinerja</p>
-                        <p className="font-black text-lg tracking-tight" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Tukin}</p>
+                    {fotoUrl && (
+                      <div className="w-full lg:absolute right-0 top-0 bottom-0 lg:w-[35%] xl:w-[30%] h-64 lg:h-auto shrink-0 overflow-hidden select-none pointer-events-none z-0">
+                        {/* Gradien pemudar dari kiri agar foto membaur mulus */}
+                        <div className="hidden lg:block absolute inset-y-0 left-0 w-40 bg-gradient-to-r from-white via-white/80 to-transparent z-10"></div>
+                        <div className="lg:hidden absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-white via-white/90 to-transparent z-10"></div>
+                        
+                        {/* Filter warna untuk menurunkan opasitas & ketajaman foto */}
+                        <div className="absolute inset-0 z-0 mix-blend-multiply opacity-20 transition-opacity" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
+                        
+                        {/* Gambar dengan opasitas 60% agar membaur sebagai latar belakang */}
+                        <img 
+                          src={fotoUrl} 
+                          alt={item.Nama} 
+                          className="w-full h-full object-cover object-top opacity-60 relative z-0 transition-opacity" 
+                          onError={(e) => { e.target.style.display = 'none'; }}
+                        />
                       </div>
                     )}
                   </div>
-                </div>
-
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
@@ -1657,14 +1666,26 @@ export default function App() {
         </div>
       )}
 
-      {!isDashboardView && (
+      {!isDashboardView && currentView !== 'profile' && (
         <Header
           navigate={navigate}
           loggedInUser={loggedInUser}
           onLogoutRequest={() => setShowLogoutModal(true)}
         />
       )}
-      <main>{renderView()}</main>
+      
+      {currentView === 'profile' ? (
+        <div className="flex flex-col h-screen">
+          <Header
+            navigate={navigate}
+            loggedInUser={loggedInUser}
+            onLogoutRequest={() => setShowLogoutModal(true)}
+          />
+          <main className="flex-1 overflow-hidden">{renderView()}</main>
+        </div>
+      ) : (
+        <main>{renderView()}</main>
+      )}
     </div>
   );
 }
