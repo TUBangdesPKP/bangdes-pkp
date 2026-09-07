@@ -36,13 +36,30 @@ const PALETTE_PKP = {
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG3IhQ1X2s2n0h44yRhRQuW9tQtxxiXfnUNiQicfpJBGbQwrApYlXw/exec";
 
+// Ekstraktor ID file Google Drive yang mengenali semua variasi link maupun ID mentah
+const extractDriveId = (url) => {
+  if (!url) return '';
+  const cleanUrl = url.toString().trim().replace(/^["']|["']$/g, '');
+  // Jika isi sel di spreadsheet langsung berupa ID file Google Drive murni
+  if (/^[a-zA-Z0-9_-]{25,}$/.test(cleanUrl) && !cleanUrl.includes('/') && !cleanUrl.includes('.')) {
+    return cleanUrl;
+  }
+  const match = cleanUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || 
+                cleanUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/) ||
+                cleanUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
+                cleanUrl.match(/\/open\?id=([a-zA-Z0-9_-]+)/) ||
+                cleanUrl.match(/id=([a-zA-Z0-9_-]+)/);
+  return match && match[1] ? match[1] : '';
+};
+
 const getDriveDirectUrl = (url) => {
   if (!url) return '';
-  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://lh3.googleusercontent.com/d/${match[1]}=s600`;
+  const fileId = extractDriveId(url);
+  if (fileId) {
+    // Endpoint utama berkecepatan tinggi
+    return `https://lh3.googleusercontent.com/d/${fileId}=s800`;
   }
-  return url;
+  return url.toString().trim();
 };
 
 const normalizePegawai = (item) => {
@@ -61,7 +78,7 @@ const normalizePegawai = (item) => {
     EmailDinas: normalized.emaildinas || normalized.email || '',
     AtasanLangsung: normalized.atasanlangsung || normalized.atasan || '',
     JabatanAtasan: normalized.jabatanatasanlangsung || normalized.jabatanatasan || '',
-    Foto_Pegawai: normalized.fotopegawai || normalized.foto || '',
+    Foto_Pegawai: normalized.fotopegawai || normalized.foto || normalized.linkfoto || normalized.urlfoto || normalized.fotoprofil || normalized.photo || normalized.image || '',
     PIN: normalized.pin || '',
     Tukin: normalized.tunjangankinerja || normalized.tukin || '',
     Akun_Role: normalized.akunrole || normalized.role || 'pegawai'
@@ -269,21 +286,72 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
       lokasiDatang: datang !== '-' ? lokasiDatang : '-',
       pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
       lokasiPulang: (pulang !== datang || times.length > 1) ? lokasiPulang : '-',
-      keterangan: status === '-' && datang !== '-' ? 'WFO' : status
+      keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
+      _dateObj: parseIndoDate(dateKey)
     });
   }
 
-  rows.sort((a, b) => parseIndoDate(a.tanggal) - parseIndoDate(b.tanggal));
+  // MENGUBAH URUTAN SORTING MENJADI DESCENDING (TANGGAL TERBARU DI ATAS)
+  rows.sort((a, b) => b._dateObj - a._dateObj);
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
 
   let isDateValid = true;
-  if (expectedPeriodEvent && periode !== '-') {
-    const compactExpected = expectedPeriodEvent.replace(/\s+/g, '');
-    const compactActual = periode.replace(/\s+/g, '');
-    if (compactActual !== compactExpected) {
-      isDateValid = false;
+  let extractedStartStr = '-';
+  let extractedEndStr = '-';
+
+  if (rows.length > 0) {
+    // KARENA URUTANNYA SUDAH DIBALIK (DESC), 
+    // Tanggal pertama di tabel (rows[0]) SEKARANG ADALAH TANGGAL TERAKHIR (lastDate)
+    // Tanggal terakhir di tabel (rows[rows.length - 1]) SEKARANG ADALAH TANGGAL AWAL (firstDate)
+    const lastDate = rows[0]._dateObj;
+    const firstDate = rows[rows.length - 1]._dateObj;
+    
+    const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth()+1).padStart(2, '0')}-${d.getFullYear()}`;
+    extractedStartStr = fmt(firstDate);
+    extractedEndStr = fmt(lastDate);
+    
+    // SELALU timpa nilai `periode` dengan tanggal aktual dari isi tabel, jangan percayai header PDF
+    periode = `${extractedStartStr} s/d ${extractedEndStr}`;
+
+    if (expectedPeriodEvent) {
+      const parts = expectedPeriodEvent.match(/(\d{2})-(\d{2})-(\d{4})\s*s\/d\s*(\d{2})-(\d{2})-(\d{4})/);
+      if (parts) {
+        const expectedStart = new Date(parseInt(parts[3]), parseInt(parts[2])-1, parseInt(parts[1]));
+        const expectedEnd = new Date(parseInt(parts[6]), parseInt(parts[5])-1, parseInt(parts[4]));
+
+        // VALIDASI KETAT (STRICT MATCH):
+        // File PDF HARUS memiliki bulan dan tahun yang sama persis dengan yang diminta.
+        // Kita bandingkan secara logis apakah data PDF berada dalam payung bulan/tahun yang sama dengan event.
+        
+        // 1. Cek Tahun
+        const isSameYear = firstDate.getFullYear() === expectedStart.getFullYear() && lastDate.getFullYear() === expectedEnd.getFullYear();
+        
+        // 2. Cek Bulan
+        // Untuk Uang Makan (awal bulan s.d akhir bulan), ini simpel.
+        // Untuk Tukin (lintas bulan misal 11 Jan s.d 10 Feb), kita harus memastikan rentangnya tidak jauh melenceng.
+        // Cara paling aman adalah memastikan bahwa nilai numerik waktunya berada BERDEKATAN atau BERSINGGUNGAN KUAT dengan event.
+        
+        // Jika rentang PDF tidak memiliki persilangan SAMA SEKALI dengan rentang Event, maka SALAH.
+        // (Misal PDF 1-31 Juli, Event 1-31 Agustus. PDF berakhir sebelum Event dimulai).
+        if (lastDate < expectedStart || firstDate > expectedEnd) {
+          isDateValid = false;
+        } else {
+           // Tambahan pengaman: Jika rentang PDF meleset lebih dari 10 hari dari target event, tolak.
+           // Ini untuk mencegah kasus di mana PDF berisi tanggal 31 Juli, tapi dimasukkan ke event 1-31 Agustus
+           // secara teknis mereka tidak bersilangan, namun jika selisihnya terlalu jauh, tolak.
+           const startDiffDays = Math.abs((firstDate - expectedStart) / (1000 * 60 * 60 * 24));
+           const endDiffDays = Math.abs((lastDate - expectedEnd) / (1000 * 60 * 60 * 24));
+           
+           // Jika file PDF yang diupload meleset lebih dari 10 hari pada tanggal mulainya atau tanggal akhirnya, dianggap beda bulan/periode.
+           if (startDiffDays > 10 || endDiffDays > 10) {
+              isDateValid = false;
+           }
+        }
+      }
     }
+  } else {
+    isDateValid = false; // Jika tidak ada data yang terbaca sama sekali
   }
 
   return {
@@ -1510,7 +1578,9 @@ const ProfileView = ({ navigate }) => {
           ) : (
             <div className="flex flex-col gap-6">
               {filteredPegawai.map((item, index) => {
-                const fotoUrl = getDriveDirectUrl(item.Foto_Pegawai || '');
+                const rawFoto = item.Foto_Pegawai || '';
+                const fileId = extractDriveId(rawFoto);
+                const fotoUrl = getDriveDirectUrl(rawFoto);
                 const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
 
                 return (
@@ -1576,12 +1646,22 @@ const ProfileView = ({ navigate }) => {
                         {/* Filter warna untuk menurunkan opasitas & ketajaman foto */}
                         <div className="absolute inset-0 z-0 mix-blend-multiply opacity-20 transition-opacity" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
                         
-                        {/* Gambar dengan opasitas 60% agar membaur sebagai latar belakang */}
+                        {/* Gambar dengan fallback 3 lapis jika salah satu endpoint Google gagal memuat */}
                         <img 
                           src={fotoUrl} 
                           alt={item.Nama} 
                           className="w-full h-full object-cover object-top opacity-60 relative z-0 transition-opacity" 
-                          onError={(e) => { e.target.style.display = 'none'; }}
+                          onError={(e) => {
+                            if (fileId && !e.target.dataset.triedFallback1) {
+                              e.target.dataset.triedFallback1 = 'true';
+                              e.target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
+                            } else if (fileId && !e.target.dataset.triedFallback2) {
+                              e.target.dataset.triedFallback2 = 'true';
+                              e.target.src = `https://drive.google.com/uc?export=view&id=${fileId}`;
+                            } else {
+                              e.target.style.display = 'none';
+                            }
+                          }}
                         />
                       </div>
                     )}
