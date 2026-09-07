@@ -64,7 +64,9 @@ const normalizePegawai = (item) => {
   const normalized = {};
   for (const [key, value] of Object.entries(item)) {
     const cleanKey = key.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    normalized[cleanKey] = typeof value === 'string' ? value.trim() : (value ?? '');
+    // FITUR KRUSIAL: Memaksa semua data dari Spreadsheet menjadi String
+    // Mencegah error NIP angka vs NIP teks
+    normalized[cleanKey] = value !== null && value !== undefined ? String(value).trim() : '';
   }
   return {
     NIP: normalized.nip || '',
@@ -152,6 +154,7 @@ const parseIndoDate = (dateString) => {
 const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
   const fileName = file.name.toLowerCase();
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+  let fullText = '';
   let lines = [];
 
   if (isExcel) {
@@ -187,6 +190,7 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
       });
       return l;
     });
+    fullText = lines.join('\n');
 
   } else if (fileName.endsWith('.pdf')) {
     if (!window.pdfjsLib) {
@@ -204,7 +208,7 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     
-    // Solusi Jalan Tengah: Kumpulkan semua teks per halaman, lalu gabungkan token jam dan tanggal yang berdekatan
+    // Y-Coordinate Clustering: Mencegah column-mashing eOffice
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
@@ -215,34 +219,31 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
           y: item.transform[5]
       })).filter(item => item.str);
 
-      // Kelompokkan berdasarkan koordinat y (baris) dengan toleransi 14px
       items.sort((a, b) => b.y - a.y);
-      let rowGroups = [];
-      let currentRow = [];
-      let lastY = items.length > 0 ? items[0].y : 0;
 
+      let currentLine = [];
+      let currentY = items.length > 0 ? items[0].y : 0;
+      
       for (const item of items) {
-        if (Math.abs(item.y - lastY) < 14) {
-          currentRow.push(item);
-        } else {
-          currentRow.sort((a, b) => a.x - b.x);
-          rowGroups.push(currentRow.map(it => it.str).join('   '));
-          currentRow = [item];
-          lastY = item.y;
-        }
+          if (Math.abs(item.y - currentY) < 12) { 
+              currentLine.push(item);
+          } else {
+              currentLine.sort((a, b) => a.x - b.x);
+              lines.push(currentLine.map(i => i.str).join(' '));
+              currentLine = [item];
+              currentY = item.y;
+          }
       }
-      if (currentRow.length > 0) {
-        currentRow.sort((a, b) => a.x - b.x);
-        rowGroups.push(currentRow.map(it => it.str).join('   '));
+      if (currentLine.length > 0) {
+          currentLine.sort((a, b) => a.x - b.x);
+          lines.push(currentLine.map(i => i.str).join(' '));
       }
-      lines = lines.concat(rowGroups);
     }
+    fullText = lines.join('\n');
   } else {
     throw new Error('Format dokumen tidak didukung.');
   }
 
-  // Gabungkan seluruh teks untuk ekstraksi NIP
-  const fullText = lines.join(' ');
   const nipMatch = fullText.replace(/\s+/g, '').match(/(\d{18})/);
   let nip = nipMatch ? nipMatch[1] : '-';
   let cleanNama = 'Pegawai';
@@ -279,7 +280,6 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
   const rows = [];
   const seenDates = new Set();
   
-  // Mencari baris yang mengandung tanggal valid di setiap baris dokumen
   for (const line of lines) {
     const dateMatch = line.match(/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i);
     if (!dateMatch) continue;
@@ -296,21 +296,20 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
        hari = days[dateObj.getDay()];
     }
     
+    // Membuang tanggal anomali yang keluar dari bulan periode
     if (expectedStartObj && expectedEndObj) {
         const minValidDate = new Date(expectedStartObj.getTime() - (5 * 24 * 60 * 60 * 1000));
         const maxValidDate = new Date(expectedEndObj.getTime() + (5 * 24 * 60 * 60 * 1000));
         if (dateObj < minValidDate || dateObj > maxValidDate) {
-            continue; // Abaikan tanggal cetak atau anomali di luar bulan
+            continue; 
         }
     }
     
     if (seenDates.has(dateKey)) continue;
     seenDates.add(dateKey);
     
-    // Ekstraksi waktu jam masuk & pulang dari baris tersebut
     const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)].map(m => m[1]);
     const datang = times[0] || '-';
-    // Jika ada jam kedua, jadikan pulang. Jika tidak ada dan hari kerja, samakan dengan datang atau beri '-'
     const pulang = times.length > 1 ? times[1] : (times[0] && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0] : '-');
     
     let lokasiDatang = '-';
@@ -358,7 +357,7 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     });
   }
 
-  // Urutan Descending (Tanggal Terbaru di Atas)
+  // Descending sort
   rows.sort((a, b) => b._dateObj - a._dateObj);
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
@@ -568,7 +567,12 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       return;
     }
 
-    const sheetPin = (targetUser?.PIN || '').toString().trim();
+    // Melindungi PIN yang diawali angka 0
+    let sheetPin = String(targetUser?.PIN || '').trim();
+    if (sheetPin.length > 0 && sheetPin.length < 6) {
+      sheetPin = sheetPin.padStart(6, '0'); 
+    }
+
     if (sheetPin === pinToVerify || pinToVerify === '123456') {
       setLoading(false);
       onLoginSuccess(targetUser);
@@ -612,7 +616,8 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
         return;
       }
 
-      const found = data.find(item => item.NIP === inputNip);
+      // Pastikan pencarian menganggap NIP di database murni sebagai String teks
+      const found = data.find(item => String(item.NIP).trim() === inputNip);
       if (found) {
         setTargetUser(found);
         setPinDigits(['', '', '', '', '', '']);
@@ -623,7 +628,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       }
     } catch (err) {
       console.error(err);
-      setMessage({ type: 'error', text: 'Gagal terhubung ke database. Silakan coba kembali.' });
+      setMessage({ type: 'error', text: 'Pastikan Izin Akses Google Apps Script diatur ke "Anyone".' });
     } finally {
       setLoading(false);
     }
@@ -885,6 +890,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [parsedData, setParsedData] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
+  
+  // State indikator tergembok (terkunci) yang menandakan data sudah ada
+  const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
 
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -938,6 +946,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setSubmitResult(null);
     setIsParsing(false);
     setIsSubmitting(false);
+    setIsAlreadyUploaded(false); 
   };
 
   const handleClearFile = (e) => {
@@ -948,6 +957,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setParsedData(null);
     setSubmitResult(null);
     setIsParsing(false);
+    setIsAlreadyUploaded(false); 
   };
 
   const handleFileChange = async (e) => {
@@ -956,13 +966,23 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setSelectedFile(file);
       setSubmitResult(null);
       setIsParsing(true);
+      setIsAlreadyUploaded(false);
 
       try {
         const result = await parseDocumentPresensi(file, selectedPeriod?.periodeEvent);
         setParsedData(result);
+        
+        // Pengecekan Riwayat: Kunci UI jika pernah diproses untuk periode tersebut
+        if (result && result.isValid) {
+          const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
+          const cacheKey = `uploaded_${expectedNip}_${activeTab}_${result.periodeFolder}`;
+          if (localStorage.getItem(cacheKey)) {
+            setIsAlreadyUploaded(true);
+          }
+        }
       } catch (err) {
         console.error("Gagal membaca dokumen:", err);
-        alert("Gagal membaca struktur dokumen presensi. Pastikan file berformat PDF atau Excel yang sah.");
+        alert("Gagal membaca struktur dokumen presensi. Pastikan file bukan hasil scan atau foto.");
         setSelectedFile(null);
         setParsedData(null);
       } finally {
@@ -990,14 +1010,40 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setIsSubmitting(true);
     try {
       const base64Data = await fileToBase64(selectedFile);
+      
+      // MERAKIT DATA SESUAI FORMAT SPREADSHEET (KOLOM A SAMPAI X)
+      const sheetData = parsedData.rows.map((row, index) => {
+        const y = row._dateObj.getFullYear();
+        const m = String(row._dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(row._dateObj.getDate()).padStart(2, '0');
+        const formattedDate = `${y}-${m}-${d}`; 
+
+        const rowData = new Array(24).fill(""); 
+        
+        rowData[0] = index + 1;         // Kolom A: No
+        rowData[1] = row.hari;          // Kolom B: Hari
+        rowData[2] = formattedDate;     // Kolom C: Tanggal (yyyy-mm-dd)
+        rowData[3] = row.datang;        // Kolom D: Masuk
+        rowData[4] = row.pulang;        // Kolom E: Keluar
+        rowData[21] = row.keterangan;   // Kolom V: Keterangan / Status
+        rowData[22] = row.lokasiDatang; // Kolom W: Lokasi Datang
+        rowData[23] = row.lokasiPulang; // Kolom X: Lokasi Pulang
+
+        return rowData;
+      });
+
+      const nipForPayload = parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
+      const bulanTahunForPayload = parsedData.periodeFolder || selectedPeriod?.periodeFolder || 'Periode_2026-08';
+
       const payload = {
         modul: activeTab,
-        nip: parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP,
+        nip: nipForPayload,
         nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
         periode: parsedData.periode || selectedPeriod?.periodeEvent || '',
-        bulanTahun: parsedData.periodeFolder || selectedPeriod?.periodeFolder || 'Periode_2026-08',
+        bulanTahun: bulanTahunForPayload,
         fileName: selectedFile.name,
         fileBase64: base64Data,
+        sheetData: sheetData,
         ringkasan: {
           totalHariKalender: parsedData.expectedDays,
           totalHariMasuk: parsedData.totalHariMasuk,
@@ -1015,7 +1061,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
       const json = await res.json();
       if (json.status === 'success') {
-        setSubmitResult({ type: 'success', message: 'Data dan dokumen berhasil disimpan ke Google Drive & Database!', url: json.fileUrl });
+        const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
+        localStorage.setItem(cacheKey, 'true');
+        
+        setSubmitResult({ 
+          type: 'success', 
+          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
+          url: json.folderUrl 
+        });
+        
+        setIsAlreadyUploaded(true);
+        setSelectedFile(null);
+        const fileInput = document.getElementById('pdf-upload-input');
+        if (fileInput) fileInput.value = '';
+        
       } else {
         throw new Error(json.message || 'Gagal menyimpan data');
       }
@@ -1275,8 +1334,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       <p className="text-xs text-gray-600 leading-relaxed font-normal">Upload file bukti presensi:</p>
                       <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
                         <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
-                        <li>• Format yang diterima: <strong>PDF Riwayat Presensi</strong></li>
-                        <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong> di Spreadsheet</li>
+                        <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
+                        <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
                       </ul>
                     </div>
 
@@ -1288,13 +1347,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <input 
                             id="pdf-upload-input"
                             type="file" 
-                            accept=".pdf"
+                            accept=".pdf, .xlsx, .xls"
                             onChange={handleFileChange}
                             className="hidden"
                           />
                         </label>
                         <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
-                          {selectedFile ? selectedFile.name : 'Pilih berkas PDF...'}
+                          {selectedFile ? selectedFile.name : 'Pilih berkas...'}
                         </span>
                         {selectedFile && (
                           <button 
@@ -1323,12 +1382,23 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       </div>
                     )}
 
+                    {/* Indikator Peringatan Terkunci */}
+                    {isAlreadyUploaded && !submitResult && selectedFile && (
+                      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm animate-in fade-in zoom-in duration-300">
+                        <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
+                          <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
+                        </div>
+                      </div>
+                    )}
+
                     {parsedData && !parsedData.isValid && (
                       <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2">
                         <AlertCircle size={18} className="shrink-0 text-red-600" />
                         <span>
                           {parsedData.isDateMismatch 
-                            ? `Periode file PDF (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
+                            ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
                             : 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.'}
                         </span>
                       </div>
@@ -1350,16 +1420,16 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
                     <button 
                       onClick={handleUploadSubmit}
-                      disabled={!parsedData || !parsedData.isValid || isSubmitting}
+                      disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
                       className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                        parsedData && parsedData.isValid && !isSubmitting
+                        parsedData && parsedData.isValid && !isSubmitting && selectedFile
                           ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
                           : 'opacity-40 cursor-not-allowed'
                       }`}
-                      style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                      style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
                     >
                       <UploadCloud size={16} />
-                      {isSubmitting ? 'Menyimpan ke Server...' : 'Proses & Simpan Bukti'}
+                      {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
                     </button>
                   </div>
 
@@ -1381,7 +1451,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <span>⚠️ Periode File Tidak Sesuai</span>
                         </div>
                         <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
-                          PDF: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
+                          File: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
                         </div>
                       </div>
                     ) : null}
@@ -1390,7 +1460,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
                           <h3 className="text-sm font-black text-gray-900">Preview Data Presensi</h3>
-                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file PDF.</p>
+                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
                         </div>
                         <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
                           <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
@@ -1415,23 +1485,30 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
                             {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
                               parsedData.rows.map((row, idx) => (
-                                <tr key={idx} className={row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors'}>
-                                  <td className="py-3 px-3.5 font-bold text-gray-900 whitespace-nowrap">{row.tanggal}</td>
+                                /* Grayscale effect when locked */
+                                <tr key={idx} className={isAlreadyUploaded && !submitResult ? 'bg-gray-50 text-gray-400 opacity-80 grayscale' : (row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors')}>
+                                  <td className="py-3 px-3.5 font-bold whitespace-nowrap">{row.tanggal}</td>
                                   <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.datang}</td>
-                                  <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiDatang}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : 'text-gray-400'}`}>{row.pulang}</td>
-                                  <td className="py-3 px-3 text-[10px] leading-relaxed text-gray-600">{row.lokasiPulang}</td>
+                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : ''}`}>{row.datang}</td>
+                                  <td className="py-3 px-3 text-[10px] leading-relaxed">{row.lokasiDatang}</td>
+                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : ''}`}>{row.pulang}</td>
+                                  <td className="py-3 px-3 text-[10px] leading-relaxed">{row.lokasiPulang}</td>
                                   <td className="py-3 px-3 text-center whitespace-nowrap">
-                                    <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
-                                      row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
-                                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                        : row.keterangan === 'Libur' 
-                                        ? 'bg-gray-100 text-gray-400' 
-                                        : 'bg-amber-50 text-amber-800 border border-amber-200'
-                                    }`}>
-                                      {row.keterangan}
-                                    </span>
+                                    {isAlreadyUploaded && !submitResult ? (
+                                      <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
+                                        TERKUNCI
+                                      </span>
+                                    ) : (
+                                      <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
+                                        row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
+                                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                          : row.keterangan === 'Libur' 
+                                          ? 'bg-gray-100 text-gray-400' 
+                                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                                      }`}>
+                                        {row.keterangan}
+                                      </span>
+                                    )}
                                   </td>
                                 </tr>
                               ))
@@ -1442,7 +1519,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                     <FileText size={32} />
                                     <div>
                                       <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
-                                      <p className="text-xs">Silakan unggah dokumen PDF Riwayat Presensi Anda<br/>melalui panel di sebelah kiri.</p>
+                                      <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
                                     </div>
                                   </div>
                                 </td>
@@ -1583,7 +1660,6 @@ const ProfileView = ({ navigate }) => {
                     value={selectedSubUnit}
                     onChange={(e) => setSelectedSubUnit(e.target.value)}
                     className="w-full pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs md:text-sm font-semibold text-gray-800 focus:outline-none focus:bg-white transition-all cursor-pointer appearance-none"
-                    style={{ focusBorderColor: PALETTE_PKP.midnightGreen }}
                   >
                     <option value="ALL">Semua Sub Unit Kerja (Tanpa Filter) — {pegawaiList.length} Pegawai</option>
                     {subUnitCategories.map((cat, idx) => {
@@ -1623,11 +1699,9 @@ const ProfileView = ({ navigate }) => {
 
                 return (
                   <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative min-h-[220px]">
-                    
                     <div className="w-2 hidden lg:block shrink-0 relative z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
                     
                     <div className="p-6 md:p-8 flex-1 flex flex-col justify-center relative z-20">
-                      
                       <div className="mb-5 lg:w-[70%] pr-4">
                         <h3 className="text-2xl font-black text-gray-900 leading-tight mb-2" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
                         <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
@@ -1674,9 +1748,7 @@ const ProfileView = ({ navigate }) => {
                       <div className="w-full lg:absolute right-0 top-0 bottom-0 lg:w-[35%] xl:w-[30%] h-64 lg:h-auto shrink-0 overflow-hidden select-none pointer-events-none z-0">
                         <div className="hidden lg:block absolute inset-y-0 left-0 w-40 bg-gradient-to-r from-white via-white/80 to-transparent z-10"></div>
                         <div className="lg:hidden absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-white via-white/90 to-transparent z-10"></div>
-                        
                         <div className="absolute inset-0 z-0 mix-blend-multiply opacity-20 transition-opacity" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
-                        
                         <img 
                           src={fotoUrl} 
                           alt={item.Nama} 
@@ -1723,10 +1795,7 @@ export default function App() {
 
   useEffect(() => {
     fetchPegawaiData(false);
-
-    const handleHashChange = () => {
-      setRouteData(getHashData());
-    };
+    const handleHashChange = () => setRouteData(getHashData());
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
