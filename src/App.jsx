@@ -36,11 +36,9 @@ const PALETTE_PKP = {
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG3IhQ1X2s2n0h44yRhRQuW9tQtxxiXfnUNiQicfpJBGbQwrApYlXw/exec";
 
-// Ekstraktor ID file Google Drive yang mengenali semua variasi link maupun ID mentah
 const extractDriveId = (url) => {
   if (!url) return '';
   const cleanUrl = url.toString().trim().replace(/^["']|["']$/g, '');
-  // Jika isi sel di spreadsheet langsung berupa ID file Google Drive murni
   if (/^[a-zA-Z0-9_-]{25,}$/.test(cleanUrl) && !cleanUrl.includes('/') && !cleanUrl.includes('.')) {
     return cleanUrl;
   }
@@ -56,7 +54,6 @@ const getDriveDirectUrl = (url) => {
   if (!url) return '';
   const fileId = extractDriveId(url);
   if (fileId) {
-    // Endpoint utama berkecepatan tinggi
     return `https://lh3.googleusercontent.com/d/${fileId}=s800`;
   }
   return url.toString().trim();
@@ -152,32 +149,101 @@ const parseIndoDate = (dateString) => {
   return new Date(year, month, day);
 };
 
-const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
-  if (!window.pdfjsLib) {
-    await new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-      script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        resolve();
-      };
-      script.onerror = reject;
-      document.head.appendChild(script);
+const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
+  const fileName = file.name.toLowerCase();
+  const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+  let lines = [];
+
+  if (isExcel) {
+    if (!window.XLSX) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = window.XLSX.read(arrayBuffer, { type: 'array', cellDates: true, dateNF: 'dd/mm/yyyy' });
+    
+    workbook.SheetNames.forEach(sheetName => {
+      const sheet = workbook.Sheets[sheetName];
+      const csv = window.XLSX.utils.sheet_to_csv(sheet, { FS: ' ' }); 
+      lines = lines.concat(csv.split('\n'));
     });
+    
+    const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    lines = lines.map(line => {
+      let l = line.replace(/\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/g, (match, d, m, y) => {
+        const monthIdx = parseInt(m, 10) - 1;
+        if (monthIdx >= 0 && monthIdx < 12) return `${parseInt(d, 10)} ${months[monthIdx]} ${y}`;
+        return match;
+      });
+      l = l.replace(/\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/g, (match, y, m, d) => {
+        const monthIdx = parseInt(m, 10) - 1;
+        if (monthIdx >= 0 && monthIdx < 12) return `${parseInt(d, 10)} ${months[monthIdx]} ${y}`;
+        return match;
+      });
+      return l;
+    });
+
+  } else if (fileName.endsWith('.pdf')) {
+    if (!window.pdfjsLib) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          resolve();
+        };
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    // Solusi Jalan Tengah: Kumpulkan semua teks per halaman, lalu gabungkan token jam dan tanggal yang berdekatan
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      
+      const items = textContent.items.map(item => ({
+          str: item.str.trim(),
+          x: item.transform[4],
+          y: item.transform[5]
+      })).filter(item => item.str);
+
+      // Kelompokkan berdasarkan koordinat y (baris) dengan toleransi 14px
+      items.sort((a, b) => b.y - a.y);
+      let rowGroups = [];
+      let currentRow = [];
+      let lastY = items.length > 0 ? items[0].y : 0;
+
+      for (const item of items) {
+        if (Math.abs(item.y - lastY) < 14) {
+          currentRow.push(item);
+        } else {
+          currentRow.sort((a, b) => a.x - b.x);
+          rowGroups.push(currentRow.map(it => it.str).join('   '));
+          currentRow = [item];
+          lastY = item.y;
+        }
+      }
+      if (currentRow.length > 0) {
+        currentRow.sort((a, b) => a.x - b.x);
+        rowGroups.push(currentRow.map(it => it.str).join('   '));
+      }
+      lines = lines.concat(rowGroups);
+    }
+  } else {
+    throw new Error('Format dokumen tidak didukung.');
   }
 
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = '';
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageString = textContent.items.map(item => item.str).join(' ');
-    fullText += ' ' + pageString;
-  }
-
-  const nipMatch = fullText.match(/(\d{18})/);
+  // Gabungkan seluruh teks untuk ekstraksi NIP
+  const fullText = lines.join(' ');
+  const nipMatch = fullText.replace(/\s+/g, '').match(/(\d{18})/);
   let nip = nipMatch ? nipMatch[1] : '-';
   let cleanNama = 'Pegawai';
 
@@ -196,102 +262,103 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
     }
   }
 
-  const periodPattern = /(\d{2})\s*[-/]\s*(\d{2})\s*[-/]\s*(\d{4})\s*[a-zA-Z/]+\s*(\d{2})\s*[-/]\s*(\d{2})\s*[-/]\s*(\d{4})/;
-  const periodeMatch = fullText.match(periodPattern);
-
   let periode = '-';
   let expectedDays = 31;
   let periodeFolder = 'Periode_2026-08';
-
-  if (periodeMatch) {
-    periode = `${periodeMatch[1]}-${periodeMatch[2]}-${periodeMatch[3]} s/d ${periodeMatch[4]}-${periodeMatch[5]}-${periodeMatch[6]}`;
-    const month = parseInt(periodeMatch[2], 10);
-    const year = parseInt(periodeMatch[3], 10);
-    expectedDays = new Date(year, month, 0).getDate();
-    periodeFolder = `Periode_${year}-${String(month).padStart(2, '0')}`;
-  } else {
-    if (expectedPeriodEvent) {
-      periode = expectedPeriodEvent;
-      const parts = expectedPeriodEvent.match(/(\d{2})-(\d{2})-(\d{4})/);
-      if (parts) {
-        const month = parseInt(parts[2], 10);
-        const year = parseInt(parts[3], 10);
-        expectedDays = new Date(year, month, 0).getDate();
-        periodeFolder = `Periode_${year}-${String(month).padStart(2, '0')}`;
-      }
+  
+  let expectedStartObj = null;
+  let expectedEndObj = null;
+  if (expectedPeriodEvent) {
+    const parts = expectedPeriodEvent.match(/(\d{2})-(\d{2})-(\d{4})\s*s\/d\s*(\d{2})-(\d{2})-(\d{4})/);
+    if (parts) {
+      expectedStartObj = new Date(parseInt(parts[3]), parseInt(parts[2])-1, parseInt(parts[1]));
+      expectedEndObj = new Date(parseInt(parts[6]), parseInt(parts[5])-1, parseInt(parts[4]));
     }
   }
 
   const rows = [];
-  const datePattern = /(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu),\s*(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/gi;
-  const matches = [...fullText.matchAll(datePattern)];
-
   const seenDates = new Set();
-  for (let i = 0; i < matches.length; i++) {
-    const match = matches[i];
-    const hari = match[1];
-    const tgl = match[2];
-    const bln = match[3];
-    const thn = match[4];
+  
+  // Mencari baris yang mengandung tanggal valid di setiap baris dokumen
+  for (const line of lines) {
+    const dateMatch = line.match(/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i);
+    if (!dateMatch) continue;
+    
+    let hari = dateMatch[1];
+    const tgl = dateMatch[2];
+    const bln = dateMatch[3];
+    const thn = dateMatch[4];
     const dateKey = `${tgl} ${bln.slice(0, 3)} ${thn}`;
-
+    const dateObj = parseIndoDate(dateKey);
+    
+    if (!hari) {
+       const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+       hari = days[dateObj.getDay()];
+    }
+    
+    if (expectedStartObj && expectedEndObj) {
+        const minValidDate = new Date(expectedStartObj.getTime() - (5 * 24 * 60 * 60 * 1000));
+        const maxValidDate = new Date(expectedEndObj.getTime() + (5 * 24 * 60 * 60 * 1000));
+        if (dateObj < minValidDate || dateObj > maxValidDate) {
+            continue; // Abaikan tanggal cetak atau anomali di luar bulan
+        }
+    }
+    
     if (seenDates.has(dateKey)) continue;
     seenDates.add(dateKey);
-
-    const startIndex = match.index;
-    const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : fullText.length;
-    const block = fullText.substring(startIndex, endIndex);
-
-    const times = [...block.matchAll(/(\d{2}:\d{2})\s*WIB/g)].map(m => m[1]);
+    
+    // Ekstraksi waktu jam masuk & pulang dari baris tersebut
+    const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)].map(m => m[1]);
     const datang = times[0] || '-';
+    // Jika ada jam kedua, jadikan pulang. Jika tidak ada dan hari kerja, samakan dengan datang atau beri '-'
     const pulang = times.length > 1 ? times[1] : (times[0] && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0] : '-');
-
-    const cleanLocation = (text) => {
-      if (!text || text === '-') return '-';
-      let cleaned = text.replace(/\b\d{2}:\d{2}\b/g, '').replace(/\bWIB\b/g, '').trim();
-      cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '').replace(/\b\d+\b/g, '').trim();
-      cleaned = cleaned.replace(/\s+/g, ' ');
-      if (!cleaned || cleaned.length < 2) return '-';
-      const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP'];
-      for (const loc of knownLocs) {
-        if (cleaned.includes(loc)) return loc;
-      }
-      return cleaned.length > 25 ? 'BTN Center' : cleaned;
-    };
-
-    const lokasiMatches = [...block.matchAll(/([A-Za-z0-9\s.,-]+(?:Center|Mandiri|Kantor|Satker|Direktorat)[A-Za-z0-9\s.,-]*)/gi)];
+    
     let lokasiDatang = '-';
     let lokasiPulang = '-';
-
-    if (lokasiMatches.length > 0) {
-      lokasiDatang = cleanLocation(lokasiMatches[0][1]);
-      lokasiPulang = lokasiMatches.length > 1 ? cleanLocation(lokasiMatches[1][1]) : lokasiDatang;
-    } else if (datang !== '-') {
-      lokasiDatang = 'BTN Center';
-      lokasiPulang = 'BTN Center';
+    
+    if (!isExcel) {
+        const cleanLocation = (text) => {
+          let cleaned = text.replace(/\b\d{2}:\d{2}\b/g, '').replace(/\bWIB\b/g, '').trim();
+          cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '').replace(/\b\d+\b/g, '').trim();
+          cleaned = cleaned.replace(/\s+/g, ' ');
+          if (!cleaned || cleaned.length < 2) return '-';
+          const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP', 'Raden Patah'];
+          for (const loc of knownLocs) {
+            if (cleaned.includes(loc)) return loc;
+          }
+          return cleaned.length > 25 ? 'BTN Center' : cleaned;
+        };
+        const lokasiMatches = [...line.matchAll(/([A-Za-z0-9\s.,-]+(?:Center|Mandiri|Kantor|Satker|Direktorat|Patah)[A-Za-z0-9\s.,-]*)/gi)];
+        if (lokasiMatches.length > 0) {
+            lokasiDatang = cleanLocation(lokasiMatches[0][1]);
+            lokasiPulang = lokasiMatches.length > 1 ? cleanLocation(lokasiMatches[1][1]) : lokasiDatang;
+        } else if (datang !== '-') {
+            lokasiDatang = 'BTN Center';
+            lokasiPulang = 'BTN Center';
+        }
     }
-
+    
     let status = '-';
-    if (/WFO/i.test(block)) status = 'WFO';
-    else if (/WFA/i.test(block)) status = 'WFA';
-    else if (/WFH/i.test(block)) status = 'WFH';
-    else if (/Libur/i.test(block) || hari === 'Sabtu' || hari === 'Minggu') status = 'Libur';
-    else if (/Cuti/i.test(block)) status = 'Cuti';
-    else if (/Dinas/i.test(block)) status = 'Dinas';
-
+    if (/WFO/i.test(line)) status = 'WFO';
+    else if (/WFA/i.test(line)) status = 'WFA';
+    else if (/WFH/i.test(line)) status = 'WFH';
+    else if (/Libur/i.test(line) || hari === 'Sabtu' || hari === 'Minggu') status = 'Libur';
+    else if (/Cuti/i.test(line)) status = 'Cuti';
+    else if (/Dinas/i.test(line)) status = 'Dinas';
+    
     rows.push({
-      tanggal: dateKey,
-      hari,
-      datang,
-      lokasiDatang: datang !== '-' ? lokasiDatang : '-',
-      pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
-      lokasiPulang: (pulang !== datang || times.length > 1) ? lokasiPulang : '-',
-      keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
-      _dateObj: parseIndoDate(dateKey)
+        tanggal: dateKey,
+        hari,
+        datang,
+        lokasiDatang: datang !== '-' ? lokasiDatang : '-',
+        pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
+        lokasiPulang: (pulang !== datang || times.length > 1) ? lokasiPulang : '-',
+        keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
+        _dateObj: dateObj
     });
   }
 
-  // MENGUBAH URUTAN SORTING MENJADI DESCENDING (TANGGAL TERBARU DI ATAS)
+  // Urutan Descending (Tanggal Terbaru di Atas)
   rows.sort((a, b) => b._dateObj - a._dateObj);
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
@@ -301,17 +368,13 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
   let extractedEndStr = '-';
 
   if (rows.length > 0) {
-    // KARENA URUTANNYA SUDAH DIBALIK (DESC), 
-    // Tanggal pertama di tabel (rows[0]) SEKARANG ADALAH TANGGAL TERAKHIR (lastDate)
-    // Tanggal terakhir di tabel (rows[rows.length - 1]) SEKARANG ADALAH TANGGAL AWAL (firstDate)
-    const lastDate = rows[0]._dateObj;
+    const lastDate = rows[0]._dateObj; 
     const firstDate = rows[rows.length - 1]._dateObj;
     
     const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth()+1).padStart(2, '0')}-${d.getFullYear()}`;
     extractedStartStr = fmt(firstDate);
     extractedEndStr = fmt(lastDate);
     
-    // SELALU timpa nilai `periode` dengan tanggal aktual dari isi tabel, jangan percayai header PDF
     periode = `${extractedStartStr} s/d ${extractedEndStr}`;
 
     if (expectedPeriodEvent) {
@@ -320,30 +383,11 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
         const expectedStart = new Date(parseInt(parts[3]), parseInt(parts[2])-1, parseInt(parts[1]));
         const expectedEnd = new Date(parseInt(parts[6]), parseInt(parts[5])-1, parseInt(parts[4]));
 
-        // VALIDASI KETAT (STRICT MATCH):
-        // File PDF HARUS memiliki bulan dan tahun yang sama persis dengan yang diminta.
-        // Kita bandingkan secara logis apakah data PDF berada dalam payung bulan/tahun yang sama dengan event.
-        
-        // 1. Cek Tahun
-        const isSameYear = firstDate.getFullYear() === expectedStart.getFullYear() && lastDate.getFullYear() === expectedEnd.getFullYear();
-        
-        // 2. Cek Bulan
-        // Untuk Uang Makan (awal bulan s.d akhir bulan), ini simpel.
-        // Untuk Tukin (lintas bulan misal 11 Jan s.d 10 Feb), kita harus memastikan rentangnya tidak jauh melenceng.
-        // Cara paling aman adalah memastikan bahwa nilai numerik waktunya berada BERDEKATAN atau BERSINGGUNGAN KUAT dengan event.
-        
-        // Jika rentang PDF tidak memiliki persilangan SAMA SEKALI dengan rentang Event, maka SALAH.
-        // (Misal PDF 1-31 Juli, Event 1-31 Agustus. PDF berakhir sebelum Event dimulai).
         if (lastDate < expectedStart || firstDate > expectedEnd) {
           isDateValid = false;
         } else {
-           // Tambahan pengaman: Jika rentang PDF meleset lebih dari 10 hari dari target event, tolak.
-           // Ini untuk mencegah kasus di mana PDF berisi tanggal 31 Juli, tapi dimasukkan ke event 1-31 Agustus
-           // secara teknis mereka tidak bersilangan, namun jika selisihnya terlalu jauh, tolak.
            const startDiffDays = Math.abs((firstDate - expectedStart) / (1000 * 60 * 60 * 24));
            const endDiffDays = Math.abs((lastDate - expectedEnd) / (1000 * 60 * 60 * 24));
-           
-           // Jika file PDF yang diupload meleset lebih dari 10 hari pada tanggal mulainya atau tanggal akhirnya, dianggap beda bulan/periode.
            if (startDiffDays > 10 || endDiffDays > 10) {
               isDateValid = false;
            }
@@ -351,7 +395,7 @@ const parsePDFPresensi = async (file, expectedPeriodEvent = null) => {
       }
     }
   } else {
-    isDateValid = false; // Jika tidak ada data yang terbaca sama sekali
+    isDateValid = false; 
   }
 
   return {
@@ -510,12 +554,10 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
   const pinValue = pinDigits.join('');
   const isPinComplete = pinValue.length === 6;
 
-  // Modul pemverifikasi PIN independen yang bisa dipanggil secara otomatis
   const verifyAndLogin = async (pinToVerify) => {
     setLoading(true);
     setMessage({ type: '', text: '' });
 
-    // Memberikan jeda waktu buatan untuk menampilkan animasi memproses
     await new Promise(resolve => setTimeout(resolve, 800));
 
     const isSuperAdmin = targetUser && targetUser.NIP === 'SUPERADMIN';
@@ -600,7 +642,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       if (nextInput) nextInput.focus();
     }
 
-    // Auto-submit saat digit ke-6 selesai diisi
     if (val && index === 5) {
       const completePin = newPinDigits.join('');
       if (completePin.length === 6) {
@@ -626,7 +667,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
     }
     setPinDigits(newDigits);
     
-    // Auto-submit jika hasil paste memenuhi 6 digit
     if (pasted.length === 6) {
       verifyAndLogin(pasted);
     } else {
@@ -666,7 +706,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
                 <label className="block text-xs font-bold text-gray-700 mb-2">NIP Pegawai</label>
                 <input 
                   type="text" 
-                  autoFocus // Menambahkan autofokus ke field ini
+                  autoFocus
                   placeholder="Masukkan NIP"
                   value={loginNip}
                   onChange={(e) => setLoginNip(e.target.value)}
@@ -918,11 +958,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setIsParsing(true);
 
       try {
-        const result = await parsePDFPresensi(file, selectedPeriod?.periodeEvent);
+        const result = await parseDocumentPresensi(file, selectedPeriod?.periodeEvent);
         setParsedData(result);
       } catch (err) {
-        console.error("Gagal membaca PDF:", err);
-        alert("Gagal membaca struktur PDF presensi. Pastikan file bukan hasil scan atau foto.");
+        console.error("Gagal membaca dokumen:", err);
+        alert("Gagal membaca struktur dokumen presensi. Pastikan file berformat PDF atau Excel yang sah.");
         setSelectedFile(null);
         setParsedData(null);
       } finally {
@@ -1496,7 +1536,6 @@ const ProfileView = ({ navigate }) => {
   return (
     <div className="h-screen flex flex-col bg-[#F7FAFC] overflow-hidden">
       
-      {/* AREA ATAS: TETAP MENGAMBANG (FIXED) */}
       <div className="shrink-0 bg-[#F7FAFC] z-20 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.1)] border-b border-gray-200/50">
         <div className="max-w-7xl mx-auto px-4 md:px-8 pt-8 pb-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
@@ -1563,7 +1602,6 @@ const ProfileView = ({ navigate }) => {
         </div>
       </div>
 
-      {/* AREA BAWAH: DAFTAR KARTU YANG BISA DIGULIR (SCROLLABLE) */}
       <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
         <div className="max-w-7xl mx-auto pb-10">
           {loading ? (
@@ -1586,13 +1624,10 @@ const ProfileView = ({ navigate }) => {
                 return (
                   <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative min-h-[220px]">
                     
-                    {/* Garis Aksen Kiri */}
                     <div className="w-2 hidden lg:block shrink-0 relative z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
                     
-                    {/* Kontainer Teks Utama */}
                     <div className="p-6 md:p-8 flex-1 flex flex-col justify-center relative z-20">
                       
-                      {/* Bagian Atas: Nama dan Lencana */}
                       <div className="mb-5 lg:w-[70%] pr-4">
                         <h3 className="text-2xl font-black text-gray-900 leading-tight mb-2" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
                         <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
@@ -1610,10 +1645,8 @@ const ProfileView = ({ navigate }) => {
                         </div>
                       </div>
 
-                      {/* Garis Pemisah (Divider) yang dipotong lebarnya */}
                       <div className="w-full lg:w-[70%] h-px bg-gray-100 mb-5 relative z-20"></div>
 
-                      {/* Bagian Bawah: Data Struktural dengan jarak yang diperlebar */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-10 gap-y-6 text-sm relative z-20 lg:w-[70%]">
                         <div>
                           <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Jabatan</p>
@@ -1639,14 +1672,11 @@ const ProfileView = ({ navigate }) => {
 
                     {fotoUrl && (
                       <div className="w-full lg:absolute right-0 top-0 bottom-0 lg:w-[35%] xl:w-[30%] h-64 lg:h-auto shrink-0 overflow-hidden select-none pointer-events-none z-0">
-                        {/* Gradien pemudar dari kiri agar foto membaur mulus */}
                         <div className="hidden lg:block absolute inset-y-0 left-0 w-40 bg-gradient-to-r from-white via-white/80 to-transparent z-10"></div>
                         <div className="lg:hidden absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-white via-white/90 to-transparent z-10"></div>
                         
-                        {/* Filter warna untuk menurunkan opasitas & ketajaman foto */}
                         <div className="absolute inset-0 z-0 mix-blend-multiply opacity-20 transition-opacity" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
                         
-                        {/* Gambar dengan fallback 3 lapis jika salah satu endpoint Google gagal memuat */}
                         <img 
                           src={fotoUrl} 
                           alt={item.Nama} 
