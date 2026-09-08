@@ -35,6 +35,7 @@ const PALETTE_PKP = {
 };
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG3IhQ1X2s2n0h44yRhRQuW9tQtxxiXfnUNiQicfpJBGbQwrApYlXw/exec";
+const SESSION_DURATION = 30 * 60 * 1000; // 30 Menit dalam milidetik
 
 const extractDriveId = (url) => {
   if (!url) return '';
@@ -149,6 +150,14 @@ const parseIndoDate = (dateString) => {
   return new Date(year, month, day);
 };
 
+// Daftar Hari Libur Nasional & Cuti Bersama
+const DAFTAR_LIBUR_NASIONAL = [
+  '2026-01-01', '2026-02-18', '2026-03-03', '2026-03-18', '2026-03-19', 
+  '2026-03-20', '2026-03-21', '2026-03-23', '2026-03-24', '2026-04-03', 
+  '2026-05-01', '2026-05-14', '2026-05-27', '2026-06-01', '2026-06-16', 
+  '2026-08-17', '2026-08-25', '2026-12-24', '2026-12-25'
+];
+
 const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
   const fileName = file.name.toLowerCase();
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
@@ -219,10 +228,11 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
       items.sort((a, b) => b.y - a.y);
 
       let currentLine = [];
+      // Mengubah toleransi pemotongan Y dari 12 menjadi 5 agar baris yang rapat dapat dibaca akurat
       let currentY = items.length > 0 ? items[0].y : 0;
       
       for (const item of items) {
-          if (Math.abs(item.y - currentY) < 12) { 
+          if (Math.abs(item.y - currentY) < 5) { 
               currentLine.push(item);
           } else {
               currentLine.sort((a, b) => a.x - b.x);
@@ -277,7 +287,9 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
   const rows = [];
   const seenDates = new Set();
   
-  for (const line of lines) {
+  // Look-ahead scan: Scan baris untuk menggabungkan alamat yang terpotong ke bawah
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
     const dateMatch = line.match(/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i);
     if (!dateMatch) continue;
     
@@ -304,17 +316,65 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     if (seenDates.has(dateKey)) continue;
     seenDates.add(dateKey);
     
-    const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)].map(m => m[1]);
-    const datang = times[0] || '-';
-    const pulang = times.length > 1 ? times[1] : (times[0] && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0] : '-');
+    // Time split logic untuk memastikan alamat sebelum jam dibaca penuh
+    const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)];
+    let datang = times.length > 0 ? times[0][1] : '-';
+    let pulang = times.length > 1 ? times[1][1] : (times.length > 0 && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0][1] : '-');
     
+    let lokasiDatangRaw = '';
+    let lokasiPulangRaw = '';
+
+    if (times.length > 0) {
+      // Ambil teks sebelum jam masuk pertama
+      lokasiDatangRaw = line.substring(0, times[0].index).trim();
+      // Bersihkan hari dan tanggal dari depan lokasi
+      lokasiDatangRaw = lokasiDatangRaw.replace(/(?:Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]*\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{4}/i, '').trim();
+      // Bersihkan nomor urut di awal string jika tersisa
+      lokasiDatangRaw = lokasiDatangRaw.replace(/^\d+\s+/, '').trim();
+      
+      if (times.length > 1) {
+         // Teks antara jam masuk dan jam keluar
+         lokasiPulangRaw = line.substring(times[0].index + times[0][0].length, times[1].index).trim();
+      } else {
+         lokasiPulangRaw = line.substring(times[0].index + times[0][0].length).trim();
+      }
+    }
+
+    // Algoritma Look-ahead untuk menyambung teks WFA "sekitar..." yang jatuh ke baris berikutnya
+    if (lokasiDatangRaw.includes("sekitar") || /WFA/i.test(line)) {
+       let j = i + 1;
+       while (j < lines.length && j <= i + 4) { // Cek maksimal 4 baris ke bawah
+          // Berhenti jika ketemu tanggal baru
+          if (/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i.test(lines[j])) {
+             break;
+          }
+          const nextLineStr = lines[j].replace(/\b\d+\b/g, '').trim(); // Buang angka-angka durasi
+          if (nextLineStr.length > 5 && !nextLineStr.includes('WIB')) {
+             lokasiDatangRaw += ' ' + nextLineStr;
+          }
+          j++;
+       }
+    }
+
+    // Pengecekan Hari Libur Nasional Indonesia
+    const ymd = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
     let status = '-';
-    if (/WFO/i.test(line)) status = 'WFO';
-    else if (/WFA/i.test(line)) status = 'WFA';
-    else if (/WFH/i.test(line)) status = 'WFH';
-    else if (/Libur/i.test(line) || hari === 'Sabtu' || hari === 'Minggu') status = 'Libur';
-    else if (/Cuti/i.test(line)) status = 'Cuti';
-    else if (/Dinas/i.test(line)) status = 'Dinas';
+    
+    if (DAFTAR_LIBUR_NASIONAL.includes(ymd)) {
+      status = 'Libur';
+    } else if (/WFO/i.test(line)) {
+      status = 'WFO';
+    } else if (/WFA/i.test(line)) {
+      status = 'WFA';
+    } else if (/WFH/i.test(line)) {
+      status = 'WFH';
+    } else if (/Libur/i.test(line) || hari === 'Sabtu' || hari === 'Minggu') {
+      status = 'Libur';
+    } else if (/Cuti/i.test(line)) {
+      status = 'Cuti';
+    } else if (/Dinas/i.test(line)) {
+      status = 'Dinas';
+    }
     
     rows.push({
         tanggal: dateKey,
@@ -322,12 +382,12 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
         datang,
         pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
         keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
+        lokasiDatangRaw,
         _dateObj: dateObj
     });
   }
 
   // Descending sort
-
   rows.sort((a, b) => b._dateObj - a._dateObj);
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
@@ -379,6 +439,24 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     isValid: rows.length > 0 && isDateValid,
     isDateMismatch: !isDateValid
   };
+};
+
+const getStoredUser = () => {
+  const stored = localStorage.getItem('pkp_session');
+  if (stored) {
+    try {
+      const { user, timestamp } = JSON.parse(stored);
+      const now = new Date().getTime();
+      if (now - timestamp < SESSION_DURATION) {
+        return user;
+      } else {
+        localStorage.removeItem('pkp_session');
+      }
+    } catch(e) {
+      localStorage.removeItem('pkp_session');
+    }
+  }
+  return null;
 };
 
 const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
@@ -507,12 +585,16 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
   );
 };
 
-const LoginView = ({ navigate, onLoginSuccess }) => {
+const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
   const [step, setStep] = useState(1);
   const [loginNip, setLoginNip] = useState('');
   const [targetUser, setTargetUser] = useState(null);
   const [pinDigits, setPinDigits] = useState(['', '', '', '', '', '']);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [message, setMessage] = useState(
+    sessionExpired 
+      ? { type: 'error', text: 'Waktu sesi Anda telah berakhir (30 Menit Tanpa Aktivitas). Silakan login kembali untuk keamanan.' } 
+      : { type: '', text: '' }
+  );
   const [loading, setLoading] = useState(false);
 
   const cleanNip = loginNip.trim().toLowerCase();
@@ -937,7 +1019,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         }
       } catch (err) {
         console.error("Gagal membaca dokumen:", err);
-        // Fallback UI error messaging without using alert()
         setParsedData({ 
           isValid: false, 
           isDateMismatch: false, 
@@ -994,7 +1075,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         const d = String(row._dateObj.getDate()).padStart(2, '0');
         const formattedDate = `${y}-${m}-${d}`; 
 
-        const rowData = new Array(22).fill(""); // Hanya sampai Kolom V (Index 21)
+        const rowData = new Array(22).fill(""); 
         
         rowData[0] = index + 1;         // Kolom A: No
         rowData[1] = row.hari;          // Kolom B: Hari
@@ -1301,113 +1382,174 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     );
                   })}
                 </div>
-              ) : activeStep === 2 && selectedPeriod ? (
+              ) : (activeStep === 2 || activeStep === 3) && selectedPeriod ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in zoom-in-95 duration-300">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
-                    <div>
-                      <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
-                      <p className="text-xs text-gray-600 leading-relaxed font-normal">Upload file bukti presensi:</p>
-                      <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
-                        <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
-                        <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
-                        <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
-                      </ul>
-                    </div>
+                    {activeStep === 2 ? (
+                      <>
+                        <div>
+                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
+                          <p className="text-xs text-gray-600 leading-relaxed font-normal">Upload file bukti presensi:</p>
+                          <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
+                            <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
+                            <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
+                            <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
+                          </ul>
+                        </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
-                      <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
-                        <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
-                          Choose File
-                          <input 
-                            id="pdf-upload-input"
-                            type="file" 
-                            accept=".pdf, .xlsx, .xls"
-                            onChange={handleFileChange}
-                            className="hidden"
-                          />
-                        </label>
-                        <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
-                          {selectedFile ? selectedFile.name : 'Pilih berkas...'}
-                        </span>
-                        {selectedFile && (
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
+                          <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
+                            <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
+                              Choose File
+                              <input 
+                                id="pdf-upload-input"
+                                type="file" 
+                                accept=".pdf, .xlsx, .xls"
+                                onChange={handleFileChange}
+                                className="hidden"
+                              />
+                            </label>
+                            <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
+                              {selectedFile ? selectedFile.name : 'Pilih berkas...'}
+                            </span>
+                            {selectedFile && (
+                              <button 
+                                type="button"
+                                onClick={handleClearFile}
+                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                title="Hapus berkas"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {isParsing && (
+                          <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
+                            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                            <span>Mengekstrak dan memverifikasi data kalender presensi...</span>
+                          </div>
+                        )}
+
+                        {parsedData && parsedData.isValid && (
+                          <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
+                            <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
+                            <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
+                          </div>
+                        )}
+
+                        {isAlreadyUploaded && !submitResult && selectedFile && (
+                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm animate-in fade-in zoom-in duration-300">
+                            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
+                              <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {parsedData && !parsedData.isValid && (
+                          <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
+                            <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
+                            <span className="leading-relaxed">
+                              {parsedData.isDateMismatch 
+                                ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
+                                : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
+                            </span>
+                          </div>
+                        )}
+
+                        {submitResult && (
+                          <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
+                            {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
+                            <div>
+                              <p className="font-semibold">{submitResult.message}</p>
+                              {submitResult.url && (
+                                <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
+                                  Buka Dokumen di Google Drive
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <button 
+                          onClick={handleUploadSubmit}
+                          disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
+                          className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
+                            parsedData && parsedData.isValid && !isSubmitting && selectedFile
+                              ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
+                              : 'opacity-40 cursor-not-allowed'
+                          }`}
+                          style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
+                        >
+                          <UploadCloud size={16} />
+                          {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
+                        </button>
+
+                        {/* Tombol Lanjutkan Tahap 3 */}
+                        {parsedData && parsedData.isValid && (
                           <button 
-                            type="button"
-                            onClick={handleClearFile}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                            title="Hapus berkas"
+                            onClick={() => navigate(currentView, 3)}
+                            className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
                           >
-                            <Trash2 size={16} />
+                            Lanjutkan Tahap 3 <ChevronRight size={16} />
                           </button>
                         )}
-                      </div>
-                    </div>
-
-                    {isParsing && (
-                      <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
-                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                        <span>Mengekstrak dan memverifikasi data kalender presensi...</span>
-                      </div>
-                    )}
-
-                    {parsedData && parsedData.isValid && (
-                      <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
-                        <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
-                        <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
-                      </div>
-                    )}
-
-                    {isAlreadyUploaded && !submitResult && selectedFile && (
-                      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm animate-in fade-in zoom-in duration-300">
-                        <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                      </>
+                    ) : (
+                      <>
+                        {/* Tampilan Panel Kiri untuk Tahap 3 */}
                         <div>
-                          <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
-                          <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
+                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
+                          <p className="text-xs text-gray-600 leading-relaxed font-normal">Langkah terakhir untuk menyelesaikan pengajuan {selectedPeriod.tipe} Anda. Periksa kembali data di sebelah kanan.</p>
                         </div>
-                      </div>
-                    )}
+                        
+                        {isAlreadyUploaded ? (
+                          <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-2 shadow-sm">
+                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-black mb-0.5">Dokumen Tersimpan</p>
+                              <p className="leading-relaxed">Berkas telah tersimpan di Google Drive. Silakan klik tombol di bawah untuk menyelesaikan proses pengajuan.</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
+                            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-black mb-0.5">Belum Disimpan</p>
+                              <p className="leading-relaxed">Anda belum memproses/menyimpan berkas ini di Tahap 2. Apakah Anda yakin ingin mengajukan data ini?</p>
+                            </div>
+                          </div>
+                        )}
 
-                    {parsedData && !parsedData.isValid && (
-                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
-                        <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
-                        <span className="leading-relaxed">
-                          {parsedData.isDateMismatch 
-                            ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
-                            : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
-                        </span>
-                      </div>
-                    )}
+                        <button 
+                          onClick={() => {
+                            alert("Pengajuan Berhasil Dikirim!");
+                            navigate(currentView, 1);
+                          }}
+                          className="w-full py-3.5 mt-3 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] cursor-pointer"
+                          style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                        >
+                          <FileCheck size={16} />
+                          Kirim Pengajuan
+                        </button>
 
-                    {submitResult && (
-                      <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
-                        {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
-                        <div>
-                          <p className="font-semibold">{submitResult.message}</p>
-                          {submitResult.url && (
-                            <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
-                              Buka Dokumen di Google Drive
-                            </a>
-                          )}
-                        </div>
-                      </div>
+                        <button 
+                          onClick={() => navigate(currentView, 2)}
+                          className="w-full py-3.5 mt-3 rounded-2xl text-gray-700 bg-gray-50 border border-gray-200 hover:bg-gray-100 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <ArrowLeft size={16} />
+                          Kembali ke Tahap 2
+                        </button>
+                      </>
                     )}
-
-                    <button 
-                      onClick={handleUploadSubmit}
-                      disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
-                      className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                        parsedData && parsedData.isValid && !isSubmitting && selectedFile
-                          ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
-                          : 'opacity-40 cursor-not-allowed'
-                      }`}
-                      style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
-                    >
-                      <UploadCloud size={16} />
-                      {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
-                    </button>
                   </div>
 
                   <div className="lg:col-span-8 space-y-4">
+                    {/* Panel Kanan (Tabel Pratinjau) tetap ditampilkan di Tahap 2 dan 3 */}
                     {parsedData && parsedData.isValid ? (
                       <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
                         <div className="flex items-center gap-2 font-black text-sm">
@@ -1458,7 +1600,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                             {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
                               parsedData.rows.map((row, idx) => {
                                 const isLibur = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
-                                const rowBgClass = isAlreadyUploaded && !submitResult 
+                                
+                                // Di Tahap 3, semua input dikunci (read-only)
+                                const isLocked = activeStep === 3 || (isAlreadyUploaded && !submitResult);
+                                
+                                const rowBgClass = isLocked 
                                   ? 'bg-gray-50 text-gray-400 opacity-80 grayscale' 
                                   : (isLibur ? 'bg-[#F4CCCC] text-red-900' : 'hover:bg-teal-50/30 transition-colors');
                                 
@@ -1469,7 +1615,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         type="text" 
                                         value={row.tanggal} 
                                         onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)}
-                                        disabled={isAlreadyUploaded && !submitResult}
+                                        disabled={isLocked}
                                         className="w-full bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-bold text-inherit px-1 py-1"
                                       />
                                     </td>
@@ -1478,7 +1624,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         type="text" 
                                         value={row.hari} 
                                         onChange={(e) => handleCellChange(idx, 'hari', e.target.value)}
-                                        disabled={isAlreadyUploaded && !submitResult}
+                                        disabled={isLocked}
                                         className="w-full max-w-[80px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none text-inherit px-1 py-1"
                                       />
                                     </td>
@@ -1487,7 +1633,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         type="text" 
                                         value={row.datang} 
                                         onChange={(e) => handleCellChange(idx, 'datang', e.target.value)}
-                                        disabled={isAlreadyUploaded && !submitResult}
+                                        disabled={isLocked}
                                         className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.datang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
                                       />
                                     </td>
@@ -1496,12 +1642,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         type="text" 
                                         value={row.pulang} 
                                         onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)}
-                                        disabled={isAlreadyUploaded && !submitResult}
+                                        disabled={isLocked}
                                         className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.pulang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
                                       />
                                     </td>
                                     <td className="py-2 px-3 text-center whitespace-nowrap">
-                                      {isAlreadyUploaded && !submitResult ? (
+                                      {isLocked ? (
                                         <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
                                           TERKUNCI
                                         </span>
@@ -1810,8 +1956,9 @@ export default function App() {
   };
 
   const [routeData, setRouteData] = useState(getHashData());
-  const [loggedInUser, setLoggedInUser] = useState(null);
+  const [loggedInUser, setLoggedInUser] = useState(getStoredUser());
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
     fetchPegawaiData(false);
@@ -1819,6 +1966,47 @@ export default function App() {
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  // Monitor aktivitas pengguna untuk memperpanjang sesi 30 menit
+  useEffect(() => {
+    if (!loggedInUser) return;
+
+    const handleActivity = () => {
+      const stored = localStorage.getItem('pkp_session');
+      if (stored) {
+        try {
+          const data = JSON.parse(stored);
+          data.timestamp = new Date().getTime();
+          localStorage.setItem('pkp_session', JSON.stringify(data));
+        } catch(e) {}
+      }
+    };
+
+    window.addEventListener('click', handleActivity);
+    window.addEventListener('hashchange', handleActivity);
+
+    // Cek batas sesi setiap 10 detik
+    const interval = setInterval(() => {
+      const stored = localStorage.getItem('pkp_session');
+      if (stored) {
+        try {
+          const { timestamp } = JSON.parse(stored);
+          if (new Date().getTime() - timestamp >= SESSION_DURATION) {
+            setLoggedInUser(null);
+            localStorage.removeItem('pkp_session');
+            setSessionExpired(true);
+            navigate('login');
+          }
+        } catch(e) {}
+      }
+    }, 10000);
+
+    return () => {
+      window.removeEventListener('click', handleActivity);
+      window.removeEventListener('hashchange', handleActivity);
+      clearInterval(interval);
+    };
+  }, [loggedInUser]);
 
   const navigate = (viewName, step = 1) => {
     let hash = viewName === 'home' ? '' : `#/${viewName}`;
@@ -1832,8 +2020,18 @@ export default function App() {
 
   const handleLogoutConfirm = () => {
     setLoggedInUser(null);
+    localStorage.removeItem('pkp_session');
     setShowLogoutModal(false);
     navigate('home');
+  };
+
+  const handleLoginSuccess = (user) => {
+    setLoggedInUser(user);
+    localStorage.setItem('pkp_session', JSON.stringify({
+      user,
+      timestamp: new Date().getTime()
+    }));
+    setSessionExpired(false);
   };
 
   const currentView = routeData.view;
@@ -1850,7 +2048,7 @@ export default function App() {
       case 'arsip-surat-tugas':
       case 'arsip-surat-cuti':
         if (!loggedInUser) {
-          return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+          return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
         }
         return (
           <UserDashboardView
@@ -1864,7 +2062,7 @@ export default function App() {
       case 'profile':
         return <ProfileView navigate={navigate} />;
       case 'login':
-        return <LoginView navigate={navigate} onLoginSuccess={setLoggedInUser} />;
+        return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
       default:
         return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
     }
