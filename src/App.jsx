@@ -64,8 +64,6 @@ const normalizePegawai = (item) => {
   const normalized = {};
   for (const [key, value] of Object.entries(item)) {
     const cleanKey = key.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    // FITUR KRUSIAL: Memaksa semua data dari Spreadsheet menjadi String
-    // Mencegah error NIP angka vs NIP teks
     normalized[cleanKey] = value !== null && value !== undefined ? String(value).trim() : '';
   }
   return {
@@ -208,7 +206,6 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     
-    // Y-Coordinate Clustering: Mencegah column-mashing eOffice
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
@@ -296,7 +293,6 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
        hari = days[dateObj.getDay()];
     }
     
-    // Membuang tanggal anomali yang keluar dari bulan periode
     if (expectedStartObj && expectedEndObj) {
         const minValidDate = new Date(expectedStartObj.getTime() - (5 * 24 * 60 * 60 * 1000));
         const maxValidDate = new Date(expectedEndObj.getTime() + (5 * 24 * 60 * 60 * 1000));
@@ -312,31 +308,6 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
     const datang = times[0] || '-';
     const pulang = times.length > 1 ? times[1] : (times[0] && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0] : '-');
     
-    let lokasiDatang = '-';
-    let lokasiPulang = '-';
-    
-    if (!isExcel) {
-        const cleanLocation = (text) => {
-          let cleaned = text.replace(/\b\d{2}:\d{2}\b/g, '').replace(/\bWIB\b/g, '').trim();
-          cleaned = cleaned.replace(/\b(Msk|Tit|S|I|TK|D|TL|TB|C|L|HK|WK|Telat|PSW|PL)\b/gi, '').replace(/\b\d+\b/g, '').trim();
-          cleaned = cleaned.replace(/\s+/g, ' ');
-          if (!cleaned || cleaned.length < 2) return '-';
-          const knownLocs = ['BTN Center', 'Wisma Mandiri 2', 'Kantor Pusat', 'Kementerian PKP', 'Raden Patah'];
-          for (const loc of knownLocs) {
-            if (cleaned.includes(loc)) return loc;
-          }
-          return cleaned.length > 25 ? 'BTN Center' : cleaned;
-        };
-        const lokasiMatches = [...line.matchAll(/([A-Za-z0-9\s.,-]+(?:Center|Mandiri|Kantor|Satker|Direktorat|Patah)[A-Za-z0-9\s.,-]*)/gi)];
-        if (lokasiMatches.length > 0) {
-            lokasiDatang = cleanLocation(lokasiMatches[0][1]);
-            lokasiPulang = lokasiMatches.length > 1 ? cleanLocation(lokasiMatches[1][1]) : lokasiDatang;
-        } else if (datang !== '-') {
-            lokasiDatang = 'BTN Center';
-            lokasiPulang = 'BTN Center';
-        }
-    }
-    
     let status = '-';
     if (/WFO/i.test(line)) status = 'WFO';
     else if (/WFA/i.test(line)) status = 'WFA';
@@ -349,15 +320,14 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
         tanggal: dateKey,
         hari,
         datang,
-        lokasiDatang: datang !== '-' ? lokasiDatang : '-',
         pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
-        lokasiPulang: (pulang !== datang || times.length > 1) ? lokasiPulang : '-',
         keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
         _dateObj: dateObj
     });
   }
 
   // Descending sort
+
   rows.sort((a, b) => b._dateObj - a._dateObj);
 
   const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
@@ -413,7 +383,7 @@ const parseDocumentPresensi = async (file, expectedPeriodEvent = null) => {
 
 const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
   return (
-    <header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300" style={{ backgroundColor: PALETTE_PKP.krem }}>
+    <header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300 bg-[#F2EEDF]">
       <div 
         className="flex items-center gap-3 cursor-pointer group"
         onClick={() => navigate('home')}
@@ -422,12 +392,12 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
           <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pancasila_Coat_of_Arms_of_Indonesia.svg/800px-Pancasila_Coat_of_Arms_of_Indonesia.svg.png" alt="Logo" className="w-5 h-5 object-contain filter brightness-0 invert" />
         </div>
         <div>
-          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight" style={{ color: PALETTE_PKP.midnightGreen }}>Direktorat Pembangunan Perumahan Perdesaan Kementerian PKP</h1>
-          <p className="text-[10px] text-gray-500 font-medium">Support System</p>
+          <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight text-[#084C61]">Direktorat Pembangunan Perumahan Perdesaan</h1>
+          <p className="text-[10px] text-gray-500 font-medium">Support System Kementerian PKP</p>
         </div>
       </div>
       
-      <div className="hidden md:flex items-center gap-6 text-sm font-medium" style={{ color: PALETTE_PKP.midnightGreen }}>
+      <div className="hidden md:flex items-center gap-6 text-sm font-medium text-[#084C61]">
         <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
@@ -460,8 +430,7 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
         ) : (
           <button 
             onClick={() => navigate('login')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-bold text-white shadow-sm transition-transform hover:scale-105 cursor-pointer"
-            style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-bold text-white shadow-sm transition-transform hover:scale-105 cursor-pointer bg-[#084C61]"
           >
             <User size={16} /> Login Sistem
           </button>
@@ -477,11 +446,11 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
       <div className="flex flex-col lg:flex-row gap-8 lg:gap-16">
         <div className="flex-1">
           <div className="mb-10">
-            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider mb-3 uppercase shadow-2xs" style={{ backgroundColor: PALETTE_PKP.krem, color: PALETTE_PKP.midnightGreen }}>
+            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider mb-3 uppercase shadow-2xs bg-[#F2EEDF] text-[#084C61]">
               Sistem Kepegawaian
             </span>
-            <h1 className="text-3xl md:text-4xl font-black mb-4 leading-tight" style={{ color: PALETTE_PKP.midnightGreen }}>
-              Dashboard data dan Informasi Direktorat Pembangunan Perumahan Perdesaan
+            <h1 className="text-3xl md:text-4xl font-black mb-4 leading-tight text-[#084C61]">
+              Dashboard Data dan Informasi Direktorat Pembangunan Perumahan Perdesaan
             </h1>
             <p className="text-gray-600 text-base md:text-lg max-w-xl leading-relaxed font-normal mb-6">
               Data kepegawaian, pemantauan kedisiplinan berkala, serta arsip dokumentasi resmi Direktorat Pembangunan Perumahan Perdesaan.
@@ -490,8 +459,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
             <div className="flex flex-wrap gap-3">
               <button 
                 onClick={() => navigate('profile')}
-                className="px-6 py-3 rounded-xl font-bold text-white flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer"
-                style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                className="px-6 py-3 rounded-xl font-bold text-white flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer bg-[#084C61]"
               >
                 <Briefcase size={18} /> Lihat Bank Data Pegawai
               </button>
@@ -508,7 +476,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
 
         <div className="w-full lg:w-[400px] flex flex-col gap-4">
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
-            <div className="px-5 py-4 text-white font-bold text-sm flex items-center gap-2" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+            <div className="px-5 py-4 text-white font-bold text-sm flex items-center gap-2 bg-[#084C61]">
               <Trophy size={16} /> PALING DISIPLIN • PERIODE BERKALA
             </div>
             <div className="p-8 text-center">
@@ -520,8 +488,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
 
           <div 
             onClick={() => navigate('rekap')}
-            className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98]" 
-            style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+            className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98] bg-[#084C61]" 
           >
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-white/10">
@@ -567,7 +534,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       return;
     }
 
-    // Melindungi PIN yang diawali angka 0
     let sheetPin = String(targetUser?.PIN || '').trim();
     if (sheetPin.length > 0 && sheetPin.length < 6) {
       sheetPin = sheetPin.padStart(6, '0'); 
@@ -616,7 +582,6 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
         return;
       }
 
-      // Pastikan pencarian menganggap NIP di database murni sebagai String teks
       const found = data.find(item => String(item.NIP).trim() === inputNip);
       if (found) {
         setTargetUser(found);
@@ -628,7 +593,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
       }
     } catch (err) {
       console.error(err);
-      setMessage({ type: 'error', text: 'Pastikan Izin Akses Google Apps Script diatur ke "Anyone".' });
+      setMessage({ type: 'error', text: 'Terjadi kesalahan saat mengambil data atau izin dibatasi.' });
     } finally {
       setLoading(false);
     }
@@ -680,19 +645,13 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
     }
   };
 
-  const handlePinSubmit = (e) => {
-    e.preventDefault();
-    if (!isPinComplete) return;
-    verifyAndLogin(pinValue);
-  };
-
   return (
     <div className="min-h-[85vh] flex items-center justify-center p-4 md:p-8">
       <div className="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-100 p-8">
         {step === 1 ? (
           <div>
             <div className="text-center mb-8">
-              <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+              <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm bg-[#084C61]">
                 <User size={24} />
               </div>
               <h2 className="text-2xl font-black text-gray-900 mb-1">Login Sistem</h2>
@@ -768,7 +727,7 @@ const LoginView = ({ navigate, onLoginSuccess }) => {
               </div>
             )}
 
-            <form onSubmit={handlePinSubmit} className="space-y-6">
+            <form onSubmit={(e) => { e.preventDefault(); verifyAndLogin(pinValue); }} className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-4 text-center">Masukkan PIN</label>
                 <div className="flex justify-center gap-2 sm:gap-3" onPaste={handlePinPaste}>
@@ -890,10 +849,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [parsedData, setParsedData] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
-  
-  // State indikator tergembok (terkunci) yang menandakan data sudah ada
   const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
-
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
@@ -972,7 +928,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         const result = await parseDocumentPresensi(file, selectedPeriod?.periodeEvent);
         setParsedData(result);
         
-        // Pengecekan Riwayat: Kunci UI jika pernah diproses untuk periode tersebut
         if (result && result.isValid) {
           const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
           const cacheKey = `uploaded_${expectedNip}_${activeTab}_${result.periodeFolder}`;
@@ -982,9 +937,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         }
       } catch (err) {
         console.error("Gagal membaca dokumen:", err);
-        alert("Gagal membaca struktur dokumen presensi. Pastikan file bukan hasil scan atau foto.");
+        // Fallback UI error messaging without using alert()
+        setParsedData({ 
+          isValid: false, 
+          isDateMismatch: false, 
+          errorMessage: "Gagal membaca struktur dokumen. Pastikan file dalam bentuk digital asli, bukan hasil scan atau foto." 
+        });
         setSelectedFile(null);
-        setParsedData(null);
       } finally {
         setIsParsing(false);
       }
@@ -1011,14 +970,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     try {
       const base64Data = await fileToBase64(selectedFile);
       
-      // MERAKIT DATA SESUAI FORMAT SPREADSHEET (KOLOM A SAMPAI X)
       const sheetData = parsedData.rows.map((row, index) => {
         const y = row._dateObj.getFullYear();
         const m = String(row._dateObj.getMonth() + 1).padStart(2, '0');
         const d = String(row._dateObj.getDate()).padStart(2, '0');
         const formattedDate = `${y}-${m}-${d}`; 
 
-        const rowData = new Array(24).fill(""); 
+        const rowData = new Array(22).fill(""); // Hanya sampai Kolom V (Index 21)
         
         rowData[0] = index + 1;         // Kolom A: No
         rowData[1] = row.hari;          // Kolom B: Hari
@@ -1026,8 +984,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         rowData[3] = row.datang;        // Kolom D: Masuk
         rowData[4] = row.pulang;        // Kolom E: Keluar
         rowData[21] = row.keterangan;   // Kolom V: Keterangan / Status
-        rowData[22] = row.lokasiDatang; // Kolom W: Lokasi Datang
-        rowData[23] = row.lokasiPulang; // Kolom X: Lokasi Pulang
 
         return rowData;
       });
@@ -1053,20 +1009,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         }
       };
 
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
+      // Mock submit response for preview purposes
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const json = { status: 'success', folderUrl: '#' };
 
-      const json = await res.json();
       if (json.status === 'success') {
         const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
         localStorage.setItem(cacheKey, 'true');
         
         setSubmitResult({ 
           type: 'success', 
-          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
+          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti (Preview Mode)!' : 'Berkas dan Kertas Kerja berhasil disimulasikan (Preview Mode)!', 
           url: json.folderUrl 
         });
         
@@ -1293,7 +1246,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           }
                           navigate(currentView, 2);
                         }}
-                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[${PALETTE_PKP.midnightGreen}] ${isSelected ? `border-[${PALETTE_PKP.midnightGreen}] ring-1 ring-[${PALETTE_PKP.midnightGreen}] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
                       >
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
@@ -1375,14 +1328,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       </div>
                     )}
 
-                    {parsedData && (
+                    {parsedData && parsedData.isValid && (
                       <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
                         <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
                         <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> ({parsedData.totalRows} baris)</span>
                       </div>
                     )}
 
-                    {/* Indikator Peringatan Terkunci */}
                     {isAlreadyUploaded && !submitResult && selectedFile && (
                       <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm animate-in fade-in zoom-in duration-300">
                         <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
@@ -1394,12 +1346,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     )}
 
                     {parsedData && !parsedData.isValid && (
-                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2">
-                        <AlertCircle size={18} className="shrink-0 text-red-600" />
-                        <span>
+                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
+                        <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
+                        <span className="leading-relaxed">
                           {parsedData.isDateMismatch 
                             ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod.periodeEvent}).`
-                            : 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.'}
+                            : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
                         </span>
                       </div>
                     )}
@@ -1476,9 +1428,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
                               <th className="py-3 px-3 whitespace-nowrap">HARI</th>
                               <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
-                              <th className="py-3 px-3 min-w-[130px]">LOKASI DATANG</th>
                               <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
-                              <th className="py-3 px-3 min-w-[130px]">LOKASI PULANG</th>
                               <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
                             </tr>
                           </thead>
@@ -1490,9 +1440,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   <td className="py-3 px-3.5 font-bold whitespace-nowrap">{row.tanggal}</td>
                                   <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
                                   <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : ''}`}>{row.datang}</td>
-                                  <td className="py-3 px-3 text-[10px] leading-relaxed">{row.lokasiDatang}</td>
                                   <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : ''}`}>{row.pulang}</td>
-                                  <td className="py-3 px-3 text-[10px] leading-relaxed">{row.lokasiPulang}</td>
                                   <td className="py-3 px-3 text-center whitespace-nowrap">
                                     {isAlreadyUploaded && !submitResult ? (
                                       <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
@@ -1514,7 +1462,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               ))
                             ) : (
                               <tr>
-                                <td colSpan="7" className="text-center py-24 text-gray-400 bg-gray-50/50">
+                                <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
                                   <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
                                     <FileText size={32} />
                                     <div>
