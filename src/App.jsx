@@ -23,6 +23,11 @@ import {
   Trash2
 } from 'lucide-react';
 
+if (typeof window !== 'undefined') {
+  window.tailwind = window.tailwind || {};
+  window.tailwind.config = window.tailwind.config || {};
+}
+
 const PALETTE_PKP = {
   krem: '#F2EEDF',
   khaki: '#D5C58A',
@@ -150,7 +155,6 @@ const parseIndoDate = (dateString) => {
   return new Date(year, month, day);
 };
 
-// Daftar Hari Libur Nasional & Cuti Bersama
 const DAFTAR_LIBUR_NASIONAL = [
   '2026-01-01', '2026-02-18', '2026-03-03', '2026-03-18', '2026-03-19', 
   '2026-03-20', '2026-03-21', '2026-03-23', '2026-03-24', '2026-04-03', 
@@ -158,7 +162,6 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2026-08-17', '2026-08-25', '2026-12-24', '2026-12-25'
 ];
 
-// PERBAIKAN: Mengambil selectedPeriod utuh agar periodeFolder dinamis
 const parseDocumentPresensi = async (file, selectedPeriod = null) => {
   const fileName = file.name.toLowerCase();
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
@@ -270,7 +273,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null) => {
     }
   }
 
-  // PERBAIKAN: Mengambil expected period dan folder dinamis dari selectedPeriod
   let periode = '-';
   let expectedDays = 31;
   let expectedPeriodEvent = selectedPeriod ? selectedPeriod.periodeEvent : null;
@@ -938,7 +940,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false); // PERBAIKAN: state modal alert pengganti
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const getModuleKey = (view) => {
     switch(view) {
@@ -1012,12 +1014,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setIsAlreadyUploaded(false);
 
       // PERBAIKAN: Fungsi utilitas untuk mengecek existing upload ke Backend Apps Script
-      const checkExisting = async (nip, modul, identifier) => {
-        const cacheKey = `uploaded_${nip}_${modul}_${identifier}`;
+      const checkExisting = async (nip, modul, periodeEvent) => {
+        const cacheKey = `uploaded_${nip}_${modul}_${periodeEvent}`;
         if (localStorage.getItem(cacheKey)) return true;
         
         try {
-          const url = `${APPS_SCRIPT_URL}?action=checkExisting&nip=${nip}&modul=${modul}&periodeFolder=${identifier}`;
+          const url = `${APPS_SCRIPT_URL}?action=checkExisting&nip=${nip}&modul=${modul}&periodeEvent=${encodeURIComponent(periodeEvent)}`;
           const res = await fetch(url);
           if (res.ok) {
             const json = await res.json();
@@ -1046,7 +1048,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
            totalHariMasuk: 0
          });
          
-         const exists = await checkExisting(expectedNip, 'spt', file.name);
+         const exists = await checkExisting(expectedNip, 'spt', 'Semua Periode');
          setIsAlreadyUploaded(exists);
          setIsParsing(false);
          return;
@@ -1058,7 +1060,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         
         if (result && result.isValid) {
           const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
-          const exists = await checkExisting(expectedNip, activeTab, result.periodeFolder);
+          const expectedPeriodeEvent = selectedPeriod ? selectedPeriod.periodeEvent : result.periode;
+          const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
           setIsAlreadyUploaded(exists);
         }
       } catch (err) {
@@ -1068,7 +1071,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           isDateMismatch: false, 
           errorMessage: "Gagal membaca struktur dokumen. Pastikan file dalam bentuk digital asli, bukan hasil scan atau foto." 
         });
-        setSelectedFile(null);
       } finally {
         setIsParsing(false);
       }
@@ -1223,7 +1225,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
-      {/* PERBAIKAN: Custom Modal Pengajuan Berhasil Pengganti window.alert */}
+      {/* Modal Pengajuan Berhasil Pengganti window.alert */}
       {showSuccessModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-gray-100 text-center animate-in fade-in zoom-in duration-200">
@@ -1247,6 +1249,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
+      {}
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
@@ -1330,6 +1333,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             </div>
           ) : (
             <div>
+              {}
               <div 
                 className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md"
                 style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
@@ -1465,6 +1469,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               ) : (activeTab === 'spt' || ((activeStep === 2 || activeStep === 3) && selectedPeriod)) ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in zoom-in-95 duration-300">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
+                    {}
                     {activeTab === 'spt' || activeStep === 2 ? (
                       <>
                         <div>
@@ -1505,7 +1510,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                             <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
                               {selectedFile ? selectedFile.name : 'Pilih berkas...'}
                             </span>
-                            {selectedFile && (
+                            {selectedFile && !isParsing && (
                               <button 
                                 type="button"
                                 onClick={handleClearFile}
@@ -1521,18 +1526,18 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         {isParsing && (
                           <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3">
                             <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                            <span>Mengekstrak dan memverifikasi data kalender presensi...</span>
+                            <span>Mengekstrak dan memverifikasi data...</span>
                           </div>
                         )}
 
-                        {parsedData && parsedData.isValid && (
+                        {!isParsing && parsedData && parsedData.isValid && (
                           <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
                             <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
                             <span>File {activeTab === 'spt' ? 'Surat Tugas' : 'presensi'} milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {activeTab !== 'spt' && parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
                           </div>
                         )}
 
-                        {isAlreadyUploaded && !submitResult && selectedFile && (
+                        {!isParsing && isAlreadyUploaded && !submitResult && selectedFile && (
                           <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm animate-in fade-in zoom-in duration-300">
                             <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
                             <div>
@@ -1542,7 +1547,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </div>
                         )}
 
-                        {parsedData && !parsedData.isValid && (
+                        {!isParsing && parsedData && !parsedData.isValid && (
                           <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
                             <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
                             <span className="leading-relaxed">
@@ -1553,7 +1558,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </div>
                         )}
 
-                        {submitResult && (
+                        {!isParsing && submitResult && (
                           <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
                             {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
                             <div>
@@ -1567,27 +1572,29 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </div>
                         )}
 
-                        <button 
-                          onClick={handleUploadSubmit}
-                          disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
-                          className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                            parsedData && parsedData.isValid && !isSubmitting && selectedFile
-                              ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
-                              : 'opacity-40 cursor-not-allowed'
-                          }`}
-                          style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
-                        >
-                          <UploadCloud size={16} />
-                          {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
-                        </button>
+                        {!isParsing && (
+                          <button 
+                            onClick={handleUploadSubmit}
+                            disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
+                            className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
+                              parsedData && parsedData.isValid && !isSubmitting && selectedFile
+                                ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
+                                : 'opacity-40 cursor-not-allowed'
+                            }`}
+                            style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
+                          >
+                            <UploadCloud size={16} />
+                            {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
+                          </button>
+                        )}
 
                         {/* Tombol Lanjutkan Tahap 3 */}
-                        {parsedData && parsedData.isValid && activeTab !== 'spt' && (
+                        {!isParsing && parsedData && parsedData.isValid && activeTab !== 'spt' && (
                           <button 
                             onClick={() => navigate(currentView, 3)}
                             className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
                           >
-                            Lanjutkan Tahap 3 <ChevronRight size={16} />
+                            Lanjut upload Bukti Pendukung <ChevronRight size={16} />
                           </button>
                         )}
                       </>
@@ -1618,7 +1625,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         )}
 
                         <button 
-                          onClick={() => setShowSuccessModal(true)} // PERBAIKAN: Gunakan custom modal alih-alih alert bawaan
+                          onClick={() => setShowSuccessModal(true)}
                           className="w-full py-3.5 mt-3 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] cursor-pointer"
                           style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
                         >
@@ -1638,7 +1645,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </div>
 
                   <div className="lg:col-span-8 space-y-4">
-                    {/* Panel Kanan (Tabel Pratinjau) tetap ditampilkan di Tahap 2 dan 3 */}
+                    {}
                     {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
                       <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
                         <div className="flex items-center gap-2 font-black text-sm">
@@ -1706,10 +1713,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                 parsedData.rows.map((row, idx) => {
                                   const isLibur = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
                                   
-                                  // Di Tahap 3, semua input dikunci (read-only)
-                                  const isLocked = activeStep === 3 || (isAlreadyUploaded && !submitResult);
+                                  // PERBAIKAN: Hanya bisa diedit di Tahap 3
+                                  const isLocked = activeStep !== 3;
                                   
-                                  const rowBgClass = isLocked 
+                                  const rowBgClass = isLocked && activeStep === 3
                                     ? 'bg-gray-50 text-gray-400 opacity-80 grayscale' 
                                     : (isLibur ? 'bg-[#F4CCCC] text-red-900' : 'hover:bg-teal-50/30 transition-colors');
                                   
@@ -1720,8 +1727,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           type="text" 
                                           value={row.tanggal} 
                                           onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)}
-                                          disabled={isLocked}
-                                          className="w-full bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-bold text-inherit px-1 py-1"
+                                          disabled={true}
+                                          className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed"
                                         />
                                       </td>
                                       <td className="py-2 px-3 whitespace-nowrap">
@@ -1729,8 +1736,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           type="text" 
                                           value={row.hari} 
                                           onChange={(e) => handleCellChange(idx, 'hari', e.target.value)}
-                                          disabled={isLocked}
-                                          className="w-full max-w-[80px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none text-inherit px-1 py-1"
+                                          disabled={true}
+                                          className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed"
                                         />
                                       </td>
                                       <td className="py-2 px-3 whitespace-nowrap">
@@ -1738,8 +1745,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           type="text" 
                                           value={row.datang} 
                                           onChange={(e) => handleCellChange(idx, 'datang', e.target.value)}
-                                          disabled={isLocked}
-                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.datang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
+                                          disabled={true}
+                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
                                         />
                                       </td>
                                       <td className="py-2 px-3 whitespace-nowrap">
@@ -1747,25 +1754,31 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           type="text" 
                                           value={row.pulang} 
                                           onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)}
-                                          disabled={isLocked}
-                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.pulang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
+                                          disabled={true}
+                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
                                         />
                                       </td>
                                       <td className="py-2 px-3 text-center whitespace-nowrap">
                                         {isLocked ? (
-                                          <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
-                                            TERKUNCI
-                                          </span>
-                                        ) : (
-                                          <select
-                                            value={row.keterangan}
-                                            onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
-                                            className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border ${
+                                          <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${
                                               row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
                                                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
                                                 : row.keterangan === 'Libur' 
                                                 ? 'bg-[#EAA] text-red-900 border-red-300' 
                                                 : 'bg-amber-50 text-amber-800 border-amber-200'
+                                            }`}>
+                                            {row.keterangan}
+                                          </span>
+                                        ) : (
+                                          <select
+                                            value={row.keterangan}
+                                            onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
+                                            className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border hover:shadow-sm transition-shadow ${
+                                              row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
+                                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 focus:border-emerald-500' 
+                                                : row.keterangan === 'Libur' 
+                                                ? 'bg-[#EAA] text-red-900 border-red-300 focus:border-red-500' 
+                                                : 'bg-amber-50 text-amber-800 border-amber-200 focus:border-amber-500'
                                             }`}
                                           >
                                             <option value="WFO">WFO</option>
@@ -1968,6 +1981,7 @@ const ProfileView = ({ navigate }) => {
             </div>
           ) : (
             <div className="flex flex-col gap-6">
+              {}
               {filteredPegawai.map((item, index) => {
                 const rawFoto = item.Foto_Pegawai || '';
                 const fileId = extractDriveId(rawFoto);
