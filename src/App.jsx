@@ -962,6 +962,24 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     });
   };
 
+  const handleCellChange = (index, field, value) => {
+    setParsedData(prev => {
+      if (!prev || !prev.rows) return prev;
+      const newRows = [...prev.rows];
+      const updatedRow = { ...newRows[index], [field]: value };
+      
+      if (field === 'tanggal') {
+        updatedRow._dateObj = parseIndoDate(value);
+      }
+      
+      newRows[index] = updatedRow;
+      
+      const totalMasuk = newRows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
+      
+      return { ...prev, rows: newRows, totalHariMasuk: totalMasuk };
+    });
+  };
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFile || !parsedData || !parsedData.isValid) return;
@@ -1009,9 +1027,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         }
       };
 
-      // Mock submit response for preview purposes
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const json = { status: 'success', folderUrl: '#' };
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+
+      const json = await res.json();
 
       if (json.status === 'success') {
         const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
@@ -1019,7 +1041,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         
         setSubmitResult({ 
           type: 'success', 
-          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti (Preview Mode)!' : 'Berkas dan Kertas Kerja berhasil disimulasikan (Preview Mode)!', 
+          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
           url: json.folderUrl 
         });
         
@@ -1434,32 +1456,82 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </thead>
                           <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
                             {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
-                              parsedData.rows.map((row, idx) => (
-                                /* Grayscale effect when locked */
-                                <tr key={idx} className={isAlreadyUploaded && !submitResult ? 'bg-gray-50 text-gray-400 opacity-80 grayscale' : (row.keterangan === 'Libur' ? 'bg-gray-50/40 text-gray-400' : 'hover:bg-teal-50/30 transition-colors')}>
-                                  <td className="py-3 px-3.5 font-bold whitespace-nowrap">{row.tanggal}</td>
-                                  <td className="py-3 px-3 whitespace-nowrap">{row.hari}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.datang !== '-' ? 'text-gray-900' : ''}`}>{row.datang}</td>
-                                  <td className={`py-3 px-3 whitespace-nowrap font-semibold ${row.pulang !== '-' ? 'text-gray-900' : ''}`}>{row.pulang}</td>
-                                  <td className="py-3 px-3 text-center whitespace-nowrap">
-                                    {isAlreadyUploaded && !submitResult ? (
-                                      <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
-                                        TERKUNCI
-                                      </span>
-                                    ) : (
-                                      <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide ${
-                                        row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
-                                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                          : row.keterangan === 'Libur' 
-                                          ? 'bg-gray-100 text-gray-400' 
-                                          : 'bg-amber-50 text-amber-800 border border-amber-200'
-                                      }`}>
-                                        {row.keterangan}
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))
+                              parsedData.rows.map((row, idx) => {
+                                const isLibur = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
+                                const rowBgClass = isAlreadyUploaded && !submitResult 
+                                  ? 'bg-gray-50 text-gray-400 opacity-80 grayscale' 
+                                  : (isLibur ? 'bg-[#F4CCCC] text-red-900' : 'hover:bg-teal-50/30 transition-colors');
+                                
+                                return (
+                                  <tr key={idx} className={rowBgClass}>
+                                    <td className="py-2 px-3.5 whitespace-nowrap">
+                                      <input 
+                                        type="text" 
+                                        value={row.tanggal} 
+                                        onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)}
+                                        disabled={isAlreadyUploaded && !submitResult}
+                                        className="w-full bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-bold text-inherit px-1 py-1"
+                                      />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input 
+                                        type="text" 
+                                        value={row.hari} 
+                                        onChange={(e) => handleCellChange(idx, 'hari', e.target.value)}
+                                        disabled={isAlreadyUploaded && !submitResult}
+                                        className="w-full max-w-[80px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none text-inherit px-1 py-1"
+                                      />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input 
+                                        type="text" 
+                                        value={row.datang} 
+                                        onChange={(e) => handleCellChange(idx, 'datang', e.target.value)}
+                                        disabled={isAlreadyUploaded && !submitResult}
+                                        className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.datang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
+                                      />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input 
+                                        type="text" 
+                                        value={row.pulang} 
+                                        onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)}
+                                        disabled={isAlreadyUploaded && !submitResult}
+                                        className={`w-full max-w-[70px] bg-transparent border-b border-transparent hover:border-gray-400 focus:border-teal-600 focus:outline-none font-semibold text-inherit px-1 py-1 ${row.pulang !== '-' && !isLibur ? 'text-gray-900' : ''}`}
+                                      />
+                                    </td>
+                                    <td className="py-2 px-3 text-center whitespace-nowrap">
+                                      {isAlreadyUploaded && !submitResult ? (
+                                        <span className="inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase tracking-wide bg-gray-200 text-gray-500 border border-gray-300">
+                                          TERKUNCI
+                                        </span>
+                                      ) : (
+                                        <select
+                                          value={row.keterangan}
+                                          onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
+                                          className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border ${
+                                            row.keterangan === 'WFO' || row.keterangan === 'WFA' || row.keterangan === 'Dinas'
+                                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                                              : row.keterangan === 'Libur' 
+                                              ? 'bg-[#EAA] text-red-900 border-red-300' 
+                                              : 'bg-amber-50 text-amber-800 border-amber-200'
+                                          }`}
+                                        >
+                                          <option value="WFO">WFO</option>
+                                          <option value="WFA">WFA</option>
+                                          <option value="WFH">WFH</option>
+                                          <option value="Dinas">Dinas</option>
+                                          <option value="Cuti">Cuti</option>
+                                          <option value="Libur">Libur</option>
+                                          <option value="DL">DL</option>
+                                          <option value="TB">TB</option>
+                                          <option value="-">-</option>
+                                        </select>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })
                             ) : (
                               <tr>
                                 <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
