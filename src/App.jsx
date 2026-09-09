@@ -165,18 +165,16 @@ const DAFTAR_LIBUR_NASIONAL = [
 
 const extractSptData = (lines, fullText, dbPegawai = []) => {
   const nipSet = new Set();
-  let extractedDate = '-';
-  
+  let dateBerangkat = '-';
+  let datePulang = '-';
+
   // Daftar NIP Pejabat Penandatangan yang diabaikan agar tidak masuk ke daftar pelaksana tugas
   const IGNORED_NIPS = [
     '197012151998032007', // Rini Dyah Mawarty
   ];
 
   // 1. Ekstrak NIP SUPER ROBUST (Dengan toleransi kesalahan OCR)
-  // Memperbaiki kesalahan baca OCR umum pada angka sebelum difilter
   const textWithOcrFixes = fullText.replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
-  
-  // Menghapus SEMUA karakter selain angka
   const onlyDigits = textWithOcrFixes.replace(/[^0-9]/g, '');
   const nipMatches = onlyDigits.match(/(19\d{16}|20\d{16})/g) || [];
   
@@ -186,7 +184,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     }
   }
 
-  // Fallback: cari di tiap baris jika urutan rendering PDF memecah struktur NIP dari kolom yang beda
   for (let i = 0; i < lines.length; i++) {
     const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
     const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
@@ -196,42 +193,90 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     }
   }
 
-  // 2. Ekstrak Tanggal dengan regex super toleran
-  const textToSearch = fullText.replace(/\s+/g, ' '); 
-  const datePattern = /(\d{1,2}(?:\s*(?:-|s\/?d\.?|sampai)\s*\d{1,2})?\s*(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*\d{4})/i;
-  
-  const periodeRegex = new RegExp(`(?:Periode|Pelaksanaan)[\\s\\S]{0,30}?${datePattern.source}`, 'i');
-  const waktuRegex = new RegExp(`(?:Waktu|Tanggal|Hari)[\\s\\S]{0,30}?${datePattern.source}`, 'i');
+  // 2. Ekstrak Tanggal Berangkat & Tanggal Pulang
+  const MONTHS = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember';
 
-  const periodeMatch = textToSearch.match(periodeRegex);
-  if (periodeMatch) {
-    extractedDate = periodeMatch[1].trim();
-  } else {
-    const waktuMatch = textToSearch.match(waktuRegex);
-    if (waktuMatch) {
-      extractedDate = waktuMatch[1].trim();
-    } else {
-      // Fallback: Cari baris per baris yang memuat tanggal beserta konteksnya
-      for (let i = 0; i < lines.length; i++) {
-        if (extractedDate !== '-') break;
-        const match = lines[i].match(datePattern);
-        if (match) {
-          const context = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 3)).join(' ').toLowerCase();
-          if (context.includes('waktu') || context.includes('tanggal') || context.includes('periode') || context.includes('hari')) {
-            extractedDate = match[1].trim();
-            break;
-          }
-        }
-      }
-      // Jika masih tidak ketemu sama sekali, ambil tanggal apapun yang terdeteksi
-      if (extractedDate === '-') {
-        const anyDateMatch = textToSearch.match(datePattern);
-        if (anyDateMatch) extractedDate = anyDateMatch[1].trim();
-      }
+  const normalizeDashes = (str) => str.replace(/[–—−‐‑‒―_~•●▪=]+/g, '-');
+
+  const textToSearch = normalizeDashes(fullText.replace(/\s+/g, ' '));
+
+  const SEP = '(?:-{1,3}|s\\.?\\/?d\\.?|sampai(?:\\s*dengan)?|hingga)\\s*';
+
+  const fullRangeRegex = new RegExp(
+    `(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`,
+    'i'
+  );
+
+  const shortRangeRegex = new RegExp(
+    `(\\d{1,2})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`,
+    'i'
+  );
+
+  const singleDateRegex = new RegExp(`(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`, 'gi');
+
+  const contextRegex = /(?:Waktu|Tanggal|Hari|Periode|Pelaksanaan)/i;
+
+  const applyFullRange = (text) => {
+    const m = text.match(fullRangeRegex);
+    if (!m) return null;
+    return {
+      berangkat: `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`,
+      pulang: `${parseInt(m[4], 10)} ${m[5]} ${m[6]}`
+    };
+  };
+
+  const applyShortRange = (text) => {
+    const m = text.match(shortRangeRegex);
+    if (!m) return null;
+    return {
+      berangkat: `${parseInt(m[1], 10)} ${m[3]} ${m[4]}`,
+      pulang: `${parseInt(m[2], 10)} ${m[3]} ${m[4]}`
+    };
+  };
+
+  const applySingleDate = (text) => {
+    const matches = [...text.matchAll(singleDateRegex)];
+    if (matches.length !== 1) return null; // ambigu kalau lebih dari 1 atau tidak ada
+    const m = matches[0];
+    const single = `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`;
+    return { berangkat: single, pulang: single };
+  };
+
+  let found = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!contextRegex.test(lines[i])) continue;
+    const windowText = normalizeDashes(
+      lines.slice(i, Math.min(lines.length, i + 3)).join(' ').replace(/\s+/g, ' ')
+    );
+    found = applyFullRange(windowText) || applyShortRange(windowText) || applySingleDate(windowText);
+    if (found) break;
+  }
+
+  if (!found) {
+    found = applyFullRange(textToSearch) || applyShortRange(textToSearch);
+  }
+
+  if (!found) {
+    const allDates = [...textToSearch.matchAll(singleDateRegex)];
+    if (allDates.length >= 2) {
+      const [d1, d2] = allDates;
+      found = {
+        berangkat: `${parseInt(d1[1], 10)} ${d1[2]} ${d1[3]}`,
+        pulang: `${parseInt(d2[1], 10)} ${d2[2]} ${d2[3]}`
+      };
+    } else if (allDates.length === 1) {
+      const d1 = allDates[0];
+      const single = `${parseInt(d1[1], 10)} ${d1[2]} ${d1[3]}`;
+      found = { berangkat: single, pulang: single };
     }
   }
 
-  // 3. Lookup dan Filter Ketat: HANYA NIP yang terdaftar di Bank Data Spreadsheet
+  if (found) {
+    dateBerangkat = found.berangkat;
+    datePulang = found.pulang;
+  }
+
   if (!dbPegawai || dbPegawai.length === 0) {
     const cached = localStorage.getItem('cached_pegawai_json');
     if (cached) {
@@ -246,19 +291,19 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   const pegawaiList = [];
   nipSet.forEach((nip) => {
     const cleanNip = String(nip).trim();
-    const found = dbPegawai.find(p => String(p.NIP).trim() === cleanNip);
-    // ATURAN: Hanya masukkan data jika NIP terdaftar di Bank Data Spreadsheet
-    if (found && found.Nama) {
+    const foundPegawai = dbPegawai.find(p => String(p.NIP).trim() === cleanNip);
+    if (foundPegawai && foundPegawai.Nama) {
       pegawaiList.push({
-        nama: found.Nama,
-        nip: found.NIP ? String(found.NIP).trim() : cleanNip
+        nama: foundPegawai.Nama,
+        nip: foundPegawai.NIP ? String(foundPegawai.NIP).trim() : cleanNip
       });
     }
   });
 
   return {
     pegawaiList: pegawaiList,
-    date: extractedDate
+    dateBerangkat,
+    datePulang
   };
 };
 
@@ -319,7 +364,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     }
     const arrayBuffer = await file.arrayBuffer();
     
-    // UPDATE: Penambahan cMapUrl agar font kustom/corrupt dalam dokumen pemerintah terbaca dengan benar
     const pdf = await window.pdfjsLib.getDocument({ 
       data: arrayBuffer,
       cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', 
@@ -358,7 +402,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     }
     fullText = lines.join('\n');
     
-    // DETEKSI DOKUMEN HASIL SCAN & JALANKAN OCR FALLBACK
     const digitsOnly = fullText.replace(/[^0-9]/g, '');
     const hasNip = /(19\d{16}|20\d{16})/.test(digitsOnly);
     const isTooShort = fullText.trim().length < 50;
@@ -376,12 +419,11 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
         });
       }
 
-      lines = []; // Reset lines hasil bacaan kosong sebelumnya
+      lines = []; 
       
       for (let i = 1; i <= pdf.numPages; i++) {
         if (onProgress) onProgress(`Memindai gambar hasil scan halaman ${i} dari ${pdf.numPages} (Mungkin memakan waktu)...`);
         const page = await pdf.getPage(i);
-        // Perbesar resolusi canvas untuk akurasi bacaan OCR yang lebih baik
         const viewport = page.getViewport({ scale: 2.0 });
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -407,7 +449,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     throw new Error('Format dokumen tidak didukung.');
   }
 
-  // Muat Bank Data resmi dari Spreadsheet (cache atau fetch langsung)
   let dbPegawai = [];
   const cached = localStorage.getItem('cached_pegawai_json');
   if (cached) {
@@ -422,13 +463,13 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     dbPegawai = fetched.data || [];
   }
 
-  // ALUR KHUSUS UNTUK MODUL SURAT TUGAS
   if (activeTab === 'spt') {
     const sptData = extractSptData(lines, fullText, dbPegawai);
     return {
       isValid: true,
       isSpt: true,
-      sptDate: sptData.date,
+      sptDateBerangkat: sptData.dateBerangkat,
+      sptDatePulang: sptData.datePulang,
       sptNames: sptData.pegawaiList,
       nip: '-',
       nama: 'Berbagai Pegawai',
@@ -1833,19 +1874,26 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
                           <p className="font-extrabold text-gray-900 text-xs">{parsedData ? (activeTab === 'spt' ? (selectedFile?.name || 'Berkas SPT') : parsedData.nama) : 'Belum Ada Berkas'}</p>
                           <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? (activeTab === 'spt' ? loggedInUser.NIP : parsedData.nip) : '-'}</p>
-                          <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? (activeTab === 'spt' ? (parsedData.sptDate || 'Semua Periode') : parsedData.periode) : (selectedPeriod?.periodeEvent || '-')}</p>
+                          {activeTab === 'spt' ? (
+                            <p className="text-[10px] text-teal-700 font-extrabold">
+                              Berangkat: {parsedData ? (parsedData.sptDateBerangkat || '-') : '-'} &nbsp;•&nbsp; Pulang: {parsedData ? (parsedData.sptDatePulang || '-') : '-'}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
+                          )}
                         </div>
                       </div>
                       
                       {activeTab === 'spt' ? (
                         <div className="overflow-auto border border-gray-200 rounded-2xl bg-white shadow-2xs relative max-h-[450px]">
-                           <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[600px]">
+                           <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
                               <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
                                 <tr>
                                   <th className="py-3 px-4 w-12 text-center whitespace-nowrap">NO</th>
                                   <th className="py-3 px-4 whitespace-nowrap">NAMA PEGAWAI</th>
                                   <th className="py-3 px-4 whitespace-nowrap">NIP</th>
                                   <th className="py-3 px-4 whitespace-nowrap">TANGGAL BERANGKAT</th>
+                                  <th className="py-3 px-4 whitespace-nowrap">TANGGAL PULANG</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
@@ -1855,12 +1903,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                       <td className="py-3 px-4 text-center text-gray-500 font-bold">{idx + 1}</td>
                                       <td className="py-3 px-4 font-bold text-gray-900">{pegawai.nama}</td>
                                       <td className="py-3 px-4 font-mono text-gray-600">{pegawai.nip}</td>
-                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDate}</td>
+                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDateBerangkat}</td>
+                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDatePulang}</td>
                                     </tr>
                                   ))
                                 ) : (
                                   <tr>
-                                    <td colSpan="4" className="text-center py-16 text-gray-400 bg-gray-50/50">
+                                    <td colSpan="5" className="text-center py-16 text-gray-400 bg-gray-50/50">
                                       <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
                                         <FileText size={32} />
                                         <div>
