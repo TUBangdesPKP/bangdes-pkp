@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, 
   HelpCircle, 
@@ -22,7 +22,6 @@ import {
   FileSpreadsheet,
   Trash2,
   Users,
-  MapPin,
   Save,
   Pencil,
   X
@@ -192,14 +191,7 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
-  let nomorSurat = '-';
-
-  // Ekstrak Nomor Surat Tugas
-  const noSuratRegex = /(?:Nomor|No\.)\s*:?\s*([^\n]+)/i;
-  const noMatch = fullText.match(noSuratRegex);
-  if (noMatch) {
-    nomorSurat = noMatch[1].trim();
-  }
+  let tanggalSpt = '-';
 
   // Daftar NIP Pejabat Penandatangan yang diabaikan agar tidak masuk ke daftar pelaksana tugas
   const IGNORED_NIPS = [
@@ -265,7 +257,7 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
 
   const applySingleDate = (text) => {
     const matches = [...text.matchAll(singleDateRegex)];
-    if (matches.length !== 1) return null; // ambigu kalau lebih dari 1 atau tidak ada
+    if (matches.length !== 1) return null; 
     const m = matches[0];
     const single = `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`;
     return { berangkat: single, pulang: single };
@@ -306,8 +298,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     datePulang = found.pulang;
   }
 
-  // Ekstrak Tanggal Surat (Biasanya tanggal terakhir yang muncul di dokumen dekat tanda tangan)
-  let tanggalSpt = '-';
   const allSingleDates = [...textToSearch.matchAll(singleDateRegex)];
   if (allSingleDates.length > 0) {
     const lastDateMatch = allSingleDates[allSingleDates.length - 1];
@@ -1209,7 +1199,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  // SPT Specific State
   const [activeSptTab, setActiveSptTab] = useState('simpanan-saya'); 
   const [selectedSptPegawai, setSelectedSptPegawai] = useState([]);
   const [isEditingSptDetails, setIsEditingSptDetails] = useState(false);
@@ -1219,12 +1208,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     tanggalSpt: ''
   });
   
-  // Search Pegawai State
   const [allPegawaiDb, setAllPegawaiDb] = useState([]);
   const [isSearchingPegawai, setIsSearchingPegawai] = useState(false);
   const [pegawaiSearchTerm, setPegawaiSearchTerm] = useState('');
   const [editingPegawaiIndex, setEditingPegawaiIndex] = useState(null);
   const [editPegawaiSearchTerm, setEditPegawaiSearchTerm] = useState('');
+
+  const searchInputRef = useRef(null);
 
   const getModuleKey = (view) => {
     switch(view) {
@@ -1253,6 +1243,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       navigate(currentView, 1);
     }
   }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
+
+  useEffect(() => {
+    if (isSearchingPegawai && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [isSearchingPegawai]);
+
+  useEffect(() => {
+    if (editingPegawaiIndex !== null) {
+      const editInputId = `edit-pegawai-input-${editingPegawaiIndex}`;
+      const el = document.getElementById(editInputId);
+      if (el) el.focus();
+    }
+  }, [editingPegawaiIndex]);
 
   const handleTabClick = (targetView) => {
     if (selectedFile && !submitResult) {
@@ -1428,7 +1432,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     const existingNips = parsedData?.sptNames?.map(p => String(p.nip)) || [];
     
     return allPegawaiDb.filter(p => {
-       const currentNip = editingPegawaiIndex !== null ? parsedData?.sptNames[editingPegawaiIndex]?.nip : null;
+       const currentNip = editingPegawaiIndex !== null && parsedData?.sptNames ? parsedData.sptNames[editingPegawaiIndex]?.nip : null;
        if (existingNips.includes(String(p.NIP)) && String(p.NIP) !== String(currentNip)) return false;
        return p.Nama.toLowerCase().includes(term) || String(p.NIP).includes(term);
     }).slice(0, 10);
@@ -1630,6 +1634,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
+      {}
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
@@ -1701,10 +1706,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
-        <div className="max-w-7xl mx-auto h-full flex flex-col">
+      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-4 md:p-8 h-full overflow-y-auto">
+        <div className="max-w-[1300px] w-full mx-auto h-full flex flex-col items-start pr-0 md:pr-4 relative">
+          
           {activeTab === 'rekap' ? (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center w-full">
               <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
                 <FileBarChart size={32} />
               </div>
@@ -1712,74 +1718,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Halaman rekapitulasi data kedisiplinan dan kinerja bulanan sedang dalam penyiapan. Silakan pilih modul lain pada menu di sebelah kiri.</p>
             </div>
           ) : (
-            <div className="flex flex-col h-full">
-              <div 
-                className={`rounded-3xl text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 z-20 backdrop-blur-md ${activeTab === 'spt' ? 'p-0 bg-transparent border-none' : 'p-6 sm:p-8 sticky top-0'}`}
-                style={activeTab !== 'spt' ? { backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` } : {}}
-              >
-                {activeTab === 'spt' ? (
-                  <div className="w-full">
-                    <h2 className="text-2xl font-black leading-tight text-gray-900 mb-2">Arsip SPT</h2>
-                    <p className="text-sm text-gray-500 mb-6">Arsip Surat Perintah Tugas perjalanan dinas Anda</p>
-                    
-                    <div className="flex items-center gap-6 border-b border-gray-200">
-                      <button 
-                        onClick={() => setActiveSptTab('sudah-dikumpulkan')}
-                        className={`pb-3 text-sm font-bold transition-colors border-b-2 cursor-pointer ${activeSptTab === 'sudah-dikumpulkan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
-                      >
-                        Sudah Dikumpulkan
-                      </button>
-                      <button 
-                        onClick={() => setActiveSptTab('simpanan-saya')}
-                        className={`pb-3 text-sm font-bold transition-colors border-b-2 cursor-pointer ${activeSptTab === 'simpanan-saya' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
-                      >
-                        Simpanan Saya
-                      </button>
+            <div className="w-full">
+              
+              {activeTab === 'spt' && (
+                 <div className="mb-6 border-b border-gray-200">
+                    <h2 className="text-2xl font-black text-gray-900 mb-1">Arsip SPT</h2>
+                    <p className="text-sm text-gray-500 mb-4">Arsip Surat Perintah Tugas perjalanan dinas Anda</p>
+                    <div className="flex gap-6 text-sm font-bold">
+                       <button onClick={() => setActiveSptTab('sudah-dikumpulkan')} className={`pb-3 border-b-2 px-1 transition-colors cursor-pointer ${activeSptTab === 'sudah-dikumpulkan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Sudah Dikumpulkan</button>
+                       <button onClick={() => setActiveSptTab('simpanan-saya')} className={`pb-3 border-b-2 px-1 transition-colors cursor-pointer ${activeSptTab === 'simpanan-saya' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Simpanan Saya</button>
                     </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-2">
-                      <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
-                        OPEN SUBMISSION
-                      </span>
-                      <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
-                        {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
-                      </h2>
-                      <div className="flex items-center gap-2 text-xs text-gray-200">
-                        <Calendar size={14} />
-                        <span>
-                          {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
-                        </span>
-                        {selectedPeriod && (
-                          <>
-                            <span>•</span>
-                            <span>{selectedPeriod.tipe}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    {selectedPeriod && (
-                      <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                        <div className="text-right flex-1">
-                          <p className="text-xs text-gray-200 leading-snug font-medium">
-                            <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
-                          </p>
-                          <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
-                        </div>
-                        {loggedInUser?.Foto_Pegawai ? (
-                          <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                        ) : (
-                          <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
-                            {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                 </div>
+              )}
 
+              {}
               {activeTab === 'spt' && activeSptTab === 'sudah-dikumpulkan' && (
                 <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-3xl border border-gray-100 p-8 shadow-sm">
                    <div className="w-16 h-16 rounded-2xl bg-gray-50 text-gray-400 flex items-center justify-center mb-4">
@@ -1791,14 +1743,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               )}
 
               {activeTab === 'spt' && activeSptTab === 'simpanan-saya' && (
-                <div className="flex-1 flex flex-col mt-4">
+                <div className="flex-1 flex flex-col">
                   <div className="bg-[#EAF5FA] border border-[#CDE5F1] text-[#1E5D77] p-4 rounded-2xl text-sm mb-6 flex items-start gap-3">
                      <span className="shrink-0 mt-0.5">ℹ️</span>
                      <p>Upload SPT kapan saja, walaupun belum ada periode pengumpulan bukti dukung yang dibuka. Saat periode dengan rentang tanggal yang cocok dibuka, SPT ini akan muncul di halaman pengumpulan dan tinggal Anda klaim.</p>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start flex-1 pb-10">
-                    <div className="lg:col-span-5 space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start flex-1 pb-10 relative">
+                    <div className="lg:col-span-5 space-y-5 lg:sticky top-6">
                        <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
                           <h3 className="font-bold text-lg text-gray-900 mb-2">Upload SPT (di luar periode pengumpulan)</h3>
                           <p className="text-sm text-gray-500 mb-5">Upload scan SPT perjalanan dinas Anda. Sistem akan mendeteksi nama, NIP, tanggal, dan tujuan.</p>
@@ -1851,21 +1803,21 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                        </div>
                     </div>
 
-                    <div className="lg:col-span-7">
-                       <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col h-[550px]">
+                    <div className="lg:col-span-7 flex flex-col gap-4">
+                       <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col min-h-[400px]">
                           <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">
                              <h3 className="font-bold text-lg text-gray-900">Rincian SPT</h3>
                              <span className="text-sm font-medium text-[#084C61]">{selectedSptPegawai.length} pegawai dipilih</span>
                           </div>
 
                           {!selectedFile ? (
-                             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 py-10">
                                 <FileText size={48} className="mb-4 opacity-30" />
                                 <h4 className="font-bold text-gray-500 mb-1">Hasil Pembacaan Dokumen</h4>
                                 <p className="text-sm text-center">Upload file dan klik "Baca Dokumen" untuk melihat hasil</p>
                              </div>
                           ) : isParsing ? (
-                             <div className="flex-1 flex flex-col items-center justify-center text-[#1E5D77]">
+                             <div className="flex-1 flex flex-col items-center justify-center text-[#1E5D77] py-10">
                                 <div className="w-12 h-12 border-4 border-current border-t-transparent rounded-full animate-spin mb-4"></div>
                                 <p className="font-bold">{parseStatus}</p>
                              </div>
@@ -1876,13 +1828,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                      <div className="absolute top-0 left-0 w-1.5 h-full bg-[#1E5D77]/80 rounded-l-2xl"></div>
                                      <div className="pl-3 space-y-3">
                                         <div className="flex items-center gap-3">
-                                           <label className="w-20 font-bold text-gray-600 text-xs">Mulai:</label>
+                                           <label className="w-16 font-bold text-gray-600 text-xs">Mulai:</label>
                                            <div className="flex-1">
                                               <input 
                                                 type="date" 
                                                 value={formatIndoToYMD(sptDetailsForm.berangkat)} 
                                                 onChange={(e) => setSptDetailsForm({...sptDetailsForm, berangkat: formatYMDtoIndo(e.target.value) || e.target.value})} 
-                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700 cursor-pointer" 
                                               />
                                            </div>
                                            <button 
@@ -1899,35 +1851,36 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                     ...prev,
                                                     sptDateBerangkat: sptDetailsForm.berangkat,
                                                     sptDatePulang: sptDetailsForm.pulang,
+                                                    sptTanggalSurat: sptDetailsForm.tanggalSpt,
                                                     lamaHari: diff > 0 ? diff : 1
                                                   };
                                                 });
                                               }} 
-                                              className="bg-[#10B981] hover:bg-[#059669] text-white px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                                              className="bg-[#10B981] hover:bg-[#059669] text-white px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer h-[34px]"
                                            >
                                               <Save size={14} /> Simpan
                                            </button>
                                         </div>
                                         <div className="flex items-center gap-3">
-                                           <label className="w-20 font-bold text-gray-600 text-xs">Selesai:</label>
+                                           <label className="w-16 font-bold text-gray-600 text-xs">Selesai:</label>
                                            <div className="flex-1">
                                               <input 
                                                 type="date" 
                                                 value={formatIndoToYMD(sptDetailsForm.pulang)} 
                                                 onChange={(e) => setSptDetailsForm({...sptDetailsForm, pulang: formatYMDtoIndo(e.target.value) || e.target.value})} 
-                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700 cursor-pointer" 
                                               />
                                            </div>
                                            <div className="w-[84px]"></div> 
                                         </div>
                                         <div className="flex items-center gap-3">
-                                           <label className="w-20 font-bold text-gray-600 text-xs">Tgl SPT:</label>
+                                           <label className="w-16 font-bold text-gray-600 text-xs">Tgl SPT:</label>
                                            <div className="flex-1">
                                               <input 
                                                 type="date" 
                                                 value={formatIndoToYMD(sptDetailsForm.tanggalSpt)} 
                                                 onChange={(e) => setSptDetailsForm({...sptDetailsForm, tanggalSpt: formatYMDtoIndo(e.target.value) || e.target.value})} 
-                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700 cursor-pointer" 
                                               />
                                            </div>
                                            <div className="w-[84px]"></div> 
@@ -1937,18 +1890,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                 ) : (
                                   <div className="bg-[#EAF5FA]/60 border border-[#CDE5F1]/80 rounded-2xl p-4 mb-5 text-sm space-y-2 relative overflow-hidden">
                                      <div className="absolute top-0 left-0 w-1.5 h-full bg-[#1E5D77]/80 rounded-l-2xl"></div>
-                                     <div className="pl-3 flex items-center justify-between">
-                                        <div>
-                                            <div className="flex items-center gap-2.5 font-bold text-[#1E5D77]">
-                                               <Calendar size={16} className="opacity-80" /> {parsedData.sptDateBerangkat} - {parsedData.sptDatePulang} <span className="text-[10px] bg-white text-[#1E5D77] px-2 py-0.5 rounded-md border border-[#CDE5F1] ml-2">({parsedData.lamaHari} Hari)</span>
+                                     <div className="pl-3 flex items-start justify-between gap-4">
+                                        <div className="flex-1">
+                                            <div className="flex flex-wrap items-center gap-2.5 font-bold text-[#1E5D77] mb-2 leading-relaxed">
+                                               <Calendar size={16} className="opacity-80" /> {parsedData.sptDateBerangkat} - {parsedData.sptDatePulang} 
+                                               <span className="text-[10px] bg-white text-[#1E5D77] px-2 py-0.5 rounded-md border border-[#CDE5F1] whitespace-nowrap">({parsedData.lamaHari} Hari)</span>
                                             </div>
-                                            <div className="flex items-center gap-2.5 mt-1.5 text-xs text-gray-500 font-medium">
+                                            <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
                                                <FileText size={14} className="opacity-70" /> Tgl SPT: {parsedData.sptTanggalSurat}
                                             </div>
                                         </div>
                                         <button 
                                             onClick={() => setIsEditingSptDetails(true)} 
-                                            className="bg-[#CDE5F1]/50 hover:bg-[#CDE5F1] border border-[#CDE5F1] px-3 py-1.5 rounded-lg text-xs font-bold text-[#1E5D77] flex items-center gap-1.5 transition-colors cursor-pointer"
+                                            className="bg-[#CDE5F1]/50 hover:bg-[#CDE5F1] border border-[#CDE5F1] px-3 py-1.5 rounded-lg text-xs font-bold text-[#1E5D77] flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
                                         >
                                            <Pencil size={12} /> Edit
                                         </button>
@@ -1956,7 +1910,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   </div>
                                 )}
 
-                                <div className="flex-1 overflow-y-auto mb-6 pr-2 pb-2">
+                                <div className="flex-1 overflow-y-auto mb-2 pr-2 pb-2 max-h-[55vh]">
                                    {parsedData.sptNames && parsedData.sptNames.map((pegawai, idx) => (
                                       editingPegawaiIndex === idx ? (
                                          <div key={`edit-${idx}`} className="flex items-center gap-3 p-2 rounded-xl border border-[#CDE5F1] bg-blue-50/30 mb-2 shadow-sm relative">
@@ -1967,7 +1921,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                      <Search size={14} />
                                                   </div>
                                                   <input 
-                                                     autoFocus
+                                                     id={`edit-pegawai-input-${idx}`}
                                                      type="text" 
                                                      placeholder="Cari nama pegawai pengganti..." 
                                                      value={editPegawaiSearchTerm}
@@ -1998,15 +1952,15 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                             </button>
                                          </div>
                                       ) : (
-                                         <label key={idx} className="flex items-center justify-between p-3.5 rounded-xl hover:bg-gray-50 border border-transparent hover:border-gray-200 cursor-pointer transition-all shadow-sm bg-white mb-2">
+                                         <label key={idx} className="flex items-center justify-between p-3.5 rounded-xl hover:bg-gray-50 border border-transparent hover:border-gray-200 cursor-pointer transition-all shadow-sm bg-white mb-2 group">
                                             <div className="flex items-center gap-3">
                                                <input type="checkbox" checked={selectedSptPegawai.includes(pegawai.nip)} onChange={() => toggleSptPegawai(pegawai.nip)} className="w-4 h-4 rounded border-gray-300 text-[#084C61] focus:ring-[#084C61] cursor-pointer" />
                                                <div>
                                                   <p className="font-bold text-gray-900 text-sm">{pegawai.nama} <span className="inline-block px-1.5 py-0.5 ml-1 bg-emerald-100 text-emerald-700 rounded text-[10px]">✓ 100%</span></p>
-                                                  <p className="text-xs text-gray-500 font-mono mt-0.5">{pegawai.nip}</p>
+                                                  <p className="text-[11px] text-gray-500 font-mono mt-0.5">{pegawai.nip}</p>
                                                </div>
                                             </div>
-                                            <div className="flex items-center">
+                                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                                                <div 
                                                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingPegawaiIndex(idx); setEditPegawaiSearchTerm(pegawai.nama); }}
                                                   className="text-gray-300 hover:text-[#084C61] p-2 cursor-pointer transition-colors rounded-lg hover:bg-blue-50" 
@@ -2040,7 +1994,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                <Search size={16} />
                                             </div>
                                             <input 
-                                               autoFocus
+                                               ref={searchInputRef}
                                                type="text" 
                                                placeholder="Cari pegawai untuk ditambahkan..." 
                                                value={pegawaiSearchTerm}
@@ -2078,41 +2032,85 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                       </div>
                                    )}
                                 </div>
-
-                                <button 
-                                  onClick={handleUploadSubmit}
-                                  disabled={selectedSptPegawai.length === 0 || isSubmitting}
-                                  className={`w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${selectedSptPegawai.length > 0 && !isSubmitting ? 'bg-[#143E50] hover:bg-[#0c2633] cursor-pointer active:scale-[0.99]' : 'bg-gray-400 cursor-not-allowed'}`}
-                                >
-                                   {isSubmitting ? 'Memproses ke Server...' : `Upload Semua SPT (${selectedSptPegawai.length} pegawai)`}
-                                </button>
-                                
-                                {submitResult && (
-                                   <div className={`mt-4 p-3.5 rounded-xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
-                                      {submitResult.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" /> : <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />}
-                                      <div>
-                                         <p className="font-semibold">{submitResult.message}</p>
-                                         {submitResult.url && <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">Buka Dokumen di Google Drive</a>}
-                                      </div>
-                                   </div>
-                                )}
                              </div>
                           ) : (
-                             <div className="flex-1 flex flex-col items-center justify-center text-red-500 text-center px-4">
+                             <div className="flex-1 flex flex-col items-center justify-center text-red-500 text-center px-4 py-10">
                                 <AlertCircle size={48} className="mb-4 opacity-30" />
                                 <h4 className="font-bold text-red-700 mb-1">Gagal Membaca Dokumen</h4>
                                 <p className="text-sm text-red-600">{parsedData?.errorMessage || 'Pastikan file adalah Surat Perintah Tugas perjalanan dinas.'}</p>
                              </div>
                           )}
                        </div>
+
+                       {selectedFile && !isParsing && parsedData?.isValid && (
+                          <div className="mt-1">
+                             <button 
+                               onClick={handleUploadSubmit}
+                               disabled={selectedSptPegawai.length === 0 || isSubmitting}
+                               className={`w-full py-4 rounded-xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${selectedSptPegawai.length > 0 && !isSubmitting ? 'bg-[#143E50] hover:bg-[#0c2633] cursor-pointer active:scale-[0.99]' : 'bg-gray-400 cursor-not-allowed'}`}
+                             >
+                                {isSubmitting ? 'Memproses ke Server...' : `Upload Semua SPT (${selectedSptPegawai.length} pegawai)`}
+                             </button>
+                             
+                             {submitResult && (
+                                <div className={`mt-4 p-4 rounded-2xl text-sm flex items-start gap-3 shadow-sm ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
+                                   {submitResult.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" /> : <AlertCircle size={20} className="text-red-600 shrink-0 mt-0.5" />}
+                                   <div>
+                                      <p className="font-bold mb-1">{submitResult.message}</p>
+                                      {submitResult.url && <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-semibold text-xs inline-block hover:text-teal-800 transition-colors">Buka Dokumen di Google Drive</a>}
+                                   </div>
+                                </div>
+                             )}
+                          </div>
+                       )}
                     </div>
                   </div>
                 </div>
               )}
               
-              {/* LAYOUT LAMA UNTUK PRESENSI UANG MAKAN & TUKIN */}
+              {}
               {activeTab !== 'spt' && (
                 <>
+                  <div className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md bg-[#084C61]/95 border-b border-[#0E5B73]">
+                    <div className="space-y-2">
+                      <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
+                        OPEN SUBMISSION
+                      </span>
+                      <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
+                        {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
+                      </h2>
+                      <div className="flex items-center gap-2 text-xs text-gray-200">
+                        <Calendar size={14} />
+                        <span>
+                          {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
+                        </span>
+                        {selectedPeriod && (
+                          <>
+                            <span>•</span>
+                            <span>{selectedPeriod.tipe}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {selectedPeriod && (
+                      <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                        <div className="text-right flex-1">
+                          <p className="text-xs text-gray-200 leading-snug font-medium">
+                            <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
+                          </p>
+                          <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                        </div>
+                        {loggedInUser?.Foto_Pegawai ? (
+                          <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                            {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
                     {[1, 2, 3, 4, 5, 6].map((num) => {
                       const isActive = activeStep === num;
@@ -2197,7 +2195,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </div>
                   ) : (activeStep === 2 || activeStep === 3) && selectedPeriod ? (
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                      <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
+                      <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
                         {activeStep === 2 ? (
                           <>
                             <div>
@@ -2562,6 +2560,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   )}
                 </>
               )}
+
             </div>
           )}
         </div>
