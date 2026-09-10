@@ -167,11 +167,41 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
+  let nomorSuratTugas = '-';
 
   // Daftar NIP Pejabat Penandatangan yang diabaikan agar tidak masuk ke daftar pelaksana tugas
   const IGNORED_NIPS = [
     '197012151998032007', // Rini Dyah Mawarty
   ];
+
+  // 1. Ekstrak Nomor Surat Tugas
+  const extractNomor = (text) => {
+    // Regex untuk menangkap pola nomor surat umum di instansi pemerintah
+    // Contoh: Nomor : 123/KP.01.02/Cb/2026, No. 12/A/III/2026, dll
+    const nomorRegex = /(?:Nomor|No\.)\s*:?\s*([0-9a-zA-Z./-]+(?:20[0-9]{2}))/i;
+    const match = text.match(nomorRegex);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    
+    // Fallback: cari baris yang mengandung garis miring yang banyak, seringkali itu nomor surat
+    const parts = text.split('\n');
+    for(let i=0; i<Math.min(20, parts.length); i++) {
+        const line = parts[i];
+        if ((line.match(/\//g) || []).length >= 2 && /[0-9]/.test(line)) {
+            // Bersihkan baris dari kata-kata yang tidak perlu
+            const cleanLine = line.replace(/^(?:nomor|no\.|hal|lampiran)[\s:]*/i, '').trim();
+            // Ambil token pertama yang mengandung garis miring
+            const tokenMatch = cleanLine.match(/([0-9a-zA-Z./-]+)/);
+            if(tokenMatch && tokenMatch[1].length > 5) {
+                return tokenMatch[1];
+            }
+        }
+    }
+    return '-';
+  };
+
+  nomorSuratTugas = extractNomor(fullText);
 
   // 1. Ekstrak NIP SUPER ROBUST (Dengan toleransi kesalahan OCR)
   const textWithOcrFixes = fullText.replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
@@ -303,7 +333,8 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   return {
     pegawaiList: pegawaiList,
     dateBerangkat,
-    datePulang
+    datePulang,
+    nomorSuratTugas
   };
 };
 
@@ -465,12 +496,26 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
 
   if (activeTab === 'spt') {
     const sptData = extractSptData(lines, fullText, dbPegawai);
+    
+    // Hitung jumlah hari Perjalanan Dinas
+    let jmlHari = '-';
+    if (sptData.dateBerangkat && sptData.datePulang && sptData.dateBerangkat !== '-' && sptData.datePulang !== '-') {
+      const d1 = parseIndoDate(sptData.dateBerangkat);
+      const d2 = parseIndoDate(sptData.datePulang);
+      if (d1.getTime() > 0 && d2.getTime() > 0) {
+        jmlHari = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+        if (jmlHari <= 0) jmlHari = 1; // Minimal 1 hari
+      }
+    }
+
     return {
       isValid: true,
       isSpt: true,
       sptDateBerangkat: sptData.dateBerangkat,
       sptDatePulang: sptData.datePulang,
+      sptJumlahHari: jmlHari,
       sptNames: sptData.pegawaiList,
+      nomorSuratTugas: sptData.nomorSuratTugas,
       nip: '-',
       nama: 'Berbagai Pegawai',
       periodeFolder: 'Arsip_Surat_Tugas',
@@ -1316,6 +1361,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     try {
       const base64Data = await fileToBase64(selectedFile);
       
+      let sptDataPayload = [];
+      if (activeTab === 'spt' && parsedData.sptNames) {
+        sptDataPayload = parsedData.sptNames.map(pegawai => ({
+          nama: pegawai.nama,
+          nip: pegawai.nip,
+          nomorSurat: parsedData.nomorSuratTugas || '-', 
+          tanggalBerangkat: parsedData.sptDateBerangkat || '-',
+          tanggalPulang: parsedData.sptDatePulang || '-'
+        }));
+      }
+
       let sheetData = [];
       if (parsedData.rows && parsedData.rows.length > 0) {
         sheetData = parsedData.rows.map((row, index) => {
@@ -1349,6 +1405,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         fileName: selectedFile.name,
         fileBase64: base64Data,
         sheetData: sheetData,
+        sptData: sptDataPayload,
         ringkasan: {
           totalHariKalender: parsedData.expectedDays || 0,
           totalHariMasuk: parsedData.totalHariMasuk || 0,
@@ -1872,14 +1929,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
                         </div>
                         <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
-                          <p className="font-extrabold text-gray-900 text-xs">{parsedData ? (activeTab === 'spt' ? (selectedFile?.name || 'Berkas SPT') : parsedData.nama) : 'Belum Ada Berkas'}</p>
-                          <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? (activeTab === 'spt' ? loggedInUser.NIP : parsedData.nip) : '-'}</p>
+                          <p className="font-extrabold text-gray-900 text-xs truncate max-w-[250px]">{parsedData ? (activeTab === 'spt' ? (selectedFile?.name || 'Berkas SPT') : parsedData.nama) : 'Belum Ada Berkas'}</p>
                           {activeTab === 'spt' ? (
-                            <p className="text-[10px] text-teal-700 font-extrabold">
-                              Berangkat: {parsedData ? (parsedData.sptDateBerangkat || '-') : '-'} &nbsp;•&nbsp; Pulang: {parsedData ? (parsedData.sptDatePulang || '-') : '-'}
-                            </p>
+                            <>
+                                <p className="text-[10px] text-gray-500 font-semibold truncate max-w-[250px]">No: {parsedData ? (parsedData.nomorSuratTugas || '-') : '-'}</p>
+                                <p className="text-[10px] text-teal-700 font-extrabold">
+                                  Berangkat: {parsedData ? (parsedData.sptDateBerangkat || '-') : '-'} &nbsp;•&nbsp; Pulang: {parsedData ? (parsedData.sptDatePulang || '-') : '-'} {parsedData && parsedData.sptJumlahHari !== '-' ? `(${parsedData.sptJumlahHari} Hari)` : ''}
+                                </p>
+                            </>
                           ) : (
-                            <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
+                             <>
+                                <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
+                                <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
+                             </>
                           )}
                         </div>
                       </div>
@@ -1894,6 +1956,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   <th className="py-3 px-4 whitespace-nowrap">NIP</th>
                                   <th className="py-3 px-4 whitespace-nowrap">TANGGAL BERANGKAT</th>
                                   <th className="py-3 px-4 whitespace-nowrap">TANGGAL PULANG</th>
+                                  <th className="py-3 px-4 text-center whitespace-nowrap">HARI</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
@@ -1905,11 +1968,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                       <td className="py-3 px-4 font-mono text-gray-600">{pegawai.nip}</td>
                                       <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDateBerangkat}</td>
                                       <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDatePulang}</td>
+                                      <td className="py-3 px-4 text-center text-emerald-700 font-bold">{parsedData.sptJumlahHari !== '-' ? `${parsedData.sptJumlahHari} Hari` : '-'}</td>
                                     </tr>
                                   ))
                                 ) : (
                                   <tr>
-                                    <td colSpan="5" className="text-center py-16 text-gray-400 bg-gray-50/50">
+                                    <td colSpan="6" className="text-center py-16 text-gray-400 bg-gray-50/50">
                                       <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
                                         <FileText size={32} />
                                         <div>
