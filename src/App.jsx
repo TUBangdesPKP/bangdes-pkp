@@ -21,7 +21,11 @@ import {
   UploadCloud,
   FileSpreadsheet,
   Trash2,
-  Users
+  Users,
+  MapPin,
+  Save,
+  Pencil,
+  X
 } from 'lucide-react';
 
 if (typeof window !== 'undefined') {
@@ -156,6 +160,27 @@ const parseIndoDate = (dateString) => {
   return new Date(year, month, day);
 };
 
+const formatYMDtoIndo = (ymd) => {
+  if (!ymd) return '';
+  const parts = ymd.split('-');
+  if (parts.length !== 3) return ymd;
+  const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  return `${parseInt(parts[2], 10)} ${months[parseInt(parts[1], 10) - 1]} ${parts[0]}`;
+};
+
+const formatIndoToYMD = (indoStr) => {
+  if (!indoStr || indoStr === '-') return '';
+  const parts = indoStr.trim().split(' ');
+  if (parts.length < 3) return '';
+  const day = parts[0].padStart(2, '0');
+  const months = ['jan', 'feb', 'mar', 'apr', 'mei', 'jun', 'jul', 'agu', 'sep', 'okt', 'nov', 'des'];
+  const monthIndex = months.findIndex(m => parts[1].toLowerCase().includes(m));
+  if (monthIndex === -1) return '';
+  const month = String(monthIndex + 1).padStart(2, '0');
+  const year = parts[2];
+  return `${year}-${month}-${day}`;
+};
+
 const DAFTAR_LIBUR_NASIONAL = [
   '2026-01-01', '2026-02-18', '2026-03-03', '2026-03-18', '2026-03-19', 
   '2026-03-20', '2026-03-21', '2026-03-23', '2026-03-24', '2026-04-03', 
@@ -167,41 +192,19 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
-  let nomorSuratTugas = '-';
+  let nomorSurat = '-';
+
+  // Ekstrak Nomor Surat Tugas
+  const noSuratRegex = /(?:Nomor|No\.)\s*:?\s*([^\n]+)/i;
+  const noMatch = fullText.match(noSuratRegex);
+  if (noMatch) {
+    nomorSurat = noMatch[1].trim();
+  }
 
   // Daftar NIP Pejabat Penandatangan yang diabaikan agar tidak masuk ke daftar pelaksana tugas
   const IGNORED_NIPS = [
     '197012151998032007', // Rini Dyah Mawarty
   ];
-
-  // 1. Ekstrak Nomor Surat Tugas
-  const extractNomor = (text) => {
-    // Regex untuk menangkap pola nomor surat umum di instansi pemerintah
-    // Contoh: Nomor : 123/KP.01.02/Cb/2026, No. 12/A/III/2026, dll
-    const nomorRegex = /(?:Nomor|No\.)\s*:?\s*([0-9a-zA-Z./-]+(?:20[0-9]{2}))/i;
-    const match = text.match(nomorRegex);
-    if (match && match[1]) {
-      return match[1].trim();
-    }
-    
-    // Fallback: cari baris yang mengandung garis miring yang banyak, seringkali itu nomor surat
-    const parts = text.split('\n');
-    for(let i=0; i<Math.min(20, parts.length); i++) {
-        const line = parts[i];
-        if ((line.match(/\//g) || []).length >= 2 && /[0-9]/.test(line)) {
-            // Bersihkan baris dari kata-kata yang tidak perlu
-            const cleanLine = line.replace(/^(?:nomor|no\.|hal|lampiran)[\s:]*/i, '').trim();
-            // Ambil token pertama yang mengandung garis miring
-            const tokenMatch = cleanLine.match(/([0-9a-zA-Z./-]+)/);
-            if(tokenMatch && tokenMatch[1].length > 5) {
-                return tokenMatch[1];
-            }
-        }
-    }
-    return '-';
-  };
-
-  nomorSuratTugas = extractNomor(fullText);
 
   // 1. Ekstrak NIP SUPER ROBUST (Dengan toleransi kesalahan OCR)
   const textWithOcrFixes = fullText.replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
@@ -225,11 +228,8 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
 
   // 2. Ekstrak Tanggal Berangkat & Tanggal Pulang
   const MONTHS = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember';
-
   const normalizeDashes = (str) => str.replace(/[–—−‐‑‒―_~•●▪=]+/g, '-');
-
   const textToSearch = normalizeDashes(fullText.replace(/\s+/g, ' '));
-
   const SEP = '(?:-{1,3}|s\\.?\\/?d\\.?|sampai(?:\\s*dengan)?|hingga)\\s*';
 
   const fullRangeRegex = new RegExp(
@@ -243,7 +243,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   );
 
   const singleDateRegex = new RegExp(`(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`, 'gi');
-
   const contextRegex = /(?:Waktu|Tanggal|Hari|Periode|Pelaksanaan)/i;
 
   const applyFullRange = (text) => {
@@ -307,6 +306,14 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     datePulang = found.pulang;
   }
 
+  // Ekstrak Tanggal Surat (Biasanya tanggal terakhir yang muncul di dokumen dekat tanda tangan)
+  let tanggalSpt = '-';
+  const allSingleDates = [...textToSearch.matchAll(singleDateRegex)];
+  if (allSingleDates.length > 0) {
+    const lastDateMatch = allSingleDates[allSingleDates.length - 1];
+    tanggalSpt = `${parseInt(lastDateMatch[1], 10)} ${lastDateMatch[2]} ${lastDateMatch[3]}`;
+  }
+
   if (!dbPegawai || dbPegawai.length === 0) {
     const cached = localStorage.getItem('cached_pegawai_json');
     if (cached) {
@@ -334,7 +341,7 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     pegawaiList: pegawaiList,
     dateBerangkat,
     datePulang,
-    nomorSuratTugas
+    tanggalSpt
   };
 };
 
@@ -496,26 +503,22 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
 
   if (activeTab === 'spt') {
     const sptData = extractSptData(lines, fullText, dbPegawai);
-    
-    // Hitung jumlah hari Perjalanan Dinas
-    let jmlHari = '-';
-    if (sptData.dateBerangkat && sptData.datePulang && sptData.dateBerangkat !== '-' && sptData.datePulang !== '-') {
-      const d1 = parseIndoDate(sptData.dateBerangkat);
-      const d2 = parseIndoDate(sptData.datePulang);
-      if (d1.getTime() > 0 && d2.getTime() > 0) {
-        jmlHari = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
-        if (jmlHari <= 0) jmlHari = 1; // Minimal 1 hari
-      }
+    let calculatedDays = 1;
+    if (sptData.dateBerangkat !== '-' && sptData.datePulang !== '-') {
+       const d1 = parseIndoDate(sptData.dateBerangkat);
+       const d2 = parseIndoDate(sptData.datePulang);
+       const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+       calculatedDays = diff > 0 ? diff : 1;
     }
-
+    
     return {
       isValid: true,
       isSpt: true,
       sptDateBerangkat: sptData.dateBerangkat,
       sptDatePulang: sptData.datePulang,
-      sptJumlahHari: jmlHari,
+      sptTanggalSurat: sptData.tanggalSpt,
+      lamaHari: calculatedDays,
       sptNames: sptData.pegawaiList,
-      nomorSuratTugas: sptData.nomorSuratTugas,
       nip: '-',
       nama: 'Berbagai Pegawai',
       periodeFolder: 'Arsip_Surat_Tugas',
@@ -1205,6 +1208,23 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  
+  // SPT Specific State
+  const [activeSptTab, setActiveSptTab] = useState('simpanan-saya'); 
+  const [selectedSptPegawai, setSelectedSptPegawai] = useState([]);
+  const [isEditingSptDetails, setIsEditingSptDetails] = useState(false);
+  const [sptDetailsForm, setSptDetailsForm] = useState({
+    berangkat: '',
+    pulang: '',
+    tanggalSpt: ''
+  });
+  
+  // Search Pegawai State
+  const [allPegawaiDb, setAllPegawaiDb] = useState([]);
+  const [isSearchingPegawai, setIsSearchingPegawai] = useState(false);
+  const [pegawaiSearchTerm, setPegawaiSearchTerm] = useState('');
+  const [editingPegawaiIndex, setEditingPegawaiIndex] = useState(null);
+  const [editPegawaiSearchTerm, setEditPegawaiSearchTerm] = useState('');
 
   const getModuleKey = (view) => {
     switch(view) {
@@ -1219,6 +1239,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const activeTab = getModuleKey(currentView);
   const PERIOD_EVENTS = getPeriodEvents();
+
+  useEffect(() => {
+    const initDb = async () => {
+      const res = await fetchPegawaiData(false);
+      if (res && res.data) setAllPegawaiDb(res.data);
+    };
+    initDb();
+  }, []);
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeStep > 1 && !selectedPeriod) {
@@ -1257,6 +1285,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setParseStatus('Mengekstrak dan memverifikasi data...');
     setIsSubmitting(false);
     setIsAlreadyUploaded(false); 
+    setSelectedSptPegawai([]);
+    setIsEditingSptDetails(false);
+    setIsSearchingPegawai(false);
+    setPegawaiSearchTerm('');
   };
 
   const handleClearFile = (e) => {
@@ -1269,6 +1301,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setIsParsing(false);
     setParseStatus('Mengekstrak dan memverifikasi data...');
     setIsAlreadyUploaded(false); 
+    setSelectedSptPegawai([]);
+    setIsEditingSptDetails(false);
+    setIsSearchingPegawai(false);
+    setPegawaiSearchTerm('');
   };
 
   const handleFileChange = async (e) => {
@@ -1305,6 +1341,16 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         setParsedData(result);
         
         if (result && result.isValid) {
+          if (activeTab === 'spt') {
+            if (result.sptNames) {
+              setSelectedSptPegawai(result.sptNames.map(p => p.nip));
+            }
+            setSptDetailsForm({
+              berangkat: result.sptDateBerangkat || '',
+              pulang: result.sptDatePulang || '',
+              tanggalSpt: result.sptTanggalSurat || ''
+            });
+          }
           const expectedNip = activeTab === 'spt' ? loggedInUser.NIP : (result.nip !== '-' ? result.nip : loggedInUser.NIP);
           const expectedPeriodeEvent = activeTab === 'spt' ? 'Semua Periode' : (selectedPeriod ? selectedPeriod.periodeEvent : result.periode);
           const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
@@ -1353,9 +1399,84 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     });
   };
 
+  const filteredPegawaiList = useMemo(() => {
+    if (!pegawaiSearchTerm) return [];
+    const term = pegawaiSearchTerm.toLowerCase();
+    const existingNips = parsedData?.sptNames?.map(p => String(p.nip)) || [];
+    
+    return allPegawaiDb.filter(p => {
+       if (existingNips.includes(String(p.NIP))) return false;
+       return p.Nama.toLowerCase().includes(term) || String(p.NIP).includes(term);
+    }).slice(0, 10);
+  }, [pegawaiSearchTerm, allPegawaiDb, parsedData]);
+
+  const handleAddPegawaiManual = (pegawai) => {
+     setParsedData(prev => {
+        if (!prev) return prev;
+        const newNames = [...(prev.sptNames || [])];
+        newNames.push({ nama: pegawai.Nama, nip: String(pegawai.NIP), isManual: true });
+        return { ...prev, sptNames: newNames };
+     });
+     setSelectedSptPegawai(prev => [...prev, String(pegawai.NIP)]);
+     setPegawaiSearchTerm('');
+     setIsSearchingPegawai(false);
+  };
+
+  const filteredEditPegawaiList = useMemo(() => {
+    if (!editPegawaiSearchTerm) return [];
+    const term = editPegawaiSearchTerm.toLowerCase();
+    const existingNips = parsedData?.sptNames?.map(p => String(p.nip)) || [];
+    
+    return allPegawaiDb.filter(p => {
+       const currentNip = editingPegawaiIndex !== null ? parsedData?.sptNames[editingPegawaiIndex]?.nip : null;
+       if (existingNips.includes(String(p.NIP)) && String(p.NIP) !== String(currentNip)) return false;
+       return p.Nama.toLowerCase().includes(term) || String(p.NIP).includes(term);
+    }).slice(0, 10);
+  }, [editPegawaiSearchTerm, allPegawaiDb, parsedData, editingPegawaiIndex]);
+
+  const handleReplacePegawai = (index, oldNip, newPegawai) => {
+     setParsedData(prev => {
+        if (!prev) return prev;
+        const newNames = [...prev.sptNames];
+        newNames[index] = { nama: newPegawai.Nama, nip: String(newPegawai.NIP), isManual: true };
+        return { ...prev, sptNames: newNames };
+     });
+     setSelectedSptPegawai(prev => {
+        if (prev.includes(oldNip)) {
+           return [...prev.filter(n => n !== oldNip), String(newPegawai.NIP)];
+        }
+        return prev;
+     });
+     setEditingPegawaiIndex(null);
+     setEditPegawaiSearchTerm('');
+  };
+
+  const handleRemovePegawai = (nipToRemove) => {
+     setParsedData(prev => {
+        if (!prev) return prev;
+        const newNames = prev.sptNames.filter(p => p.nip !== nipToRemove);
+        return { ...prev, sptNames: newNames };
+     });
+     setSelectedSptPegawai(prev => prev.filter(n => n !== nipToRemove));
+     if (editingPegawaiIndex !== null) {
+        setEditingPegawaiIndex(null);
+        setEditPegawaiSearchTerm('');
+     }
+  };
+
+  const toggleSptPegawai = (nip) => {
+    setSelectedSptPegawai(prev => 
+      prev.includes(nip) ? prev.filter(p => p !== nip) : [...prev, nip]
+    );
+  };
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFile || !parsedData || !parsedData.isValid) return;
+    if (activeTab === 'spt' && selectedSptPegawai.length === 0) {
+      alert("Pilih minimal satu pegawai untuk diupload.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -1363,17 +1484,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       
       let sptDataPayload = [];
       if (activeTab === 'spt' && parsedData.sptNames) {
-        sptDataPayload = parsedData.sptNames.map(pegawai => ({
-          nama: pegawai.nama,
-          nip: pegawai.nip,
-          nomorSurat: parsedData.nomorSuratTugas || '-', 
-          tanggalBerangkat: parsedData.sptDateBerangkat || '-',
-          tanggalPulang: parsedData.sptDatePulang || '-'
-        }));
+        sptDataPayload = parsedData.sptNames
+          .filter(pegawai => selectedSptPegawai.includes(pegawai.nip))
+          .map(pegawai => ({
+            nama: pegawai.nama,
+            nip: pegawai.nip,
+            tanggalBerangkat: isEditingSptDetails ? sptDetailsForm.berangkat : (sptDetailsForm.berangkat || '-'),
+            tanggalPulang: isEditingSptDetails ? sptDetailsForm.pulang : (sptDetailsForm.pulang || '-'),
+            tanggalSurat: isEditingSptDetails ? sptDetailsForm.tanggalSpt : (sptDetailsForm.tanggalSpt || '-')
+          }));
       }
 
       let sheetData = [];
-      if (parsedData.rows && parsedData.rows.length > 0) {
+      if (activeTab !== 'spt' && parsedData.rows && parsedData.rows.length > 0) {
         sheetData = parsedData.rows.map((row, index) => {
           const y = row._dateObj.getFullYear();
           const m = String(row._dateObj.getMonth() + 1).padStart(2, '0');
@@ -1394,7 +1517,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       }
 
       const nipForPayload = parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
-      const bulanTahunForPayload = parsedData.periodeFolder || selectedPeriod?.periodeFolder || 'Periode_2026-08';
+      const bulanTahunForPayload = parsedData.periodeFolder || selectedPeriod?.periodeFolder || 'Periode_Unknown';
 
       const payload = {
         modul: activeTab,
@@ -1405,7 +1528,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         fileName: selectedFile.name,
         fileBase64: base64Data,
         sheetData: sheetData,
-        sptData: sptDataPayload,
+        sptData: sptDataPayload, 
         ringkasan: {
           totalHariKalender: parsedData.expectedDays || 0,
           totalHariMasuk: parsedData.totalHariMasuk || 0,
@@ -1579,7 +1702,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       </aside>
 
       <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
-        <div className="max-w-7xl mx-auto">
+        <div className="max-w-7xl mx-auto h-full flex flex-col">
           {activeTab === 'rekap' ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
               <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
@@ -1589,577 +1712,856 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Halaman rekapitulasi data kedisiplinan dan kinerja bulanan sedang dalam penyiapan. Silakan pilih modul lain pada menu di sebelah kiri.</p>
             </div>
           ) : (
-            <div>
+            <div className="flex flex-col h-full">
               <div 
-                className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md"
-                style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
+                className={`rounded-3xl text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 z-20 backdrop-blur-md ${activeTab === 'spt' ? 'p-0 bg-transparent border-none' : 'p-6 sm:p-8 sticky top-0'}`}
+                style={activeTab !== 'spt' ? { backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` } : {}}
               >
-                <div className="space-y-2">
-                  {activeTab !== 'spt' && (
-                    <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
-                      OPEN SUBMISSION
-                    </span>
-                  )}
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
-                    {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Absensi Tunjangan Kinerja')}
-                  </h2>
-                  <div className="flex items-center gap-2 text-xs text-gray-200">
-                    <Calendar size={14} />
-                    <span>
-                      {activeTab === 'spt' 
-                        ? 'Upload dokumen tanpa batasan periode. Data akan masuk ke Bank Data SPT.'
-                        : selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
-                    </span>
-                    {selectedPeriod && (
-                      <>
-                        <span>•</span>
-                        <span>{selectedPeriod.tipe}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {(activeTab === 'spt' || selectedPeriod) && (
-                  <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                    <div className="text-right flex-1">
-                      <p className="text-xs text-gray-200 leading-snug font-medium">
-                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload {activeTab === 'spt' ? 'arsip' : 'bukti dukung'}nya!
-                      </p>
-                      <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                {activeTab === 'spt' ? (
+                  <div className="w-full">
+                    <h2 className="text-2xl font-black leading-tight text-gray-900 mb-2">Arsip SPT</h2>
+                    <p className="text-sm text-gray-500 mb-6">Arsip Surat Perintah Tugas perjalanan dinas Anda</p>
+                    
+                    <div className="flex items-center gap-6 border-b border-gray-200">
+                      <button 
+                        onClick={() => setActiveSptTab('sudah-dikumpulkan')}
+                        className={`pb-3 text-sm font-bold transition-colors border-b-2 cursor-pointer ${activeSptTab === 'sudah-dikumpulkan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                      >
+                        Sudah Dikumpulkan
+                      </button>
+                      <button 
+                        onClick={() => setActiveSptTab('simpanan-saya')}
+                        className={`pb-3 text-sm font-bold transition-colors border-b-2 cursor-pointer ${activeSptTab === 'simpanan-saya' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                      >
+                        Simpanan Saya
+                      </button>
                     </div>
-                    {loggedInUser?.Foto_Pegawai ? (
-                      <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
-                        {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
+                        OPEN SUBMISSION
+                      </span>
+                      <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
+                        {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
+                      </h2>
+                      <div className="flex items-center gap-2 text-xs text-gray-200">
+                        <Calendar size={14} />
+                        <span>
+                          {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
+                        </span>
+                        {selectedPeriod && (
+                          <>
+                            <span>•</span>
+                            <span>{selectedPeriod.tipe}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {selectedPeriod && (
+                      <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                        <div className="text-right flex-1">
+                          <p className="text-xs text-gray-200 leading-snug font-medium">
+                            <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
+                          </p>
+                          <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                        </div>
+                        {loggedInUser?.Foto_Pegawai ? (
+                          <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                            {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
+                  </>
                 )}
               </div>
 
-              {activeTab !== 'spt' && (
-                <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
-                  {[1, 2, 3, 4, 5, 6].map((num) => {
-                    const isActive = activeStep === num;
-                    const isDisabled = !selectedPeriod && num > 1;
-                    return (
-                      <button
-                        key={num}
-                        type="button"
-                        disabled={isDisabled}
-                        onClick={() => {
-                          if (num === 1) {
-                            navigate(currentView, 1);
-                          } else {
-                            navigate(currentView, num);
-                          }
-                        }}
-                        title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
-                          isActive
-                            ? 'text-white ring-4 shadow-sm scale-105'
-                            : isDisabled
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
-                            : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
-                        }`}
-                        style={{ 
-                          backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
-                          ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
-                        }}
-                      >
-                        {num}
-                      </button>
-                    );
-                  })}
+              {activeTab === 'spt' && activeSptTab === 'sudah-dikumpulkan' && (
+                <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-3xl border border-gray-100 p-8 shadow-sm">
+                   <div className="w-16 h-16 rounded-2xl bg-gray-50 text-gray-400 flex items-center justify-center mb-4">
+                      <FileText size={32} />
+                   </div>
+                   <h3 className="text-lg font-bold text-gray-900 mb-2">Belum Ada Data Tersimpan</h3>
+                   <p className="text-sm text-gray-500 text-center max-w-md">Data riwayat SPT yang sudah Anda kumpulkan belum tersedia saat ini. Fitur sedang dikembangkan.</p>
                 </div>
               )}
 
-              {activeTab !== 'spt' && activeStep === 1 ? (
-                <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentPeriodList.map((period) => {
-                    const isSelected = selectedPeriod?.id === period.id;
-                    return (
-                      <div 
-                        key={period.id}
-                        onClick={() => {
-                          if (selectedPeriod?.id !== period.id) {
-                            setSelectedPeriod(period);
-                            resetUploadState();
-                          }
-                          navigate(currentView, 2);
-                        }}
-                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
-                      >
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                              {period.status}
-                            </span>
-                            {isSelected && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                <CheckCircle2 size={10} /> Dipilih
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="text-lg font-black text-gray-900 group-hover:text-[#084C61] transition-colors">{period.title}</h3>
-                          <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
-                            <span className="flex items-center gap-1.5">
-                              <Calendar size={14} className="text-gray-400" />
-                              {period.periodeLabel}
-                            </span>
-                            <span>•</span>
-                            <span>{period.tipe}</span>
-                          </div>
-                        </div>
+              {activeTab === 'spt' && activeSptTab === 'simpanan-saya' && (
+                <div className="flex-1 flex flex-col mt-4">
+                  <div className="bg-[#EAF5FA] border border-[#CDE5F1] text-[#1E5D77] p-4 rounded-2xl text-sm mb-6 flex items-start gap-3">
+                     <span className="shrink-0 mt-0.5">ℹ️</span>
+                     <p>Upload SPT kapan saja, walaupun belum ada periode pengumpulan bukti dukung yang dibuka. Saat periode dengan rentang tanggal yang cocok dibuka, SPT ini akan muncul di halaman pengumpulan dan tinggal Anda klaim.</p>
+                  </div>
 
-                        <div className="px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform group-active:scale-95 bg-[#143E50]">
-                          <UploadCloud size={16} />
-                          <span>Pilih & Lanjut</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start flex-1 pb-10">
+                    <div className="lg:col-span-5 space-y-6">
+                       <div className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
+                          <h3 className="font-bold text-lg text-gray-900 mb-2">Upload SPT (di luar periode pengumpulan)</h3>
+                          <p className="text-sm text-gray-500 mb-5">Upload scan SPT perjalanan dinas Anda. Sistem akan mendeteksi nama, NIP, tanggal, dan tujuan.</p>
+
+                          <div className="bg-red-50 border border-red-200 text-red-700 p-3.5 rounded-xl text-sm font-semibold flex items-center gap-2 mb-4">
+                             <AlertCircle size={16} /> KHUSUS SPT SAJA! Dokumen selain Surat Perintah Tugas akan ditolak.
+                          </div>
+
+                          <div className="bg-[#F0F7F9] p-3.5 rounded-xl text-xs text-[#306C85] mb-5">
+                             <strong>💡 Tips:</strong> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen SPT memuat kata "Surat Tugas" atau "Perjalanan Dinas" dengan nama, NIP, tanggal, dan tujuan yang jelas.
+                          </div>
+
+                          <label className="border-2 border-dashed border-gray-300 rounded-2xl p-8 bg-gray-50 flex flex-col items-center justify-center text-center hover:bg-gray-100 hover:border-gray-400 transition-colors cursor-pointer group mb-5">
+                             <input 
+                                id="pdf-upload-input"
+                                type="file" 
+                                accept=".pdf"
+                                onChange={handleFileChange}
+                                className="hidden"
+                             />
+                             <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-gray-400 group-hover:text-gray-600 shadow-sm mb-3">
+                                <UploadCloud size={24} />
+                             </div>
+                             <p className="font-semibold text-gray-700 mb-1">Klik atau drag & drop file</p>
+                             <p className="text-xs text-gray-400">PDF (1 halaman), JPG, PNG (max 10MB)</p>
+                          </label>
+
+                          {selectedFile && (
+                            <div className="mb-5">
+                              <p className="text-xs font-bold text-gray-700 mb-2">File terpilih (1/10):</p>
+                              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3.5 rounded-xl text-sm flex items-center justify-between shadow-sm">
+                                 <div className="flex items-center gap-2.5 truncate">
+                                    <FileText size={18} className="shrink-0 text-emerald-600" />
+                                    <span className="truncate font-bold text-xs">{selectedFile.name}</span>
+                                    {!isParsing && parsedData?.isValid && <CheckCircle2 size={16} className="shrink-0 text-emerald-500" />}
+                                 </div>
+                                 <button onClick={handleClearFile} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg cursor-pointer">
+                                    <Trash2 size={14} />
+                                 </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <button 
+                            disabled={!selectedFile || isParsing}
+                            className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors ${selectedFile && !isParsing ? 'bg-[#084C61] text-white hover:bg-[#063a4a] shadow-md cursor-pointer' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                          >
+                             {isParsing ? <><div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> Sedang membaca...</> : (parsedData?.isValid ? '✓ Semua file sudah dibaca' : <><FileText size={16} /> Baca Dokumen (0 file)</>)}
+                          </button>
+                       </div>
+                    </div>
+
+                    <div className="lg:col-span-7">
+                       <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col h-[550px]">
+                          <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">
+                             <h3 className="font-bold text-lg text-gray-900">Rincian SPT</h3>
+                             <span className="text-sm font-medium text-[#084C61]">{selectedSptPegawai.length} pegawai dipilih</span>
+                          </div>
+
+                          {!selectedFile ? (
+                             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                                <FileText size={48} className="mb-4 opacity-30" />
+                                <h4 className="font-bold text-gray-500 mb-1">Hasil Pembacaan Dokumen</h4>
+                                <p className="text-sm text-center">Upload file dan klik "Baca Dokumen" untuk melihat hasil</p>
+                             </div>
+                          ) : isParsing ? (
+                             <div className="flex-1 flex flex-col items-center justify-center text-[#1E5D77]">
+                                <div className="w-12 h-12 border-4 border-current border-t-transparent rounded-full animate-spin mb-4"></div>
+                                <p className="font-bold">{parseStatus}</p>
+                             </div>
+                          ) : parsedData?.isValid ? (
+                             <div className="flex-1 flex flex-col">
+                                {isEditingSptDetails ? (
+                                  <div className="bg-[#EAF5FA]/60 border border-[#CDE5F1]/80 rounded-2xl p-4 mb-5 text-sm relative overflow-hidden">
+                                     <div className="absolute top-0 left-0 w-1.5 h-full bg-[#1E5D77]/80 rounded-l-2xl"></div>
+                                     <div className="pl-3 space-y-3">
+                                        <div className="flex items-center gap-3">
+                                           <label className="w-20 font-bold text-gray-600 text-xs">Mulai:</label>
+                                           <div className="flex-1">
+                                              <input 
+                                                type="date" 
+                                                value={formatIndoToYMD(sptDetailsForm.berangkat)} 
+                                                onChange={(e) => setSptDetailsForm({...sptDetailsForm, berangkat: formatYMDtoIndo(e.target.value) || e.target.value})} 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                              />
+                                           </div>
+                                           <button 
+                                              onClick={() => {
+                                                setIsEditingSptDetails(false);
+                                                setParsedData(prev => {
+                                                  const d1 = parseIndoDate(sptDetailsForm.berangkat);
+                                                  const d2 = parseIndoDate(sptDetailsForm.pulang);
+                                                  let diff = 1;
+                                                  if (d1 && d2) {
+                                                    diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+                                                  }
+                                                  return {
+                                                    ...prev,
+                                                    sptDateBerangkat: sptDetailsForm.berangkat,
+                                                    sptDatePulang: sptDetailsForm.pulang,
+                                                    lamaHari: diff > 0 ? diff : 1
+                                                  };
+                                                });
+                                              }} 
+                                              className="bg-[#10B981] hover:bg-[#059669] text-white px-4 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                                           >
+                                              <Save size={14} /> Simpan
+                                           </button>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                           <label className="w-20 font-bold text-gray-600 text-xs">Selesai:</label>
+                                           <div className="flex-1">
+                                              <input 
+                                                type="date" 
+                                                value={formatIndoToYMD(sptDetailsForm.pulang)} 
+                                                onChange={(e) => setSptDetailsForm({...sptDetailsForm, pulang: formatYMDtoIndo(e.target.value) || e.target.value})} 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                              />
+                                           </div>
+                                           <div className="w-[84px]"></div> 
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                           <label className="w-20 font-bold text-gray-600 text-xs">Tgl SPT:</label>
+                                           <div className="flex-1">
+                                              <input 
+                                                type="date" 
+                                                value={formatIndoToYMD(sptDetailsForm.tanggalSpt)} 
+                                                onChange={(e) => setSptDetailsForm({...sptDetailsForm, tanggalSpt: formatYMDtoIndo(e.target.value) || e.target.value})} 
+                                                className="w-full bg-white border border-[#CDE5F1] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#1E5D77] focus:ring-1 focus:ring-[#1E5D77] text-gray-700" 
+                                              />
+                                           </div>
+                                           <div className="w-[84px]"></div> 
+                                        </div>
+                                     </div>
+                                  </div>
+                                ) : (
+                                  <div className="bg-[#EAF5FA]/60 border border-[#CDE5F1]/80 rounded-2xl p-4 mb-5 text-sm space-y-2 relative overflow-hidden">
+                                     <div className="absolute top-0 left-0 w-1.5 h-full bg-[#1E5D77]/80 rounded-l-2xl"></div>
+                                     <div className="pl-3 flex items-center justify-between">
+                                        <div>
+                                            <div className="flex items-center gap-2.5 font-bold text-[#1E5D77]">
+                                               <Calendar size={16} className="opacity-80" /> {parsedData.sptDateBerangkat} - {parsedData.sptDatePulang} <span className="text-[10px] bg-white text-[#1E5D77] px-2 py-0.5 rounded-md border border-[#CDE5F1] ml-2">({parsedData.lamaHari} Hari)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2.5 mt-1.5 text-xs text-gray-500 font-medium">
+                                               <FileText size={14} className="opacity-70" /> Tgl SPT: {parsedData.sptTanggalSurat}
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={() => setIsEditingSptDetails(true)} 
+                                            className="bg-[#CDE5F1]/50 hover:bg-[#CDE5F1] border border-[#CDE5F1] px-3 py-1.5 rounded-lg text-xs font-bold text-[#1E5D77] flex items-center gap-1.5 transition-colors cursor-pointer"
+                                        >
+                                           <Pencil size={12} /> Edit
+                                        </button>
+                                     </div>
+                                  </div>
+                                )}
+
+                                <div className="flex-1 overflow-y-auto mb-6 pr-2 pb-2">
+                                   {parsedData.sptNames && parsedData.sptNames.map((pegawai, idx) => (
+                                      editingPegawaiIndex === idx ? (
+                                         <div key={`edit-${idx}`} className="flex items-center gap-3 p-2 rounded-xl border border-[#CDE5F1] bg-blue-50/30 mb-2 shadow-sm relative">
+                                            <input type="checkbox" checked={selectedSptPegawai.includes(pegawai.nip)} disabled className="w-4 h-4 ml-2 rounded border-gray-300 text-[#084C61] focus:ring-[#084C61] cursor-not-allowed opacity-60" />
+                                            <div className="flex-1 relative">
+                                               <div className="flex items-center bg-white border border-[#CDE5F1] rounded-lg overflow-hidden shadow-sm">
+                                                  <div className="pl-3 text-gray-400">
+                                                     <Search size={14} />
+                                                  </div>
+                                                  <input 
+                                                     autoFocus
+                                                     type="text" 
+                                                     placeholder="Cari nama pegawai pengganti..." 
+                                                     value={editPegawaiSearchTerm}
+                                                     onChange={(e) => setEditPegawaiSearchTerm(e.target.value)}
+                                                     className="flex-1 py-2 px-3 text-sm focus:outline-none text-gray-700"
+                                                  />
+                                               </div>
+                                               {editPegawaiSearchTerm && filteredEditPegawaiList.length > 0 && (
+                                                  <div className="absolute z-20 w-full mt-1 bg-white border border-[#CDE5F1] rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                                                     {filteredEditPegawaiList.map((p, i) => (
+                                                        <div 
+                                                          key={i} 
+                                                          onClick={() => handleReplacePegawai(idx, pegawai.nip, p)}
+                                                          className="p-2.5 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                                                        >
+                                                           <p className="font-bold text-gray-800 text-sm">{p.Nama}</p>
+                                                           <p className="text-xs text-gray-500 font-mono mt-0.5">{p.NIP}</p>
+                                                        </div>
+                                                     ))}
+                                                  </div>
+                                               )}
+                                            </div>
+                                            <button 
+                                               onClick={() => { setEditingPegawaiIndex(null); setEditPegawaiSearchTerm(''); }}
+                                               className="p-2 text-gray-400 hover:text-gray-700 bg-white border border-gray-200 rounded-lg transition-colors cursor-pointer mr-1"
+                                            >
+                                               <X size={16} />
+                                            </button>
+                                         </div>
+                                      ) : (
+                                         <label key={idx} className="flex items-center justify-between p-3.5 rounded-xl hover:bg-gray-50 border border-transparent hover:border-gray-200 cursor-pointer transition-all shadow-sm bg-white mb-2">
+                                            <div className="flex items-center gap-3">
+                                               <input type="checkbox" checked={selectedSptPegawai.includes(pegawai.nip)} onChange={() => toggleSptPegawai(pegawai.nip)} className="w-4 h-4 rounded border-gray-300 text-[#084C61] focus:ring-[#084C61] cursor-pointer" />
+                                               <div>
+                                                  <p className="font-bold text-gray-900 text-sm">{pegawai.nama} <span className="inline-block px-1.5 py-0.5 ml-1 bg-emerald-100 text-emerald-700 rounded text-[10px]">✓ 100%</span></p>
+                                                  <p className="text-xs text-gray-500 font-mono mt-0.5">{pegawai.nip}</p>
+                                               </div>
+                                            </div>
+                                            <div className="flex items-center">
+                                               <div 
+                                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingPegawaiIndex(idx); setEditPegawaiSearchTerm(pegawai.nama); }}
+                                                  className="text-gray-300 hover:text-[#084C61] p-2 cursor-pointer transition-colors rounded-lg hover:bg-blue-50" 
+                                                  title="Edit pegawai"
+                                               >
+                                                  <Pencil size={14} />
+                                               </div>
+                                               <div 
+                                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemovePegawai(pegawai.nip); }}
+                                                  className="text-gray-300 hover:text-red-500 p-2 cursor-pointer transition-colors rounded-lg hover:bg-red-50" 
+                                                  title="Hapus pegawai dari daftar"
+                                               >
+                                                  <Trash2 size={14} />
+                                               </div>
+                                            </div>
+                                         </label>
+                                      )
+                                   ))}
+                                   
+                                   {!isSearchingPegawai ? (
+                                      <div 
+                                        onClick={() => setIsSearchingPegawai(true)}
+                                        className="p-3.5 rounded-xl border border-dashed border-[#CDE5F1] text-[#1E5D77] font-medium text-sm flex items-center gap-2 cursor-pointer bg-blue-50/30 hover:bg-blue-50/60 transition-colors mt-2"
+                                      >
+                                         <span>+ Tambah Pegawai</span>
+                                      </div>
+                                   ) : (
+                                      <div className="mt-2 relative">
+                                         <div className="flex items-center bg-white border border-[#CDE5F1] rounded-xl overflow-hidden shadow-sm">
+                                            <div className="pl-3 text-gray-400">
+                                               <Search size={16} />
+                                            </div>
+                                            <input 
+                                               autoFocus
+                                               type="text" 
+                                               placeholder="Cari pegawai untuk ditambahkan..." 
+                                               value={pegawaiSearchTerm}
+                                               onChange={(e) => setPegawaiSearchTerm(e.target.value)}
+                                               className="flex-1 py-3 px-3 text-sm focus:outline-none text-gray-700"
+                                            />
+                                            <button 
+                                               onClick={() => { setIsSearchingPegawai(false); setPegawaiSearchTerm(''); }}
+                                               className="p-3 text-gray-400 hover:text-gray-700 bg-gray-50 border-l border-[#CDE5F1] transition-colors cursor-pointer"
+                                            >
+                                               <X size={16} />
+                                            </button>
+                                         </div>
+
+                                         {pegawaiSearchTerm && (
+                                            <div className="absolute z-10 w-full mt-1 bg-white border border-[#CDE5F1] rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                                               {filteredPegawaiList.length > 0 ? (
+                                                  filteredPegawaiList.map((p, i) => (
+                                                     <div 
+                                                       key={i} 
+                                                       onClick={() => handleAddPegawaiManual(p)}
+                                                       className="p-3 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                                                     >
+                                                        <p className="font-bold text-gray-800 text-sm">{p.Nama}</p>
+                                                        <p className="text-xs text-gray-500 font-mono mt-0.5">{p.NIP}</p>
+                                                     </div>
+                                                  ))
+                                               ) : (
+                                                  <div className="p-4 text-center text-sm text-gray-500 italic">
+                                                     Pegawai tidak ditemukan atau sudah ada di daftar.
+                                                  </div>
+                                               )}
+                                            </div>
+                                         )}
+                                      </div>
+                                   )}
+                                </div>
+
+                                <button 
+                                  onClick={handleUploadSubmit}
+                                  disabled={selectedSptPegawai.length === 0 || isSubmitting}
+                                  className={`w-full py-3.5 rounded-xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${selectedSptPegawai.length > 0 && !isSubmitting ? 'bg-[#143E50] hover:bg-[#0c2633] cursor-pointer active:scale-[0.99]' : 'bg-gray-400 cursor-not-allowed'}`}
+                                >
+                                   {isSubmitting ? 'Memproses ke Server...' : `Upload Semua SPT (${selectedSptPegawai.length} pegawai)`}
+                                </button>
+                                
+                                {submitResult && (
+                                   <div className={`mt-4 p-3.5 rounded-xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
+                                      {submitResult.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" /> : <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />}
+                                      <div>
+                                         <p className="font-semibold">{submitResult.message}</p>
+                                         {submitResult.url && <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">Buka Dokumen di Google Drive</a>}
+                                      </div>
+                                   </div>
+                                )}
+                             </div>
+                          ) : (
+                             <div className="flex-1 flex flex-col items-center justify-center text-red-500 text-center px-4">
+                                <AlertCircle size={48} className="mb-4 opacity-30" />
+                                <h4 className="font-bold text-red-700 mb-1">Gagal Membaca Dokumen</h4>
+                                <p className="text-sm text-red-600">{parsedData?.errorMessage || 'Pastikan file adalah Surat Perintah Tugas perjalanan dinas.'}</p>
+                             </div>
+                          )}
+                       </div>
+                    </div>
+                  </div>
                 </div>
-              ) : (activeTab === 'spt' || ((activeStep === 2 || activeStep === 3) && selectedPeriod)) ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
-                    {activeTab === 'spt' || activeStep === 2 ? (
-                      <>
-                        <div>
-                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'Arsip SPT' : 'Bukti Dukung'}</h3>
-                          <p className="text-xs text-gray-600 leading-relaxed font-normal">
-                             {activeTab === 'spt' ? 'Upload file Surat Tugas (PDF) tanpa rentang tanggal:' : 'Upload file bukti presensi:'}
-                          </p>
-                          <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
-                            {activeTab === 'spt' ? (
-                               <>
-                                 <li>• Surat Tugas asli dan lengkap dalam 1 file</li>
-                                 <li>• Format yang diterima: <strong>PDF</strong></li>
-                                 <li>• Data akan masuk ke <strong>Bank Data SPT</strong></li>
-                               </>
-                            ) : (
-                               <>
+              )}
+              
+              {/* LAYOUT LAMA UNTUK PRESENSI UANG MAKAN & TUKIN */}
+              {activeTab !== 'spt' && (
+                <>
+                  <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
+                    {[1, 2, 3, 4, 5, 6].map((num) => {
+                      const isActive = activeStep === num;
+                      const isDisabled = !selectedPeriod && num > 1;
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          disabled={isDisabled}
+                          onClick={() => {
+                            if (num === 1) {
+                              navigate(currentView, 1);
+                            } else {
+                              navigate(currentView, num);
+                            }
+                          }}
+                          title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                          className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
+                            isActive
+                              ? 'text-white ring-4 shadow-sm scale-105'
+                              : isDisabled
+                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                              : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
+                          }`}
+                          style={{ 
+                            backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
+                            ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
+                          }}
+                        >
+                          {num}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {activeStep === 1 ? (
+                    <div className="space-y-4 max-w-4xl mx-auto">
+                      {currentPeriodList.map((period) => {
+                        const isSelected = selectedPeriod?.id === period.id;
+                        return (
+                          <div 
+                            key={period.id}
+                            onClick={() => {
+                              if (selectedPeriod?.id !== period.id) {
+                                setSelectedPeriod(period);
+                                resetUploadState();
+                              }
+                              navigate(currentView, 2);
+                            }}
+                            className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                  {period.status}
+                                </span>
+                                {isSelected && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                    <CheckCircle2 size={10} /> Dipilih
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className="text-lg font-black text-gray-900 group-hover:text-[#084C61] transition-colors">{period.title}</h3>
+                              <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
+                                <span className="flex items-center gap-1.5">
+                                  <Calendar size={14} className="text-gray-400" />
+                                  {period.periodeLabel}
+                                </span>
+                                <span>•</span>
+                                <span>{period.tipe}</span>
+                              </div>
+                            </div>
+
+                            <div className="px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform group-active:scale-95 bg-[#143E50]">
+                              <UploadCloud size={16} />
+                              <span>Pilih & Lanjut</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (activeStep === 2 || activeStep === 3) && selectedPeriod ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                      <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6">
+                        {activeStep === 2 ? (
+                          <>
+                            <div>
+                              <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
+                              <p className="text-xs text-gray-600 leading-relaxed font-normal">
+                                 Upload file bukti presensi:
+                              </p>
+                              <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
                                  <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
                                  <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
                                  <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
-                               </>
-                            )}
-                          </ul>
-                        </div>
+                              </ul>
+                            </div>
 
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">File {activeTab === 'spt' ? 'Surat Tugas' : 'Presensi'}</label>
-                          <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
-                            <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
-                              Choose File
-                              <input 
-                                id="pdf-upload-input"
-                                type="file" 
-                                accept={activeTab === 'spt' ? ".pdf" : ".pdf, .xlsx, .xls"}
-                                onChange={handleFileChange}
-                                className="hidden"
-                              />
-                            </label>
-                            <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
-                              {selectedFile ? selectedFile.name : 'Pilih berkas...'}
-                            </span>
-                            {selectedFile && !isParsing && (
+                            <div>
+                              <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
+                              <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
+                                <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
+                                  Choose File
+                                  <input 
+                                    id="pdf-upload-input"
+                                    type="file" 
+                                    accept=".pdf, .xlsx, .xls"
+                                    onChange={handleFileChange}
+                                    className="hidden"
+                                  />
+                                </label>
+                                <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
+                                  {selectedFile ? selectedFile.name : 'Pilih berkas...'}
+                                </span>
+                                {selectedFile && !isParsing && (
+                                  <button 
+                                    type="button"
+                                    onClick={handleClearFile}
+                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Hapus berkas"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {isParsing && (
+                              <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3 shadow-sm border border-blue-100">
+                                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
+                                <span className="font-semibold leading-relaxed">{parseStatus}</span>
+                              </div>
+                            )}
+
+                            {!isParsing && parsedData && parsedData.isValid && (
+                              <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
+                                <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
+                                <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
+                              </div>
+                            )}
+
+                            {!isParsing && isAlreadyUploaded && !submitResult && selectedFile && (
+                              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
+                                <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                <div>
+                                  <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
+                                  <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
+                                </div>
+                              </div>
+                            )}
+
+                            {!isParsing && parsedData && !parsedData.isValid && (
+                              <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
+                                <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
+                                <span className="leading-relaxed">
+                                  {parsedData.isDateMismatch 
+                                    ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod?.periodeEvent}).`
+                                    : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
+                                </span>
+                              </div>
+                            )}
+
+                            {!isParsing && submitResult && (
+                              <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
+                                {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
+                                <div>
+                                  <p className="font-semibold">{submitResult.message}</p>
+                                  {submitResult.url && (
+                                    <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
+                                      Buka Dokumen di Google Drive
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {!isParsing && (
                               <button 
-                                type="button"
-                                onClick={handleClearFile}
-                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                                title="Hapus berkas"
+                                onClick={handleUploadSubmit}
+                                disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
+                                className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
+                                  parsedData && parsedData.isValid && !isSubmitting && selectedFile
+                                    ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
+                                    : 'opacity-40 cursor-not-allowed'
+                                }`}
+                                style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
                               >
-                                <Trash2 size={16} />
+                                <UploadCloud size={16} />
+                                {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
                               </button>
                             )}
-                          </div>
-                        </div>
 
-                        {isParsing && (
-                          <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3 shadow-sm border border-blue-100">
-                            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
-                            <span className="font-semibold leading-relaxed">{parseStatus}</span>
-                          </div>
-                        )}
-
-                        {!isParsing && parsedData && parsedData.isValid && (
-                          <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
-                            <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
-                            <span>File {activeTab === 'spt' ? 'Surat Tugas' : 'presensi'} milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {activeTab !== 'spt' && parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
-                          </div>
-                        )}
-
-                        {!isParsing && isAlreadyUploaded && !submitResult && selectedFile && (
-                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
-                            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
-                              <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {!isParsing && parsedData && !parsedData.isValid && (
-                          <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
-                            <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
-                            <span className="leading-relaxed">
-                              {parsedData.isDateMismatch 
-                                ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod?.periodeEvent}).`
-                                : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
-                            </span>
-                          </div>
-                        )}
-
-                        {!isParsing && submitResult && (
-                          <div className={`p-4 rounded-2xl text-xs flex items-start gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'}`}>
-                            {submitResult.type === 'success' ? <CheckCircle2 size={18} className="text-emerald-600 shrink-0" /> : <AlertCircle size={18} className="text-red-600 shrink-0" />}
-                            <div>
-                              <p className="font-semibold">{submitResult.message}</p>
-                              {submitResult.url && (
-                                <a href={submitResult.url} target="_blank" rel="noreferrer" className="text-teal-700 underline font-bold mt-1 inline-block">
-                                  Buka Dokumen di Google Drive
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {!isParsing && (
-                          <button 
-                            onClick={handleUploadSubmit}
-                            disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
-                            className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
-                              parsedData && parsedData.isValid && !isSubmitting && selectedFile
-                                ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
-                                : 'opacity-40 cursor-not-allowed'
-                            }`}
-                            style={{ backgroundColor: isAlreadyUploaded && selectedFile ? '#D97706' : PALETTE_PKP.midnightGreen }}
-                          >
-                            <UploadCloud size={16} />
-                            {isSubmitting ? 'Memproses ke Server...' : (isAlreadyUploaded && selectedFile ? 'Ganti Dokumen' : 'Proses & Simpan Bukti')}
-                          </button>
-                        )}
-
-                        {!isParsing && parsedData && parsedData.isValid && activeTab !== 'spt' && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
-                          <button 
-                            onClick={() => navigate(currentView, 3)}
-                            className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
-                          >
-                            Lanjut upload Bukti Pendukung <ChevronRight size={16} />
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <div>
-                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
-                          <p className="text-xs text-gray-600 leading-relaxed font-normal">Langkah terakhir untuk menyelesaikan pengajuan {selectedPeriod.tipe} Anda. Periksa kembali data di sebelah kanan.</p>
-                        </div>
-                        
-                        {isAlreadyUploaded ? (
-                          <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-2 shadow-sm">
-                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-black mb-0.5">Dokumen Tersimpan</p>
-                              <p className="leading-relaxed">Berkas telah tersimpan di Google Drive. Silakan klik tombol di bawah untuk menyelesaikan proses pengajuan.</p>
-                            </div>
-                          </div>
+                            {!isParsing && parsedData && parsedData.isValid && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
+                              <button 
+                                onClick={() => navigate(currentView, 3)}
+                                className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
+                              >
+                                Lanjut upload Bukti Pendukung <ChevronRight size={16} />
+                              </button>
+                            )}
+                          </>
                         ) : (
-                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
-                            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                          <>
                             <div>
-                              <p className="font-black mb-0.5">Belum Disimpan</p>
-                              <p className="leading-relaxed">Anda belum memproses/menyimpan berkas ini di Tahap 2. Apakah Anda yakin ingin mengajukan data ini?</p>
+                              <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
+                              <p className="text-xs text-gray-600 leading-relaxed font-normal">Langkah terakhir untuk menyelesaikan pengajuan {selectedPeriod.tipe} Anda. Periksa kembali data di sebelah kanan.</p>
+                            </div>
+                            
+                            {isAlreadyUploaded ? (
+                              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-2 shadow-sm">
+                                <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                                <div>
+                                  <p className="font-black mb-0.5">Dokumen Tersimpan</p>
+                                  <p className="leading-relaxed">Berkas telah tersimpan di Google Drive. Silakan klik tombol di bawah untuk menyelesaikan proses pengajuan.</p>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
+                                <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                <div>
+                                  <p className="font-black mb-0.5">Belum Disimpan</p>
+                                  <p className="leading-relaxed">Anda belum memproses/menyimpan berkas ini di Tahap 2. Apakah Anda yakin ingin mengajukan data ini?</p>
+                                </div>
+                              </div>
+                            )}
+
+                            <button 
+                              onClick={() => setShowSuccessModal(true)}
+                              className="w-full py-3.5 mt-3 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] cursor-pointer"
+                              style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                            >
+                              <FileCheck size={16} />
+                              Kirim Pengajuan
+                            </button>
+
+                            <button 
+                              onClick={() => navigate(currentView, 2)}
+                              className="w-full py-3.5 mt-3 rounded-2xl text-gray-700 bg-gray-50 border border-gray-200 hover:bg-gray-100 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <ArrowLeft size={16} />
+                              Kembali ke Tahap 2
+                            </button>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="lg:col-span-8 space-y-4">
+                        {parsedData && parsedData.isValid ? (
+                          <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+                            <div className="flex items-center gap-2 font-black text-sm">
+                              <CheckCircle2 size={18} className="text-[#0A5A36]" />
+                              <span>✓ Rentang Tanggal Sesuai</span>
+                            </div>
+                            <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto">
+                              Periode Event: {selectedPeriod.periodeEvent}
                             </div>
                           </div>
-                        )}
+                        ) : parsedData && parsedData.isDateMismatch ? (
+                          <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+                            <div className="flex items-center gap-2 font-black text-sm">
+                              <AlertCircle size={18} className="text-red-600" />
+                              <span>⚠️ Periode File Tidak Sesuai</span>
+                            </div>
+                            <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
+                              File: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
+                            </div>
+                          </div>
+                        ) : null}
 
-                        <button 
-                          onClick={() => setShowSuccessModal(true)}
-                          className="w-full py-3.5 mt-3 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] cursor-pointer"
-                          style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                        >
-                          <FileCheck size={16} />
-                          Kirim Pengajuan
-                        </button>
-
-                        <button 
-                          onClick={() => navigate(currentView, 2)}
-                          className="w-full py-3.5 mt-3 rounded-2xl text-gray-700 bg-gray-50 border border-gray-200 hover:bg-gray-100 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <ArrowLeft size={16} />
-                          Kembali ke Tahap 2
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="lg:col-span-8 space-y-4">
-                    {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
-                      <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-                        <div className="flex items-center gap-2 font-black text-sm">
-                          <CheckCircle2 size={18} className="text-[#0A5A36]" />
-                          <span>✓ Rentang Tanggal Sesuai</span>
-                        </div>
-                        <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto">
-                          Periode Event: {selectedPeriod.periodeEvent}
-                        </div>
-                      </div>
-                    ) : parsedData && parsedData.isDateMismatch && activeTab !== 'spt' ? (
-                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-                        <div className="flex items-center gap-2 font-black text-sm">
-                          <AlertCircle size={18} className="text-red-600" />
-                          <span>⚠️ Periode File Tidak Sesuai</span>
-                        </div>
-                        <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
-                          File: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                      <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
-                            {activeTab === 'spt' ? <><Users size={16} className="text-[#084C61]"/> Data Personil Surat Tugas</> : 'Preview Data Presensi'}
-                          </h3>
-                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
-                        </div>
-                        <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
-                          <p className="font-extrabold text-gray-900 text-xs truncate max-w-[250px]">{parsedData ? (activeTab === 'spt' ? (selectedFile?.name || 'Berkas SPT') : parsedData.nama) : 'Belum Ada Berkas'}</p>
-                          {activeTab === 'spt' ? (
-                            <>
-                                <p className="text-[10px] text-gray-500 font-semibold truncate max-w-[250px]">No: {parsedData ? (parsedData.nomorSuratTugas || '-') : '-'}</p>
-                                <p className="text-[10px] text-teal-700 font-extrabold">
-                                  Berangkat: {parsedData ? (parsedData.sptDateBerangkat || '-') : '-'} &nbsp;•&nbsp; Pulang: {parsedData ? (parsedData.sptDatePulang || '-') : '-'} {parsedData && parsedData.sptJumlahHari !== '-' ? `(${parsedData.sptJumlahHari} Hari)` : ''}
-                                </p>
-                            </>
-                          ) : (
-                             <>
-                                <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
-                                <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
-                             </>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {activeTab === 'spt' ? (
-                        <div className="overflow-auto border border-gray-200 rounded-2xl bg-white shadow-2xs relative max-h-[450px]">
-                           <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
+                        <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
+                          <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <h3 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
+                                Preview Data Presensi
+                              </h3>
+                              <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
+                            </div>
+                            <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
+                              <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
+                              <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
+                              <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
+                            <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
                               <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
                                 <tr>
-                                  <th className="py-3 px-4 w-12 text-center whitespace-nowrap">NO</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">NAMA PEGAWAI</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">NIP</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">TANGGAL BERANGKAT</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">TANGGAL PULANG</th>
-                                  <th className="py-3 px-4 text-center whitespace-nowrap">HARI</th>
+                                  <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
+                                  <th className="py-3 px-3 whitespace-nowrap">HARI</th>
+                                  <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
+                                  <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
+                                  <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                                {parsedData && parsedData.isSpt && parsedData.sptNames && parsedData.sptNames.length > 0 ? (
-                                  parsedData.sptNames.map((pegawai, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                      <td className="py-3 px-4 text-center text-gray-500 font-bold">{idx + 1}</td>
-                                      <td className="py-3 px-4 font-bold text-gray-900">{pegawai.nama}</td>
-                                      <td className="py-3 px-4 font-mono text-gray-600">{pegawai.nip}</td>
-                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDateBerangkat}</td>
-                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDatePulang}</td>
-                                      <td className="py-3 px-4 text-center text-emerald-700 font-bold">{parsedData.sptJumlahHari !== '-' ? `${parsedData.sptJumlahHari} Hari` : '-'}</td>
-                                    </tr>
-                                  ))
+                                {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
+                                  parsedData.rows.map((row, idx) => {
+                                    const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
+                                    const isLocked = activeStep !== 3;
+                                    
+                                    const getRowBgClass = () => {
+                                      if (isLocked && activeStep === 3) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
+                                      
+                                      switch (row.keterangan) {
+                                        case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
+                                        case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
+                                        case 'Libur': return 'bg-[#F4CCCC] text-red-900';
+                                        case 'WFO':
+                                        case 'WFA':
+                                        case 'WFH': return 'bg-white text-gray-900';
+                                        default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
+                                      }
+                                    };
+
+                                    const rowBgClass = getRowBgClass();
+                                    
+                                    return (
+                                      <tr key={idx} className={`${rowBgClass} transition-colors`}>
+                                        <td className="py-2 px-3.5 whitespace-nowrap">
+                                          <input 
+                                            type="text" 
+                                            value={row.tanggal} 
+                                            onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)}
+                                            disabled={true}
+                                            className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed"
+                                          />
+                                        </td>
+                                        <td className="py-2 px-3 whitespace-nowrap">
+                                          <input 
+                                            type="text" 
+                                            value={row.hari} 
+                                            onChange={(e) => handleCellChange(idx, 'hari', e.target.value)}
+                                            disabled={true}
+                                            className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed"
+                                          />
+                                        </td>
+                                        <td className="py-2 px-3 whitespace-nowrap">
+                                          <input 
+                                            type="text" 
+                                            value={row.datang} 
+                                            onChange={(e) => handleCellChange(idx, 'datang', e.target.value)}
+                                            disabled={true}
+                                            className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`}
+                                          />
+                                        </td>
+                                        <td className="py-2 px-3 whitespace-nowrap">
+                                          <input 
+                                            type="text" 
+                                            value={row.pulang} 
+                                            onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)}
+                                            disabled={true}
+                                            className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`}
+                                          />
+                                        </td>
+                                        <td className="py-2 px-3 text-center whitespace-nowrap">
+                                          {isLocked ? (
+                                            <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${
+                                                row.keterangan === 'WFO' || row.keterangan === 'WFH'
+                                                  ? 'bg-white text-gray-800 border-gray-200' 
+                                                  : row.keterangan === 'WFA'
+                                                  ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]'
+                                                  : row.keterangan === 'Cuti'
+                                                  ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]'
+                                                  : row.keterangan === 'Dinas'
+                                                  ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]'
+                                                  : row.keterangan === 'Libur' 
+                                                  ? 'bg-[#EAA] text-red-900 border-red-300' 
+                                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                                              }`}>
+                                              {row.keterangan}
+                                            </span>
+                                          ) : (
+                                            <select
+                                              value={row.keterangan}
+                                              onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
+                                              className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${
+                                                row.keterangan === 'WFO' || row.keterangan === 'WFH'
+                                                  ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' 
+                                                  : row.keterangan === 'WFA'
+                                                  ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]'
+                                                  : row.keterangan === 'Cuti'
+                                                  ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]'
+                                                  : row.keterangan === 'Dinas'
+                                                  ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]'
+                                                  : row.keterangan === 'Libur' 
+                                                  ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' 
+                                                  : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'
+                                              }`}
+                                            >
+                                              <option value="WFO" className="bg-white text-gray-800">WFO</option>
+                                              <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
+                                              <option value="WFH" className="bg-white text-gray-800">WFH</option>
+                                              <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
+                                              <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
+                                              <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
+                                              <option value="DL" className="bg-white text-gray-800">DL</option>
+                                              <option value="TB" className="bg-white text-gray-800">TB</option>
+                                              <option value="-" className="bg-white text-gray-800">-</option>
+                                            </select>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
                                 ) : (
                                   <tr>
-                                    <td colSpan="6" className="text-center py-16 text-gray-400 bg-gray-50/50">
+                                    <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
                                       <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
                                         <FileText size={32} />
                                         <div>
-                                          <p className="font-bold text-gray-500 mb-1">
-                                            {selectedFile && !isParsing ? 'Tidak ada personil terdaftar di Bank Data yang ditemukan.' : 'Belum Ada Berkas Pratinjau'}
-                                          </p>
-                                          <p className="text-xs">
-                                            {selectedFile && !isParsing ? 'Sistem hanya menampilkan data pegawai dengan NIP yang terdaftar resmi pada Bank Data Spreadsheet.' : 'Silakan unggah dokumen PDF Surat Tugas Anda.'}
-                                          </p>
+                                          <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
+                                          <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
                                         </div>
                                       </div>
                                     </td>
                                   </tr>
                                 )}
                               </tbody>
-                           </table>
-                        </div>
-                      ) : (
-                        <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
-                          <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
-                            <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
-                              <tr>
-                                <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
-                                <th className="py-3 px-3 whitespace-nowrap">HARI</th>
-                                <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
-                                <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
-                                <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                              {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
-                                parsedData.rows.map((row, idx) => {
-                                  const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
-                                  const isLocked = activeStep !== 3;
-                                  
-                                  const getRowBgClass = () => {
-                                    if (isLocked && activeStep === 3) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
-                                    
-                                    switch (row.keterangan) {
-                                      case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
-                                      case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
-                                      case 'Libur': return 'bg-[#F4CCCC] text-red-900';
-                                      case 'WFO':
-                                      case 'WFA':
-                                      case 'WFH': return 'bg-white text-gray-900';
-                                      default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
-                                    }
-                                  };
-
-                                  const rowBgClass = getRowBgClass();
-                                  
-                                  return (
-                                    <tr key={idx} className={`${rowBgClass} transition-colors`}>
-                                      <td className="py-2 px-3.5 whitespace-nowrap">
-                                        <input 
-                                          type="text" 
-                                          value={row.tanggal} 
-                                          onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)}
-                                          disabled={true}
-                                          className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed"
-                                        />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input 
-                                          type="text" 
-                                          value={row.hari} 
-                                          onChange={(e) => handleCellChange(idx, 'hari', e.target.value)}
-                                          disabled={true}
-                                          className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed"
-                                        />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input 
-                                          type="text" 
-                                          value={row.datang} 
-                                          onChange={(e) => handleCellChange(idx, 'datang', e.target.value)}
-                                          disabled={true}
-                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`}
-                                        />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input 
-                                          type="text" 
-                                          value={row.pulang} 
-                                          onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)}
-                                          disabled={true}
-                                          className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`}
-                                        />
-                                      </td>
-                                      <td className="py-2 px-3 text-center whitespace-nowrap">
-                                        {isLocked ? (
-                                          <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${
-                                              row.keterangan === 'WFO' || row.keterangan === 'WFH'
-                                                ? 'bg-white text-gray-800 border-gray-200' 
-                                                : row.keterangan === 'WFA'
-                                                ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]'
-                                                : row.keterangan === 'Cuti'
-                                                ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]'
-                                                : row.keterangan === 'Dinas'
-                                                ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]'
-                                                : row.keterangan === 'Libur' 
-                                                ? 'bg-[#EAA] text-red-900 border-red-300' 
-                                                : 'bg-amber-50 text-amber-800 border-amber-200'
-                                            }`}>
-                                            {row.keterangan}
-                                          </span>
-                                        ) : (
-                                          <select
-                                            value={row.keterangan}
-                                            onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
-                                            className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${
-                                              row.keterangan === 'WFO' || row.keterangan === 'WFH'
-                                                ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' 
-                                                : row.keterangan === 'WFA'
-                                                ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]'
-                                                : row.keterangan === 'Cuti'
-                                                ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]'
-                                                : row.keterangan === 'Dinas'
-                                                ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]'
-                                                : row.keterangan === 'Libur' 
-                                                ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' 
-                                                : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'
-                                            }`}
-                                          >
-                                            <option value="WFO" className="bg-white text-gray-800">WFO</option>
-                                            <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
-                                            <option value="WFH" className="bg-white text-gray-800">WFH</option>
-                                            <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
-                                            <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
-                                            <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
-                                            <option value="DL" className="bg-white text-gray-800">DL</option>
-                                            <option value="TB" className="bg-white text-gray-800">TB</option>
-                                            <option value="-" className="bg-white text-gray-800">-</option>
-                                          </select>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  );
-                                })
-                              ) : (
-                                <tr>
-                                  <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
-                                    <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
-                                      <FileText size={32} />
-                                      <div>
-                                        <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
-                                        <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
-                                      </div>
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      
-                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
-                        {activeTab !== 'spt' && (
-                           <>
+                            </table>
+                          </div>
+                          
+                          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
                              <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
                              <span className="text-gray-500">Hari Masuk (WFO/WFA): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
-                           </>
-                        )}
-                        <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
+                             <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm">
-                  <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
-                    <FileBarChart size={32} />
-                  </div>
-                  <h2 className="text-2xl font-black mb-3 text-gray-900">Tahap {activeStep} dalam Pengembangan</h2>
-                  <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Fitur untuk tahap ini sedang dalam proses penyusunan data. Silakan kembali ke tahap awal pengumpulan.</p>
-                  <button 
-                    onClick={() => navigate(currentView, 1)}
-                    className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" 
-                    style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                  >
-                    <ArrowLeft size={16} /> Kembali ke Tahap 1
-                  </button>
-                </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm">
+                      <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
+                        <FileBarChart size={32} />
+                      </div>
+                      <h2 className="text-2xl font-black mb-3 text-gray-900">Tahap {activeStep} dalam Pengembangan</h2>
+                      <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Fitur untuk tahap ini sedang dalam proses penyusunan data. Silakan kembali ke tahap awal pengumpulan.</p>
+                      <button 
+                        onClick={() => navigate(currentView, 1)}
+                        className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" 
+                        style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                      >
+                        <ArrowLeft size={16} /> Kembali ke Tahap 1
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
-
             </div>
           )}
         </div>
