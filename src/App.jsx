@@ -208,7 +208,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
   let dateBerangkat = '-';
   let datePulang = '-';
   let tanggalSurat = '-';
-  let nomorSurat = '-';
 
   const IGNORED_NIPS = [
     '197012151998032007', // Rini Dyah Mawarty
@@ -229,19 +228,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     for (const nipStr of lineMatches) {
       if (!IGNORED_NIPS.includes(nipStr)) nipSet.add(nipStr);
     }
-  }
-
-  // --- EXTRACTION: Nomor Surat ---
-  const nomorSuratRegex = /(?:Nomor\s*:\s*)?(\d{1,4}\s*\/\s*[A-Za-z]+\s*\/[A-Za-z0-9._]+\s*\/\s*\d{4})/i;
-  const matchNomor = fullText.match(nomorSuratRegex);
-  if (matchNomor) {
-      nomorSurat = matchNomor[1].trim();
-  } else {
-      const looseNomorRegex = /(?:Nomor\s*:\s*)([^\n]+)/i;
-      const looseMatch = fullText.match(looseNomorRegex);
-      if(looseMatch) {
-          nomorSurat = looseMatch[1].trim();
-      }
   }
 
   const MONTHS = 'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember';
@@ -336,7 +322,7 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     }
   });
 
-  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, nomorSurat };
+  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat };
 };
 
 const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = null, onProgress = null) => {
@@ -491,7 +477,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       sptDateBerangkat: sptData.dateBerangkat,
       sptDatePulang: sptData.datePulang,
       sptTanggalSurat: sptData.tanggalSurat,
-      nomorSurat: sptData.nomorSurat,
       sptNames: sptData.pegawaiList,
       nip: '-',
       nama: 'Berbagai Pegawai',
@@ -1087,100 +1072,19 @@ const getPeriodEvents = () => {
   };
 };
 
-const PdfPreviewRenderer = ({ file }) => {
-  const [numPages, setNumPages] = useState(0);
-  const [pdfRef, setPdfRef] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadPdf = async () => {
-      setLoading(true);
-      try {
-        if (!window.pdfjsLib) {
-          await new Promise((resolve) => {
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-            script.onload = () => {
-              window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-              resolve();
-            };
-            document.head.appendChild(script);
-          });
-        }
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        setPdfRef(pdf);
-        setNumPages(pdf.numPages);
-      } catch (error) {
-        console.error("Gagal memuat PDF", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadPdf();
-  }, [file]);
-
-  return (
-    <div className="flex flex-col items-center gap-6 p-6 h-full overflow-y-auto custom-scrollbar">
-      {loading && (
-        <div className="flex flex-col items-center justify-center h-full gap-3 text-[#084C61] pt-20">
-          <div className="w-8 h-8 border-4 border-[#084C61] border-t-transparent rounded-full animate-spin"></div>
-          <span className="font-bold text-sm">Merender Dokumen PDF...</span>
-        </div>
-      )}
-      {!loading && pdfRef && Array.from(new Array(numPages), (el, index) => (
-        <PdfPage key={`page_${index + 1}`} pageNumber={index + 1} pdfRef={pdfRef} />
-      ))}
-    </div>
-  );
-};
-
-const PdfPage = ({ pageNumber, pdfRef }) => {
-  const canvasRef = React.useRef(null);
-
-  useEffect(() => {
-    let renderTask;
-    const renderPage = async () => {
-      try {
-        const page = await pdfRef.getPage(pageNumber);
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        // Resolusi 1.5x lebih tajam
-        const viewport = page.getViewport({ scale: 1.5 });
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-
-        renderTask = page.render({ canvasContext: ctx, viewport: viewport });
-        await renderTask.promise;
-      } catch (err) {
-        if (err.name !== 'RenderingCancelledException') {
-          console.error("Error rendering page", err);
-        }
-      }
-    };
-    renderPage();
-    return () => {
-      if (renderTask) renderTask.cancel();
-    };
-  }, [pageNumber, pdfRef]);
-
-  return <canvas ref={canvasRef} className="shadow-lg bg-white max-w-full h-auto" />;
-};
-
 const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   
+  // STATE KHUSUS UNTUK UANG MAKAN & TUKIN
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
   const [parsedData, setParsedData] = useState(null);
   
-  const [sptFiles, setSptFiles] = useState([]); 
+  // STATE KHUSUS UNTUK SPT (MENDUKUNG MULTIPLE FILES)
+  const [sptFiles, setSptFiles] = useState([]); // Array of { id, file, status: 'pending'|'reading'|'success'|'error', parsedData: null }
   const [isReadingSpt, setIsReadingSpt] = useState(false);
   const [sptReadingProgress, setSptReadingProgress] = useState({ current: 0, total: 0 });
-  const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
-  const [previewPdfName, setPreviewPdfName] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -1192,16 +1096,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [sptSubTab, setSptSubTab] = useState('terdata');
   const [dbPegawai, setDbPegawai] = useState([]);
 
+  // STATE UNTUK EDITING (Diarahkan per-dokumen menggunakan ID)
   const [editingSptId, setEditingSptId] = useState(null);
-  const [editSptForm, setEditSptForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '', nomorSurat: '' });
+  const [editSptForm, setEditSptForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '' });
   
-  const [addingPegawaiId, setAddingPegawaiId] = useState(null);
+  const [addingPegawaiId, setAddingPegawaiId] = useState(null); // Menyimpan ID dokumen yang sedang di-tambah pegawainya
   const [sptSearchQuery, setSptSearchQuery] = useState('');
   
-  const [editingPegawaiData, setEditingPegawaiData] = useState(null); 
+  const [editingPegawaiData, setEditingPegawaiData] = useState(null); // { fileId, idx }
   const [inlineSearchQuery, setInlineSearchQuery] = useState('');
-  
-  const [previewFile, setPreviewFile] = useState(null);
+
+  // STATE UNTUK MODAL PREVIEW PDF (Base64)
+  const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
+  const [previewPdfName, setPreviewPdfName] = useState("");
 
   useEffect(() => {
     const cached = localStorage.getItem('cached_pegawai_json');
@@ -1263,7 +1170,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setEditingSptId(null);
     setAddingPegawaiId(null);
     setEditingPegawaiData(null);
-    setPreviewFile(null);
   };
 
   const handleClearFile = (idToClear = null) => {
@@ -1288,10 +1194,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         setSptFiles(prev => [...prev, ...newFiles].slice(0, 10)); // Maksimal 10
         setSubmitResult(null);
         setIsAlreadyUploaded(false);
+        // Reset input value agar file yang sama bisa diupload ulang jika sudah dihapus
         e.target.value = '';
         return;
       }
 
+      // Logika khusus non-SPT (Uang Makan / Tukin)
       const file = e.target.files[0];
       setSelectedFile(file);
       setSubmitResult(null);
@@ -1342,6 +1250,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       const fileObj = pendingFiles[i];
       setSptReadingProgress({ current: i + 1, total: pendingFiles.length });
       
+      // Update specific file to 'reading' state for visual indication
       currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'reading' } : f);
       setSptFiles([...currentList]);
       
@@ -1354,8 +1263,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             ...result,
             sptDateBerangkat: result.sptDateBerangkat,
             sptDatePulang: result.sptDatePulang,
-            sptTanggalSurat: result.sptTanggalSurat,
-            nomorSurat: result.nomorSurat 
+            sptTanggalSurat: result.sptTanggalSurat
           }
         } : f);
       } catch (err) {
@@ -1370,9 +1278,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onload = () => resolve(reader.result); // Mengembalikan Data URL penuh
       reader.onerror = error => reject(error);
     });
+  };
+
+  const handlePreviewPdf = async (file) => {
+    try {
+      const dataUrl = await fileToBase64(file);
+      setPreviewPdfName(file.name);
+      setPreviewPdfUrl(dataUrl);
+    } catch (e) {
+      console.error("Gagal memuat pratinjau PDF", e);
+    }
   };
 
   const handleCellChange = (index, field, value) => {
@@ -1399,19 +1317,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       ...pd,
       sptDateBerangkat: editSptForm.berangkat,
       sptDatePulang: editSptForm.pulang,
-      sptTanggalSurat: editSptForm.tanggalSurat,
-      nomorSurat: editSptForm.nomorSurat
+      sptTanggalSurat: editSptForm.tanggalSurat
     }));
     setEditingSptId(null);
   };
 
+  // Submit Logic for Uang Makan / Tukin
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFile || !parsedData || !parsedData.isValid) return;
 
     setIsSubmitting(true);
     try {
-      const base64Data = await fileToBase64(selectedFile);
+      const base64Url = await fileToBase64(selectedFile);
+      const base64Data = base64Url.split(',')[1]; // MENGAMBIL HANYA DATA BASE64
       
       let sheetData = [];
       if (parsedData.rows && parsedData.rows.length > 0) {
@@ -1442,7 +1361,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         periode: parsedData.periode || selectedPeriod?.periodeEvent || '',
         bulanTahun: bulanTahunForPayload, 
         fileName: selectedFile.name,
-        fileBase64: base64Data,
+        fileBase64: base64Data, // DIBERSIHKAN DARI DATA URI
         sheetData: sheetData,
         sptData: [],
         ringkasan: {
@@ -1480,6 +1399,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }
   };
 
+  // Submit Logic for Multiple SPT
   const handleUploadSubmitSpt = async (e) => {
     e.preventDefault();
     const filesToUpload = sptFiles.filter(f => f.status === 'success' && f.parsedData.sptNames.some(p => p.selected));
@@ -1488,11 +1408,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setIsSubmitting(true);
     try {
       for (const fObj of filesToUpload) {
-        const base64Data = await fileToBase64(fObj.file);
+        const base64Raw = await fileToBase64(fObj.file);
+        const base64Data = base64Raw.split(',')[1]; // MENGAMBIL HANYA DATA BASE64, MENGHAPUS PREFIX data:application/pdf;base64,
+
         const sptDataPayload = fObj.parsedData.sptNames.filter(p => p.selected).map(pegawai => ({
           nama: pegawai.nama,
           nip: pegawai.nip,
-          nomorSurat: fObj.parsedData.nomorSurat || '-',
           tanggalBerangkat: fObj.parsedData.sptDateBerangkat || '-',
           tanggalPulang: fObj.parsedData.sptDatePulang || '-'
         }));
@@ -1504,7 +1425,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           periode: '',
           bulanTahun: 'Arsip_Surat_Tugas',
           fileName: fObj.file.name,
-          fileBase64: base64Data,
+          fileBase64: base64Data, // DATA SUDAH BERSIH DARI PREFIX
           sheetData: [],
           sptData: sptDataPayload,
           ringkasan: {}
@@ -1520,7 +1441,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       }
 
       setSubmitResult({ type: 'success', message: 'Semua Arsip SPT berhasil disimpan!' });
-      setTimeout(() => { resetUploadState(); setSptSubTab('terdata'); }, 2000);
+      
+      setTimeout(() => { 
+        resetUploadState(); 
+      }, 2000);
 
     } catch (err) {
       setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
@@ -1538,24 +1462,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       
-      {}
-      {previewFile && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 md:p-8">
-          <div className="bg-white rounded-2xl w-full max-w-5xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50 shrink-0">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <FileText className="text-[#084C61] shrink-0" size={20} />
-                <h3 className="font-bold text-gray-800 truncate" title={previewFile.name}>{previewFile.name}</h3>
-              </div>
-              <button 
-                onClick={() => setPreviewFile(null)} 
-                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors cursor-pointer shrink-0"
-              >
-                <X size={20} />
+      {/* PREVIEW MODAL DENGAN DATA URL BASE64 UNTUK BYPASS BLOCK CHROME */}
+      {previewPdfUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white text-gray-900 rounded-2xl w-full max-w-5xl h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-gray-100">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-[#F8FAFC]">
+              <h3 className="font-extrabold text-sm text-gray-800 flex items-center gap-2 truncate pr-4">
+                <FileText size={18} className="text-[#084C61] shrink-0" /> {previewPdfName}
+              </h3>
+              <button onClick={() => setPreviewPdfUrl(null)} className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded-full transition-colors cursor-pointer shrink-0">
+                <X size={18} />
               </button>
             </div>
-            <div className="flex-1 bg-gray-200 overflow-hidden relative">
-              <PdfPreviewRenderer file={previewFile} />
+            <div className="flex-1 bg-gray-50 p-2 sm:p-4">
+              <iframe src={`${previewPdfUrl}#view=FitH`} className="w-full h-full rounded-xl border border-gray-300 bg-white shadow-inner" title="PDF Preview" />
             </div>
           </div>
         </div>
@@ -1603,6 +1523,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
+      {}
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
@@ -1633,7 +1554,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             <button onClick={() => handleTabClick('absensi-tunjangan-kinerja')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileCheck size={16} /> Absensi Tunjangan Kinerja
             </button>
-            <button onClick={() => handleTabClick('arsip-surat-tugas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+            <button onClick={() => { setSptSubTab('terdata'); handleTabClick('arsip-surat-tugas'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileText size={16} /> Arsip Surat Tugas
             </button>
             <button onClick={() => handleTabClick('arsip-surat-cuti')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
@@ -1690,6 +1611,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </div>
               </div>
 
+              {}
               <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex gap-6">
                   <button onClick={() => setSptSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${sptSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -1736,14 +1658,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <input id="pdf-upload-input" type="file" accept=".pdf" multiple onChange={handleFileChange} className="hidden" />
                       </label>
 
-                      {/* AREA FILE TERPILIH */}
+                      {/* AREA FILE TERPILIH - SELALU MUNCUL SECARA DEFAULT */}
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({sptFiles.length}/10):</h4>
                           <div className="space-y-2">
                             {sptFiles.length === 0 ? (
                                <div className="p-3 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-400 py-6">
-                                  Belum ada dokumen yang diunggah.
+                                 Belum ada dokumen yang diunggah.
                                </div>
                             ) : (
                                sptFiles.map((fObj, idx) => (
@@ -1755,15 +1677,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                     {fObj.status === 'success' && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
                                   </div>
                                   <div className="flex items-center gap-1 shrink-0">
-                                    <button 
-                                      onClick={() => setPreviewFile(fObj.file)} 
-                                      className="text-[#084C61] hover:bg-gray-200 p-1.5 rounded-lg transition-colors cursor-pointer"
-                                    >
-                                      <Eye size={14}/>
-                                    </button>
-                                    <button onClick={() => handleClearFile(fObj.id)} className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors cursor-pointer">
-                                      <X size={14}/>
-                                    </button>
+                                    <button onClick={() => handlePreviewPdf(fObj.file)} className="text-[#084C61] hover:bg-gray-200 p-1.5 rounded-lg transition-colors cursor-pointer" title="Pratinjau PDF"><Eye size={14}/></button>
+                                    <button onClick={() => handleClearFile(fObj.id)} className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors cursor-pointer"><X size={14}/></button>
                                   </div>
                                 </div>
                                ))
@@ -1805,6 +1720,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </div>
                   </div>
 
+                  {}
                   {/* KOLOM KANAN: RINCIAN SPT */}
                   <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
@@ -1842,10 +1758,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           <input type="date" value={formatIndoToYMD(editSptForm.pulang)} onChange={(e) => setEditSptForm({...editSptForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">No. SPT:</label>
-                                          <input type="text" value={editSptForm.nomorSurat} onChange={(e) => setEditSptForm({...editSptForm, nomorSurat: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" placeholder="Contoh: 12/ST/2026" />
-                                        </div>
-                                        <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">Tgl SPT:</label>
                                           <input type="date" value={formatIndoToYMD(editSptForm.tanggalSurat)} onChange={(e) => setEditSptForm({...editSptForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
@@ -1865,11 +1777,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           </div>
                                           <div className="flex items-center gap-2 pl-[22px]">
                                             <FileText size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[250px]">No. {pd.nomorSurat} &nbsp;•&nbsp; Tgl: {pd.sptTanggalSurat}</span>
+                                            <span className="text-[11px] text-gray-600 font-medium">Tgl SPT: {pd.sptTanggalSurat}</span>
                                           </div>
                                         </div>
                                         <button onClick={() => {
-                                          setEditSptForm({ berangkat: pd.sptDateBerangkat, pulang: pd.sptDatePulang, tanggalSurat: pd.sptTanggalSurat, nomorSurat: pd.nomorSurat });
+                                          setEditSptForm({ berangkat: pd.sptDateBerangkat, pulang: pd.sptDatePulang, tanggalSurat: pd.sptTanggalSurat });
                                           setEditingSptId(fileObj.id);
                                         }} className="px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1]">
                                           <Edit3 size={14} /> Edit
@@ -2011,6 +1923,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             </div>
           ) : (
             <div>
+              {}
               <div 
                 className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md"
                 style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
