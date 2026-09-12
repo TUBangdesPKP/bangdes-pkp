@@ -1425,8 +1425,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
-        <div className="max-w-[98%] lg:max-w-7xl mx-auto">
+      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-5 md:p-8 lg:p-10 h-full overflow-y-auto">
+        <div className="w-full 2xl:max-w-[1600px]">
           {activeTab === 'rekap' ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
               <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
@@ -1478,9 +1478,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </span>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
                   {/* KOLOM KIRI: UPLOAD BOX */}
-                  <div className="lg:col-span-4 space-y-6 lg:sticky top-[20px]">
+                  <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[20px]">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
                       <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload SPT (di luar periode pengumpulan)</h3>
                       <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
@@ -1532,7 +1532,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </div>
 
                   {/* KOLOM KANAN: RINCIAN SPT */}
-                  <div className="lg:col-span-8 flex flex-col gap-4">
+                  <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
                       {(!parsedData || !parsedData.isValid) ? (
                         <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70">
@@ -1837,8 +1837,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   })}
                 </div>
               ) : (activeTab === 'spt' || ((activeStep === 2 || activeStep === 5) && selectedPeriod)) ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
-                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+                  <div className="lg:col-span-5 xl:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
                     {activeTab === 'spt' || activeStep === 2 ? (
                       <>
                         <div>
@@ -2011,7 +2011,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     )}
                   </div>
 
-                  <div className="lg:col-span-8 space-y-4">
+                  <div className="lg:col-span-7 xl:col-span-8 space-y-4">
                     {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
                       <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
                         <div className="flex items-center gap-2 font-black text-sm">
