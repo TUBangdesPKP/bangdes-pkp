@@ -24,7 +24,8 @@ import {
   Users,
   Edit3,
   Save,
-  X
+  X,
+  Eye
 } from 'lucide-react';
 
 if (typeof window !== 'undefined') {
@@ -295,7 +296,6 @@ const extractSptData = (lines, fullText, dbPegawai = []) => {
     datePulang = found.pulang;
   }
 
-  // Ekstrak Tanggal Surat Tugas (Asumsi tanggal terakhir di dokumen)
   const allDatesGlobal = [...textToSearch.matchAll(singleDateRegex)];
   if (allDatesGlobal.length > 0) {
     const lastDate = allDatesGlobal[allDatesGlobal.length - 1];
@@ -1074,10 +1074,18 @@ const getPeriodEvents = () => {
 
 const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  
+  // STATE KHUSUS UNTUK UANG MAKAN & TUKIN
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
   const [parsedData, setParsedData] = useState(null);
+  
+  // STATE KHUSUS UNTUK SPT (MENDUKUNG MULTIPLE FILES)
+  const [sptFiles, setSptFiles] = useState([]); // Array of { id, file, status: 'pending'|'reading'|'success'|'error', parsedData: null }
+  const [isReadingSpt, setIsReadingSpt] = useState(false);
+  const [sptReadingProgress, setSptReadingProgress] = useState({ current: 0, total: 0 });
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
   const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
@@ -1085,14 +1093,18 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  const [sptSubTab, setSptSubTab] = useState('simpanan');
-  const [isEditingSptDetails, setIsEditingSptDetails] = useState(false);
-  const [editSptForm, setEditSptForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '' });
-  const [sptSearchQuery, setSptSearchQuery] = useState('');
-  const [showSptSearch, setShowSptSearch] = useState(false);
-  const [editingPegawaiIdx, setEditingPegawaiIdx] = useState(null);
-  const [inlineSearchQuery, setInlineSearchQuery] = useState('');
+  const [sptSubTab, setSptSubTab] = useState('terdata');
   const [dbPegawai, setDbPegawai] = useState([]);
+
+  // STATE UNTUK EDITING (Diarahkan per-dokumen menggunakan ID)
+  const [editingSptId, setEditingSptId] = useState(null);
+  const [editSptForm, setEditSptForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '' });
+  
+  const [addingPegawaiId, setAddingPegawaiId] = useState(null); // Menyimpan ID dokumen yang sedang di-tambah pegawainya
+  const [sptSearchQuery, setSptSearchQuery] = useState('');
+  
+  const [editingPegawaiData, setEditingPegawaiData] = useState(null); // { fileId, idx }
+  const [inlineSearchQuery, setInlineSearchQuery] = useState('');
 
   useEffect(() => {
     const cached = localStorage.getItem('cached_pegawai_json');
@@ -1120,7 +1132,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
 
   const handleTabClick = (targetView) => {
-    if (selectedFile && !submitResult) {
+    if ((selectedFile || sptFiles.length > 0) && !submitResult) {
       setPendingTargetView({ view: targetView, step: 1 });
       setShowConfirmModal(true);
     } else {
@@ -1145,25 +1157,45 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const resetUploadState = () => {
     setSelectedFile(null);
     setParsedData(null);
+    setSptFiles([]);
     setSubmitResult(null);
     setIsParsing(false);
     setParseStatus('Mengekstrak dan memverifikasi data...');
     setIsSubmitting(false);
     setIsAlreadyUploaded(false); 
-    setIsEditingSptDetails(false);
-    setShowSptSearch(false);
-    setEditingPegawaiIdx(null);
+    setEditingSptId(null);
+    setAddingPegawaiId(null);
+    setEditingPegawaiData(null);
   };
 
-  const handleClearFile = (e) => {
-    e.stopPropagation();
+  const handleClearFile = (idToClear = null) => {
+    if (activeTab === 'spt' && idToClear) {
+      setSptFiles(prev => prev.filter(f => f.id !== idToClear));
+      return;
+    }
     const fileInput = document.getElementById('pdf-upload-input');
     if (fileInput) fileInput.value = '';
     resetUploadState();
   };
 
   const handleFileChange = async (e) => {
-    if (e.target.files && e.target.files[0]) {
+    if (e.target.files && e.target.files.length > 0) {
+      if (activeTab === 'spt') {
+        const newFiles = Array.from(e.target.files).map(f => ({
+          id: Math.random().toString(36).substring(7),
+          file: f,
+          status: 'pending',
+          parsedData: null
+        }));
+        setSptFiles(prev => [...prev, ...newFiles].slice(0, 10)); // Maksimal 10
+        setSubmitResult(null);
+        setIsAlreadyUploaded(false);
+        // Reset input value agar file yang sama bisa diupload ulang jika sudah dihapus
+        e.target.value = '';
+        return;
+      }
+
+      // Logika khusus non-SPT (Uang Makan / Tukin)
       const file = e.target.files[0];
       setSelectedFile(file);
       setSubmitResult(null);
@@ -1187,14 +1219,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
       try {
         const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, setParseStatus); 
-        setParsedData({
-          ...result,
-          sptDateBerangkat: result.sptDateBerangkat,
-          sptDatePulang: result.sptDatePulang,
-          sptTanggalSurat: result.sptTanggalSurat
-        });
+        setParsedData(result);
         
-        if (result && result.isValid && activeTab !== 'spt') {
+        if (result && result.isValid) {
           const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
           const expectedPeriodeEvent = selectedPeriod ? selectedPeriod.periodeEvent : result.periode;
           const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
@@ -1206,6 +1233,41 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         setIsParsing(false);
       }
     }
+  };
+
+  const handleBacaDokumenSpt = async () => {
+    const pendingFiles = sptFiles.filter(f => f.status === 'pending');
+    if (pendingFiles.length === 0) return;
+
+    setIsReadingSpt(true);
+    let currentList = [...sptFiles];
+
+    for (let i = 0; i < pendingFiles.length; i++) {
+      const fileObj = pendingFiles[i];
+      setSptReadingProgress({ current: i + 1, total: pendingFiles.length });
+      
+      // Update specific file to 'reading' state for visual indication
+      currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'reading' } : f);
+      setSptFiles([...currentList]);
+      
+      try {
+        const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, activeTab); 
+        currentList = currentList.map(f => f.id === fileObj.id ? { 
+          ...f, 
+          status: 'success', 
+          parsedData: {
+            ...result,
+            sptDateBerangkat: result.sptDateBerangkat,
+            sptDatePulang: result.sptDatePulang,
+            sptTanggalSurat: result.sptTanggalSurat
+          }
+        } : f);
+      } catch (err) {
+        currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'error' } : f);
+      }
+      setSptFiles([...currentList]);
+    }
+    setIsReadingSpt(false);
   };
 
   const fileToBase64 = (file) => {
@@ -1229,16 +1291,24 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     });
   };
 
-  const handleSaveSptDetails = () => {
-    setParsedData(prev => ({
-      ...prev,
+  const updateSptFileData = (fileId, updater) => {
+    setSptFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      return { ...f, parsedData: updater(f.parsedData) };
+    }));
+  };
+
+  const handleSaveSptDetails = (fileId) => {
+    updateSptFileData(fileId, pd => ({
+      ...pd,
       sptDateBerangkat: editSptForm.berangkat,
       sptDatePulang: editSptForm.pulang,
       sptTanggalSurat: editSptForm.tanggalSurat
     }));
-    setIsEditingSptDetails(false);
+    setEditingSptId(null);
   };
 
+  // Submit Logic for Uang Makan / Tukin
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
     if (!selectedFile || !parsedData || !parsedData.isValid) return;
@@ -1247,17 +1317,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     try {
       const base64Data = await fileToBase64(selectedFile);
       
-      let sptDataPayload = [];
-      if (activeTab === 'spt' && parsedData.sptNames) {
-        sptDataPayload = parsedData.sptNames.filter(p => p.selected).map(pegawai => ({
-          nama: pegawai.nama,
-          nip: pegawai.nip,
-          nomorSurat: parsedData.nomorSurat || '-',
-          tanggalBerangkat: parsedData.sptDateBerangkat || '-',
-          tanggalPulang: parsedData.sptDatePulang || '-'
-        }));
-      }
-
       let sheetData = [];
       if (parsedData.rows && parsedData.rows.length > 0) {
         sheetData = parsedData.rows.map((row, index) => {
@@ -1289,11 +1348,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         fileName: selectedFile.name,
         fileBase64: base64Data,
         sheetData: sheetData,
-        sptData: sptDataPayload,
+        sptData: [],
         ringkasan: {
           totalHariKalender: parsedData.expectedDays || 0,
           totalHariMasuk: parsedData.totalHariMasuk || 0,
-          totalJamKerja: activeTab === 'spt' ? '-' : '163j 30m',
+          totalJamKerja: '-',
           totalTelat: '0',
           totalPSW: '0'
         }
@@ -1307,7 +1366,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       const json = await res.json();
 
       if (json.status === 'success') {
-        const cacheKey = activeTab === 'spt' ? `uploaded_${nipForPayload}_spt_${selectedFile.name}` : `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
+        const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
         localStorage.setItem(cacheKey, 'true');
         setSubmitResult({ 
           type: 'success', 
@@ -1315,9 +1374,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           url: json.folderUrl 
         });
         setIsAlreadyUploaded(true);
-        if (activeTab === 'spt') {
-           setTimeout(() => { resetUploadState(); setSptSubTab('terdata'); }, 2000);
-        }
       } else {
         throw new Error(json.message || 'Gagal menyimpan data');
       }
@@ -1328,12 +1384,64 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }
   };
 
+  // Submit Logic for Multiple SPT
+  const handleUploadSubmitSpt = async (e) => {
+    e.preventDefault();
+    const filesToUpload = sptFiles.filter(f => f.status === 'success' && f.parsedData.sptNames.some(p => p.selected));
+    if (filesToUpload.length === 0) return;
+
+    setIsSubmitting(true);
+    try {
+      for (const fObj of filesToUpload) {
+        const base64Data = await fileToBase64(fObj.file);
+        const sptDataPayload = fObj.parsedData.sptNames.filter(p => p.selected).map(pegawai => ({
+          nama: pegawai.nama,
+          nip: pegawai.nip,
+          nomorSurat: fObj.parsedData.nomorSurat || '-',
+          tanggalBerangkat: fObj.parsedData.sptDateBerangkat || '-',
+          tanggalPulang: fObj.parsedData.sptDatePulang || '-'
+        }));
+
+        const payload = {
+          modul: 'spt',
+          nip: loggedInUser.NIP,
+          nama: loggedInUser.Nama,
+          periode: '',
+          bulanTahun: 'Arsip_Surat_Tugas',
+          fileName: fObj.file.name,
+          fileBase64: base64Data,
+          sheetData: [],
+          sptData: sptDataPayload,
+          ringkasan: {}
+        };
+
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.status !== 'success') throw new Error(json.message);
+      }
+
+      setSubmitResult({ type: 'success', message: 'Semua Arsip SPT berhasil disimpan!' });
+      setTimeout(() => { resetUploadState(); setSptSubTab('terdata'); }, 2000);
+
+    } catch (err) {
+      setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const currentPeriodList = PERIOD_EVENTS[activeTab] || [];
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
+  const sptSuccessfulFiles = sptFiles.filter(f => f.status === 'success');
+  const sptTotalSelectedPegawai = sptSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.sptNames.filter(p => p.selected).length, 0);
+
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
-      {/* Modal Konfirmasi Beralih Modul */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-gray-100">
@@ -1356,7 +1464,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
-      {/* Modal Pengajuan Berhasil */}
       {showSuccessModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-gray-100 text-center">
@@ -1425,8 +1532,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-5 md:p-8 lg:p-10 h-full overflow-y-auto">
-        <div className="w-full 2xl:max-w-[1600px]">
+      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
+        <div className="w-full">
           {activeTab === 'rekap' ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
               <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
@@ -1443,29 +1550,34 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               >
                 <div className="space-y-2">
                   <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">Arsip Surat Tugas</h2>
-                  <div className="flex items-center gap-2 text-xs text-gray-200">
-                    <Calendar size={14} />
-                    <span>Upload dokumen tanpa batasan periode. Data akan masuk ke Bank Data SPT.</span>
+                  <div className="text-sm font-medium text-teal-100/90 tracking-wide">
+                    Direktorat Pembangunan Perumahan Perdesaan
                   </div>
                 </div>
-                <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 shadow-inner">
-                  <div className="text-right">
-                    <p className="text-xs text-gray-200 font-medium">
-                      <strong className="text-white font-bold">Super</strong>, let's go, waktunya upload arsipnya!
+                <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                  <div className="text-right flex-1">
+                    <p className="text-xs text-gray-200 leading-snug font-medium">
+                      <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload arsipnya!
                     </p>
                     <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
                   </div>
-                  <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">S</div>
+                  {loggedInUser?.Foto_Pegawai ? (
+                    <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                      {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex gap-6">
                   <button onClick={() => setSptSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${sptSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    Sudah Dikumpulkan
+                    Rekapitulasi Surat Tugas
                   </button>
                   <button onClick={() => setSptSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${sptSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    Simpanan Saya
+                    Simpan Surat Tugas
                   </button>
                 </nav>
               </div>
@@ -1478,7 +1590,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </span>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
                   {/* KOLOM KIRI: UPLOAD BOX */}
                   <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[20px]">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
@@ -1494,7 +1606,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen SPT memuat kata "Surat Tugas" atau "Perjalanan Dinas" dengan nama, NIP, tanggal, dan tujuan yang jelas.
                       </div>
                       
-                      <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group">
+                      <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
                         <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
                           <UploadCloud size={24} />
                         </div>
@@ -1502,200 +1614,265 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <p className="text-sm font-bold text-gray-700 group-hover:text-[#0E5B73]">Klik atau drag & drop file</p>
                           <p className="text-[10px] font-medium text-gray-400 mt-1">PDF (1 halaman), JPG, PNG (max 10MB)</p>
                         </div>
-                        <input id="pdf-upload-input" type="file" accept=".pdf" onChange={handleFileChange} className="hidden" />
+                        <input id="pdf-upload-input" type="file" accept=".pdf" multiple onChange={handleFileChange} className="hidden" />
                       </label>
-                    </div>
 
-                    {isParsing && (
-                      <div className="p-3.5 rounded-2xl bg-blue-50 text-blue-800 text-xs flex items-center gap-3 shadow-sm border border-blue-100">
-                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
-                        <span className="font-semibold leading-relaxed">{parseStatus}</span>
-                      </div>
-                    )}
-
-                    {selectedFile && !isParsing && parsedData && (
-                      <div className="space-y-2">
-                        <h4 className="text-[11px] font-extrabold text-gray-900">File terpilih (1/10):</h4>
-                        <div className="p-3 bg-[#EAF5FA] border border-[#CDE5F1] rounded-xl flex items-center justify-between text-xs text-[#1E5D77]">
-                          <div className="flex items-center gap-2 truncate pr-4">
-                            <FileText size={16} className="text-emerald-600 shrink-0" />
-                            <span className="font-semibold truncate">{selectedFile.name}</span>
-                            <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                      {/* AREA FILE TERPILIH - SELALU MUNCUL SECARA DEFAULT */}
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({sptFiles.length}/10):</h4>
+                          <div className="space-y-2">
+                            {sptFiles.length === 0 ? (
+                               <div className="p-3 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-400 py-6">
+                                  Belum ada dokumen yang diunggah.
+                               </div>
+                            ) : (
+                               sptFiles.map((fObj, idx) => (
+                                <div key={fObj.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs ${fObj.status === 'success' ? 'bg-[#EAF5FA] border-[#CDE5F1] text-[#1E5D77]' : 'bg-[#F8FAFC] border-gray-200 text-gray-700'}`}>
+                                  <div className="flex items-center gap-2 truncate pr-4">
+                                    <FileText size={16} className={fObj.status === 'success' ? "text-emerald-600 shrink-0" : "text-gray-400 shrink-0"} />
+                                    <span className="font-semibold truncate">{fObj.file.name}</span>
+                                    {fObj.status === 'reading' && <div className="w-3 h-3 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin shrink-0"></div>}
+                                    {fObj.status === 'success' && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button className="text-[#084C61] hover:bg-gray-200 p-1.5 rounded-lg transition-colors cursor-pointer"><Eye size={14}/></button>
+                                    <button onClick={() => handleClearFile(fObj.id)} className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors cursor-pointer"><X size={14}/></button>
+                                  </div>
+                                </div>
+                               ))
+                            )}
                           </div>
-                          <button onClick={handleClearFile} className="text-gray-400 hover:text-red-500 p-1"><Trash2 size={14}/></button>
                         </div>
-                        <div className="p-3 bg-[#084C61] text-white font-bold text-xs text-center rounded-xl flex items-center justify-center gap-2 mt-2">
-                          <CheckCircle2 size={14}/> Semua file sudah dibaca
+
+                        <button 
+                          onClick={handleBacaDokumenSpt}
+                          disabled={sptFiles.filter(f => f.status === 'pending').length === 0 || isReadingSpt}
+                          className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${(sptFiles.filter(f => f.status === 'pending').length > 0 && !isReadingSpt) ? 'text-white hover:opacity-95 active:scale-[0.99] cursor-pointer' : 'text-gray-400 bg-gray-200 cursor-not-allowed'}`}
+                          style={(sptFiles.filter(f => f.status === 'pending').length > 0 && !isReadingSpt) ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                        >
+                          {isReadingSpt ? (
+                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Membaca {sptReadingProgress.current}/{sptReadingProgress.total}...</>
+                          ) : (sptFiles.length > 0 && sptFiles.filter(f => f.status === 'pending').length === 0) ? (
+                            <><CheckCircle2 size={16} /> Semua file sudah dibaca</>
+                          ) : (
+                            <><FileText size={16} /> Baca Dokumen ({sptFiles.filter(f => f.status === 'pending').length} file)</>
+                          )}
+                        </button>
+
+                        <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between">
+                          <div className="flex items-start gap-3">
+                            <FileText size={18} className="text-[#084C61] mt-0.5" />
+                            <div>
+                              <p className="text-xs font-extrabold text-gray-900">Upload Manual SPT</p>
+                              <p className="text-[10px] text-gray-500 font-medium">Isi data SPT secara manual tanpa OCR</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400 font-medium">Upload Manual</span>
+                            <div className="w-8 h-4 bg-gray-300 rounded-full relative cursor-not-allowed">
+                               <div className="w-3 h-3 bg-white rounded-full absolute top-0.5 left-0.5 shadow-sm"></div>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    )}
+                    </div>
                   </div>
 
                   {/* KOLOM KANAN: RINCIAN SPT */}
                   <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
-                      {(!parsedData || !parsedData.isValid) ? (
-                        <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70">
+                      {sptSuccessfulFiles.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70 h-full">
                           <FileText size={40} className="mb-4" />
                           <h4 className="font-bold text-gray-700 text-sm mb-1">Hasil Pembacaan Dokumen</h4>
                           <p className="text-xs">Upload file dan klik "Baca Dokumen" untuk melihat hasil</p>
                         </div>
                       ) : (
-                        <div className="space-y-4">
+                        <div className="space-y-6">
                           <div className="flex justify-between items-center mb-6">
                             <h3 className="text-base font-black text-gray-900">Rincian SPT</h3>
-                            <span className="text-xs font-bold text-[#0E5B73]">{parsedData.sptNames.filter(p=>p.selected).length} pegawai dipilih</span>
+                            <span className="text-xs font-bold text-[#0E5B73]">{sptTotalSelectedPegawai} pegawai dipilih</span>
                           </div>
 
-                          {isEditingSptDetails ? (
-                            <div className="bg-[#EAF5FA] rounded-2xl p-4 md:p-5 border border-[#CDE5F1] space-y-4 mb-6 shadow-inner">
-                              <div className="flex items-center gap-3">
-                                <label className="w-20 text-xs font-bold text-[#114053]">Mulai:</label>
-                                <input type="date" value={formatIndoToYMD(editSptForm.berangkat)} onChange={(e) => setEditSptForm({...editSptForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                              </div>
-                              <div className="flex items-center gap-3">
-                                <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
-                                <input type="date" value={formatIndoToYMD(editSptForm.pulang)} onChange={(e) => setEditSptForm({...editSptForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                              </div>
-                              <div className="flex items-center gap-3">
-                                <label className="w-20 text-xs font-bold text-[#114053]">Tgl SPT:</label>
-                                <input type="date" value={formatIndoToYMD(editSptForm.tanggalSurat)} onChange={(e) => setEditSptForm({...editSptForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                              </div>
-                              <div className="flex justify-end pt-2">
-                                <button onClick={handleSaveSptDetails} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
-                                  <Save size={14} /> Simpan
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="bg-[#F0F7F9] rounded-2xl p-4 md:p-5 border border-[#CDE5F1] flex justify-between items-start gap-4 mb-6 shadow-sm">
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <Calendar size={16} className="text-[#114053] shrink-0" />
-                                  <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{parsedData.sptDateBerangkat} - {parsedData.sptDatePulang}</span>
-                                  <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({hitungHariDinas(parsedData.sptDateBerangkat, parsedData.sptDatePulang)} Hari)</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <FileText size={16} className="text-gray-400 shrink-0" />
-                                  <span className="text-xs text-gray-600 font-medium">Tgl SPT: {parsedData.sptTanggalSurat}</span>
-                                </div>
-                              </div>
-                              <button onClick={() => {
-                                setEditSptForm({ berangkat: parsedData.sptDateBerangkat, pulang: parsedData.sptDatePulang, tanggalSurat: parsedData.sptTanggalSurat });
-                                setIsEditingSptDetails(true);
-                              }} className="px-3 py-1.5 bg-[#E2F0F5] hover:bg-[#D1E8F0] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1]">
-                                <Edit3 size={14} /> Edit
-                              </button>
-                            </div>
-                          )}
+                          <div className="space-y-6">
+                            {sptSuccessfulFiles.map((fileObj) => {
+                              const pd = fileObj.parsedData;
+                              const isEditingThisSpt = editingSptId === fileObj.id;
+                              const isAddingPegawaiHere = addingPegawaiId === fileObj.id;
 
-                          <div className="space-y-0.5 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
-                            {parsedData.sptNames.map((pegawai, idx) => (
-                              <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors group">
-                                <input 
-                                  type="checkbox" 
-                                  checked={pegawai.selected} 
-                                  onChange={(e) => {
-                                    const newNames = [...parsedData.sptNames];
-                                    newNames[idx].selected = e.target.checked;
-                                    setParsedData({...parsedData, sptNames: newNames});
-                                  }}
-                                  className="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 cursor-pointer"
-                                />
-                                
-                                {editingPegawaiIdx === idx ? (
-                                  <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
-                                    <Search size={16} className="text-gray-400 ml-3" />
-                                    <input 
-                                      type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
-                                      className="w-full px-3 py-3 text-sm font-semibold text-gray-800 outline-none bg-transparent"
-                                    />
-                                    <button onClick={() => setEditingPegawaiIdx(null)} className="p-3 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
-                                    
-                                    {inlineSearchQuery.trim().length > 1 && (
-                                      <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                        {dbPegawai.filter(p => p.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || p.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, i) => (
-                                          <div key={i} onClick={() => {
-                                            const newNames = [...parsedData.sptNames];
-                                            newNames[idx] = { nama: peg.Nama, nip: peg.NIP, selected: newNames[idx].selected };
-                                            setParsedData({...parsedData, sptNames: newNames});
-                                            setEditingPegawaiIdx(null);
-                                          }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                            <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
-                                            <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                              return (
+                                <div key={fileObj.id} className="bg-white rounded-2xl border border-[#CDE5F1] shadow-sm overflow-hidden">
+                                  {/* HEADER CARD */}
+                                  <div className="bg-[#F0F7F9] px-5 py-4 border-b border-[#CDE5F1]">
+                                    {isEditingThisSpt ? (
+                                      <div className="space-y-3">
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Mulai:</label>
+                                          <input type="date" value={formatIndoToYMD(editSptForm.berangkat)} onChange={(e) => setEditSptForm({...editSptForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
+                                          <input type="date" value={formatIndoToYMD(editSptForm.pulang)} onChange={(e) => setEditSptForm({...editSptForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Tgl SPT:</label>
+                                          <input type="date" value={formatIndoToYMD(editSptForm.tanggalSurat)} onChange={(e) => setEditSptForm({...editSptForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                        </div>
+                                        <div className="flex justify-end pt-2">
+                                          <button onClick={() => handleSaveSptDetails(fileObj.id)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
+                                            <Save size={14} /> Simpan
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex justify-between items-start gap-4">
+                                        <div className="space-y-1.5">
+                                          <div className="flex items-center gap-2">
+                                            <Calendar size={16} className="text-[#114053] shrink-0" />
+                                            <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.sptDateBerangkat} - {pd.sptDatePulang}</span>
+                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({hitungHariDinas(pd.sptDateBerangkat, pd.sptDatePulang)} Hari)</span>
                                           </div>
-                                        ))}
+                                          <div className="flex items-center gap-2 pl-[22px]">
+                                            <FileText size={12} className="text-gray-400 shrink-0" />
+                                            <span className="text-[11px] text-gray-600 font-medium">Tgl SPT: {pd.sptTanggalSurat}</span>
+                                          </div>
+                                        </div>
+                                        <button onClick={() => {
+                                          setEditSptForm({ berangkat: pd.sptDateBerangkat, pulang: pd.sptDatePulang, tanggalSurat: pd.sptTanggalSurat });
+                                          setEditingSptId(fileObj.id);
+                                        }} className="px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1]">
+                                          <Edit3 size={14} /> Edit
+                                        </button>
                                       </div>
                                     )}
                                   </div>
-                                ) : (
-                                  <div className="flex-1 overflow-hidden pr-2">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <span className="font-extrabold text-sm text-gray-900 truncate">{pegawai.nama}</span>
-                                      <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
-                                    </div>
-                                    <div className="text-[10px] text-gray-500 font-mono mt-0.5">{pegawai.nip}</div>
-                                  </div>
-                                )}
 
-                                {editingPegawaiIdx !== idx && (
-                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                    <button onClick={() => { setEditingPegawaiIdx(idx); setInlineSearchQuery(pegawai.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer"><Edit3 size={14} /></button>
-                                    <button onClick={() => {
-                                      const newNames = parsedData.sptNames.filter((_, i) => i !== idx);
-                                      setParsedData({...parsedData, sptNames: newNames});
-                                    }} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"><Trash2 size={14} /></button>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                                  {/* DAFTAR PEGAWAI CHECKBOX */}
+                                  <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar">
+                                    {pd.sptNames.map((pegawai, idx) => {
+                                      const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
+                                      
+                                      return (
+                                        <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors group">
+                                          <input 
+                                            type="checkbox" 
+                                            checked={pegawai.selected} 
+                                            onChange={(e) => {
+                                              updateSptFileData(fileObj.id, oldData => {
+                                                const newNames = [...oldData.sptNames];
+                                                newNames[idx].selected = e.target.checked;
+                                                return { ...oldData, sptNames: newNames };
+                                              });
+                                            }}
+                                            className="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 cursor-pointer"
+                                          />
+                                          
+                                          {isEditingThisPegawai ? (
+                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
+                                              <Search size={16} className="text-gray-400 ml-3" />
+                                              <input 
+                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
+                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                              />
+                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                              
+                                              {inlineSearchQuery.trim().length > 1 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                                  {dbPegawai.filter(p => p.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || p.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, i) => (
+                                                    <div key={i} onClick={() => {
+                                                      updateSptFileData(fileObj.id, oldData => {
+                                                        const newNames = [...oldData.sptNames];
+                                                        newNames[idx] = { nama: peg.Nama, nip: peg.NIP, selected: newNames[idx].selected };
+                                                        return { ...oldData, sptNames: newNames };
+                                                      });
+                                                      setEditingPegawaiData(null);
+                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div className="flex-1 overflow-hidden pr-2">
+                                              <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="font-extrabold text-sm text-gray-900 truncate">{pegawai.nama}</span>
+                                                <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
+                                              </div>
+                                              <div className="text-[10px] text-gray-500 font-mono mt-0.5">{pegawai.nip}</div>
+                                            </div>
+                                          )}
 
-                          {showSptSearch ? (
-                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm mt-4">
-                              <Search size={16} className="text-gray-400 ml-3" />
-                              <input 
-                                type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={sptSearchQuery} onChange={(e) => setSptSearchQuery(e.target.value)}
-                                className="w-full px-3 py-3 text-sm font-semibold text-gray-800 outline-none bg-transparent"
-                              />
-                              <button onClick={() => { setShowSptSearch(false); setSptSearchQuery(''); }} className="p-3 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
-                              
-                              {sptSearchQuery.trim().length > 1 && (
-                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                  {dbPegawai.filter(p => p.Nama.toLowerCase().includes(sptSearchQuery.toLowerCase()) || p.NIP.includes(sptSearchQuery)).slice(0, 10).map((peg, idx) => (
-                                    <div key={idx} onClick={() => {
-                                      if (!parsedData.sptNames.some(existing => existing.nip === peg.NIP)) {
-                                        setParsedData(prev => ({ ...prev, sptNames: [...prev.sptNames, { nama: peg.Nama, nip: peg.NIP, selected: true }] }));
-                                      }
-                                      setShowSptSearch(false); setSptSearchQuery('');
-                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
-                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
-                                    </div>
-                                  ))}
+                                          {!isEditingThisPegawai && (
+                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                              <button onClick={() => { setEditingPegawaiData({ fileId: fileObj.id, idx }); setInlineSearchQuery(pegawai.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer"><Edit3 size={14} /></button>
+                                              <button onClick={() => {
+                                                updateSptFileData(fileObj.id, oldData => {
+                                                  const newNames = oldData.sptNames.filter((_, i) => i !== idx);
+                                                  return { ...oldData, sptNames: newNames };
+                                                });
+                                              }} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"><Trash2 size={14} /></button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                    
+                                    {isAddingPegawaiHere ? (
+                                      <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm mt-3 mb-2 mx-2">
+                                        <Search size={16} className="text-gray-400 ml-3" />
+                                        <input 
+                                          type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={sptSearchQuery} onChange={(e) => setSptSearchQuery(e.target.value)}
+                                          className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                        />
+                                        <button onClick={() => { setAddingPegawaiId(null); setSptSearchQuery(''); }} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                        
+                                        {sptSearchQuery.trim().length > 1 && (
+                                          <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                            {dbPegawai.filter(p => p.Nama.toLowerCase().includes(sptSearchQuery.toLowerCase()) || p.NIP.includes(sptSearchQuery)).slice(0, 10).map((peg, idx) => (
+                                              <div key={idx} onClick={() => {
+                                                updateSptFileData(fileObj.id, oldData => {
+                                                  if (!oldData.sptNames.some(existing => existing.nip === peg.NIP)) {
+                                                    return { ...oldData, sptNames: [...oldData.sptNames, { nama: peg.Nama, nip: peg.NIP, selected: true }] };
+                                                  }
+                                                  return oldData;
+                                                });
+                                                setAddingPegawaiId(null); setSptSearchQuery('');
+                                              }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <button 
+                                        onClick={() => setAddingPegawaiId(fileObj.id)}
+                                        className="w-full py-3 mt-2 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                      >
+                                        + Tambah Pegawai
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              )}
-                            </div>
-                          ) : (
-                            <button 
-                              onClick={() => setShowSptSearch(true)}
-                              className="w-full py-4 mt-4 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                            >
-                              + Tambah Pegawai
-                            </button>
-                          )}
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    {parsedData && parsedData.isValid && (
+                    {sptSuccessfulFiles.length > 0 && (
                       <button 
-                        onClick={handleUploadSubmit}
-                        disabled={isSubmitting || parsedData.sptNames.filter(p=>p.selected).length === 0}
-                        className={`w-full py-4 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmitting || parsedData.sptNames.filter(p=>p.selected).length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
+                        onClick={handleUploadSubmitSpt}
+                        disabled={isSubmitting || sptTotalSelectedPegawai === 0}
+                        className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmitting || sptTotalSelectedPegawai === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
                         style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
                       >
-                        {isSubmitting ? 'Memproses ke Server...' : `Upload Semua SPT (${parsedData.sptNames.filter(p=>p.selected).length} pegawai)`}
+                        {isSubmitting ? 'Memproses ke Server...' : `Upload Semua SPT (${sptTotalSelectedPegawai} pegawai)`}
                       </button>
                     )}
                   </div>
@@ -1709,20 +1886,16 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
               >
                 <div className="space-y-2">
-                  {activeTab !== 'spt' && (
-                    <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
-                      OPEN SUBMISSION
-                    </span>
-                  )}
+                  <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
+                    OPEN SUBMISSION
+                  </span>
                   <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
-                    {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Absensi Tunjangan Kinerja')}
+                    {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
                   </h2>
                   <div className="flex items-center gap-2 text-xs text-gray-200">
                     <Calendar size={14} />
                     <span>
-                      {activeTab === 'spt' 
-                        ? 'Upload dokumen tanpa batasan periode. Data akan masuk ke Bank Data SPT.'
-                        : selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
+                      {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
                     </span>
                     {selectedPeriod && (
                       <>
@@ -1733,11 +1906,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </div>
                 </div>
 
-                {(activeTab === 'spt' || selectedPeriod) && (
+                {selectedPeriod && (
                   <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
                     <div className="text-right flex-1">
                       <p className="text-xs text-gray-200 leading-snug font-medium">
-                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload {activeTab === 'spt' ? 'arsip' : 'bukti dukung'}nya!
+                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
                       </p>
                       <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
                     </div>
@@ -1752,44 +1925,42 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 )}
               </div>
 
-              {activeTab !== 'spt' && (
-                <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
-                  {[1, 2, 3, 4, 5].map((num) => {
-                    const isActive = activeStep === num;
-                    const isDisabled = !selectedPeriod && num > 1;
-                    return (
-                      <button
-                        key={num}
-                        type="button"
-                        disabled={isDisabled}
-                        onClick={() => {
-                          if (num === 1) {
-                            navigate(currentView, 1);
-                          } else {
-                            navigate(currentView, num);
-                          }
-                        }}
-                        title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
-                          isActive
-                            ? 'text-white ring-4 shadow-sm scale-105'
-                            : isDisabled
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
-                            : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
-                        }`}
-                        style={{ 
-                          backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
-                          ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
-                        }}
-                      >
-                        {num}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
+                {[1, 2, 3, 4, 5].map((num) => {
+                  const isActive = activeStep === num;
+                  const isDisabled = !selectedPeriod && num > 1;
+                  return (
+                    <button
+                      key={num}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => {
+                        if (num === 1) {
+                          navigate(currentView, 1);
+                        } else {
+                          navigate(currentView, num);
+                        }
+                      }}
+                      title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
+                        isActive
+                          ? 'text-white ring-4 shadow-sm scale-105'
+                          : isDisabled
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                          : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
+                      }`}
+                      style={{ 
+                        backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
+                        ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
+                      }}
+                    >
+                      {num}
+                    </button>
+                  );
+                })}
+              </div>
 
-              {activeTab !== 'spt' && activeStep === 1 ? (
+              {activeStep === 1 ? (
                 <div className="space-y-4 max-w-4xl mx-auto">
                   {currentPeriodList.map((period) => {
                     const isSelected = selectedPeriod?.id === period.id;
@@ -1836,42 +2007,31 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     );
                   })}
                 </div>
-              ) : (activeTab === 'spt' || ((activeStep === 2 || activeStep === 5) && selectedPeriod)) ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
-                  <div className="lg:col-span-5 xl:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
-                    {activeTab === 'spt' || activeStep === 2 ? (
+              ) : activeStep === 2 && selectedPeriod ? (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
+                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
                       <>
                         <div>
-                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'Arsip SPT' : 'Bukti Dukung'}</h3>
+                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
                           <p className="text-xs text-gray-600 leading-relaxed font-normal">
-                             {activeTab === 'spt' ? 'Upload file Surat Tugas (PDF) tanpa rentang tanggal:' : 'Upload file bukti presensi:'}
+                             Upload file bukti presensi:
                           </p>
                           <ul className="text-xs text-gray-500 mt-2 space-y-1 pl-1">
-                            {activeTab === 'spt' ? (
-                               <>
-                                 <li>• Surat Tugas asli dan lengkap dalam 1 file</li>
-                                 <li>• Format yang diterima: <strong>PDF</strong></li>
-                                 <li>• Data akan masuk ke <strong>Bank Data SPT</strong></li>
-                               </>
-                            ) : (
-                               <>
-                                 <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
-                                 <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
-                                 <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
-                               </>
-                            )}
+                             <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
+                             <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
+                             <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
                           </ul>
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-2">File {activeTab === 'spt' ? 'Surat Tugas' : 'Presensi'}</label>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
                           <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
                             <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
                               Choose File
                               <input 
                                 id="pdf-upload-input"
                                 type="file" 
-                                accept={activeTab === 'spt' ? ".pdf" : ".pdf, .xlsx, .xls"}
+                                accept=".pdf, .xlsx, .xls"
                                 onChange={handleFileChange}
                                 className="hidden"
                               />
@@ -1882,7 +2042,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                             {selectedFile && !isParsing && (
                               <button 
                                 type="button"
-                                onClick={handleClearFile}
+                                onClick={() => handleClearFile(null)}
                                 className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
                                 title="Hapus berkas"
                               >
@@ -1902,7 +2062,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         {!isParsing && parsedData && parsedData.isValid && (
                           <div className="p-3.5 bg-[#EAF5FA] border border-[#CDE5F1] rounded-2xl text-xs text-[#1E5D77] flex items-center gap-2">
                             <FileSpreadsheet size={16} className="text-[#114053] shrink-0" />
-                            <span>File {activeTab === 'spt' ? 'Surat Tugas' : 'presensi'} milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {activeTab !== 'spt' && parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
+                            <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
                           </div>
                         )}
 
@@ -1957,7 +2117,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </button>
                         )}
 
-                        {!isParsing && parsedData && parsedData.isValid && activeTab !== 'spt' && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
+                        {!isParsing && parsedData && parsedData.isValid && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
                           <button 
                             onClick={() => navigate(currentView, 3)}
                             className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
@@ -1966,7 +2126,144 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </button>
                         )}
                       </>
-                    ) : (
+                  </div>
+
+                  <div className="lg:col-span-8 space-y-4">
+                    {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
+                      <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+                        <div className="flex items-center gap-2 font-black text-sm">
+                          <CheckCircle2 size={18} className="text-[#0A5A36]" />
+                          <span>✓ Rentang Tanggal Sesuai</span>
+                        </div>
+                        <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto">
+                          Periode Event: {selectedPeriod.periodeEvent}
+                        </div>
+                      </div>
+                    ) : parsedData && parsedData.isDateMismatch && activeTab !== 'spt' ? (
+                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
+                        <div className="flex items-center gap-2 font-black text-sm">
+                          <AlertCircle size={18} className="text-red-600" />
+                          <span>⚠️ Periode File Tidak Sesuai</span>
+                        </div>
+                        <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
+                          File: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
+                      <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
+                            Preview Data Presensi
+                          </h3>
+                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
+                        </div>
+                        <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
+                          <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
+                          <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
+                          <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
+                        <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
+                          <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
+                            <tr>
+                              <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
+                              <th className="py-3 px-3 whitespace-nowrap">HARI</th>
+                              <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
+                              <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
+                              <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
+                            {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
+                              parsedData.rows.map((row, idx) => {
+                                const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
+                                const isLocked = false; 
+                                
+                                const getRowBgClass = () => {
+                                  if (isLocked) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
+                                  switch (row.keterangan) {
+                                    case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
+                                    case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
+                                    case 'Libur': return 'bg-[#F4CCCC] text-red-900';
+                                    case 'WFO': case 'WFA': case 'WFH': return 'bg-white text-gray-900';
+                                    default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
+                                  }
+                                };
+
+                                const rowBgClass = getRowBgClass();
+                                return (
+                                  <tr key={idx} className={`${rowBgClass} transition-colors`}>
+                                    <td className="py-2 px-3.5 whitespace-nowrap">
+                                      <input type="text" value={row.tanggal} onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)} disabled={true} className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed" />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.hari} onChange={(e) => handleCellChange(idx, 'hari', e.target.value)} disabled={true} className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed" />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.datang} onChange={(e) => handleCellChange(idx, 'datang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.pulang} onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
+                                    </td>
+                                    <td className="py-2 px-3 text-center whitespace-nowrap">
+                                      {isLocked ? (
+                                        <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-200' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-300' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>{row.keterangan}</span>
+                                      ) : (
+                                        <select
+                                          value={row.keterangan} onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
+                                          className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'}`}
+                                        >
+                                          <option value="WFO" className="bg-white text-gray-800">WFO</option>
+                                          <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
+                                          <option value="WFH" className="bg-white text-gray-800">WFH</option>
+                                          <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
+                                          <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
+                                          <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
+                                          <option value="DL" className="bg-white text-gray-800">DL</option>
+                                          <option value="TB" className="bg-white text-gray-800">TB</option>
+                                          <option value="-" className="bg-white text-gray-800">-</option>
+                                        </select>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            ) : (
+                              <tr>
+                                <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
+                                  <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
+                                    <FileText size={32} />
+                                    <div>
+                                      <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
+                                      <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      
+                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
+                        {activeTab !== 'spt' && (
+                           <>
+                             <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
+                             <span className="text-gray-500">Hari Masuk (WFO/WFA): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
+                           </>
+                        )}
+                        <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : activeStep === 5 && selectedPeriod ? (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
+                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
                       <>
                         <div>
                           <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
@@ -2008,10 +2305,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           Kembali ke Tahap 4
                         </button>
                       </>
-                    )}
                   </div>
 
-                  <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+                  <div className="lg:col-span-8 space-y-4">
                     {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
                       <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
                         <div className="flex items-center gap-2 font-black text-sm">
@@ -2038,150 +2334,99 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
                           <h3 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
-                            {activeTab === 'spt' ? <><Users size={16} className="text-[#084C61]"/> Data Personil Surat Tugas</> : 'Preview Data Presensi'}
+                            Preview Data Presensi
                           </h3>
                           <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
                         </div>
                         <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
-                          <p className="font-extrabold text-gray-900 text-xs">{parsedData ? (activeTab === 'spt' ? (selectedFile?.name || 'Berkas SPT') : parsedData.nama) : 'Belum Ada Berkas'}</p>
-                          <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? (activeTab === 'spt' ? loggedInUser.NIP : parsedData.nip) : '-'}</p>
-                          {activeTab === 'spt' ? (
-                            <p className="text-[10px] text-teal-700 font-extrabold">
-                              Berangkat: {parsedData ? (parsedData.sptDateBerangkat || '-') : '-'} &nbsp;•&nbsp; Pulang: {parsedData ? (parsedData.sptDatePulang || '-') : '-'}
-                            </p>
-                          ) : (
-                            <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
-                          )}
+                          <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
+                          <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
+                          <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
                         </div>
                       </div>
                       
-                      {activeTab === 'spt' ? (
-                        <div className="overflow-auto border border-gray-200 rounded-2xl bg-white shadow-2xs relative max-h-[450px]">
-                           <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
-                              <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
-                                <tr>
-                                  <th className="py-3 px-4 w-12 text-center whitespace-nowrap">NO</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">NAMA PEGAWAI</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">NIP</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">TANGGAL BERANGKAT</th>
-                                  <th className="py-3 px-4 whitespace-nowrap">TANGGAL PULANG</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                                {parsedData && parsedData.isSpt && parsedData.sptNames && parsedData.sptNames.length > 0 ? (
-                                  parsedData.sptNames.map((pegawai, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                      <td className="py-3 px-4 text-center text-gray-500 font-bold">{idx + 1}</td>
-                                      <td className="py-3 px-4 font-bold text-gray-900">{pegawai.nama}</td>
-                                      <td className="py-3 px-4 font-mono text-gray-600">{pegawai.nip}</td>
-                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDateBerangkat}</td>
-                                      <td className="py-3 px-4 text-teal-700 font-semibold">{parsedData.sptDatePulang}</td>
-                                    </tr>
-                                  ))
-                                ) : (
-                                  <tr>
-                                    <td colSpan="5" className="text-center py-16 text-gray-400 bg-gray-50/50">
-                                      <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
-                                        <FileText size={32} />
-                                        <div>
-                                          <p className="font-bold text-gray-500 mb-1">
-                                            {selectedFile && !isParsing ? 'Tidak ada personil terdaftar di Bank Data yang ditemukan.' : 'Belum Ada Berkas Pratinjau'}
-                                          </p>
-                                          <p className="text-xs">
-                                            {selectedFile && !isParsing ? 'Sistem hanya menampilkan data pegawai dengan NIP yang terdaftar resmi pada Bank Data Spreadsheet.' : 'Silakan unggah dokumen PDF Surat Tugas Anda.'}
-                                          </p>
-                                        </div>
-                                      </div>
+                      <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
+                        <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
+                          <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
+                            <tr>
+                              <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
+                              <th className="py-3 px-3 whitespace-nowrap">HARI</th>
+                              <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
+                              <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
+                              <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
+                            {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
+                              parsedData.rows.map((row, idx) => {
+                                const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
+                                const isLocked = false; 
+                                
+                                const getRowBgClass = () => {
+                                  if (isLocked) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
+                                  switch (row.keterangan) {
+                                    case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
+                                    case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
+                                    case 'Libur': return 'bg-[#F4CCCC] text-red-900';
+                                    case 'WFO': case 'WFA': case 'WFH': return 'bg-white text-gray-900';
+                                    default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
+                                  }
+                                };
+
+                                const rowBgClass = getRowBgClass();
+                                return (
+                                  <tr key={idx} className={`${rowBgClass} transition-colors`}>
+                                    <td className="py-2 px-3.5 whitespace-nowrap">
+                                      <input type="text" value={row.tanggal} onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)} disabled={true} className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed" />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.hari} onChange={(e) => handleCellChange(idx, 'hari', e.target.value)} disabled={true} className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed" />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.datang} onChange={(e) => handleCellChange(idx, 'datang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
+                                    </td>
+                                    <td className="py-2 px-3 whitespace-nowrap">
+                                      <input type="text" value={row.pulang} onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
+                                    </td>
+                                    <td className="py-2 px-3 text-center whitespace-nowrap">
+                                      {isLocked ? (
+                                        <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-200' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-300' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>{row.keterangan}</span>
+                                      ) : (
+                                        <select
+                                          value={row.keterangan} onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
+                                          className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'}`}
+                                        >
+                                          <option value="WFO" className="bg-white text-gray-800">WFO</option>
+                                          <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
+                                          <option value="WFH" className="bg-white text-gray-800">WFH</option>
+                                          <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
+                                          <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
+                                          <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
+                                          <option value="DL" className="bg-white text-gray-800">DL</option>
+                                          <option value="TB" className="bg-white text-gray-800">TB</option>
+                                          <option value="-" className="bg-white text-gray-800">-</option>
+                                        </select>
+                                      )}
                                     </td>
                                   </tr>
-                                )}
-                              </tbody>
-                           </table>
-                        </div>
-                      ) : (
-                        <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
-                          <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
-                            <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
+                                );
+                              })
+                            ) : (
                               <tr>
-                                <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
-                                <th className="py-3 px-3 whitespace-nowrap">HARI</th>
-                                <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
-                                <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
-                                <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                              {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
-                                parsedData.rows.map((row, idx) => {
-                                  const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
-                                  const isLocked = false; // Buka opsi edit keterangan untuk Tab 2 dan Tab 5
-                                  
-                                  const getRowBgClass = () => {
-                                    if (isLocked) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
-                                    switch (row.keterangan) {
-                                      case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
-                                      case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
-                                      case 'Libur': return 'bg-[#F4CCCC] text-red-900';
-                                      case 'WFO': case 'WFA': case 'WFH': return 'bg-white text-gray-900';
-                                      default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
-                                    }
-                                  };
-
-                                  const rowBgClass = getRowBgClass();
-                                  return (
-                                    <tr key={idx} className={`${rowBgClass} transition-colors`}>
-                                      <td className="py-2 px-3.5 whitespace-nowrap">
-                                        <input type="text" value={row.tanggal} onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)} disabled={true} className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed" />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input type="text" value={row.hari} onChange={(e) => handleCellChange(idx, 'hari', e.target.value)} disabled={true} className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed" />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input type="text" value={row.datang} onChange={(e) => handleCellChange(idx, 'datang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
-                                      </td>
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        <input type="text" value={row.pulang} onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
-                                      </td>
-                                      <td className="py-2 px-3 text-center whitespace-nowrap">
-                                        {isLocked ? (
-                                          <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-200' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-300' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>{row.keterangan}</span>
-                                        ) : (
-                                          <select
-                                            value={row.keterangan} onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
-                                            className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'}`}
-                                          >
-                                            <option value="WFO" className="bg-white text-gray-800">WFO</option>
-                                            <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
-                                            <option value="WFH" className="bg-white text-gray-800">WFH</option>
-                                            <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
-                                            <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
-                                            <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
-                                            <option value="DL" className="bg-white text-gray-800">DL</option>
-                                            <option value="TB" className="bg-white text-gray-800">TB</option>
-                                            <option value="-" className="bg-white text-gray-800">-</option>
-                                          </select>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  );
-                                })
-                              ) : (
-                                <tr>
-                                  <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
-                                    <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
-                                      <FileText size={32} />
-                                      <div>
-                                        <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
-                                        <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
-                                      </div>
+                                <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
+                                  <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
+                                    <FileText size={32} />
+                                    <div>
+                                      <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
+                                      <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
                                     </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                       
                       <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
                         {activeTab !== 'spt' && (
@@ -2219,7 +2464,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </main>
       
-      {/* STYLE UMUM UNTUK CUSTOM SCROLLBAR (agar UI tidak meluber ke bawah) */}
+      {/* STYLE UMUM UNTUK CUSTOM SCROLLBAR */}
       <style dangerouslySetInnerHTML={{__html: `
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
