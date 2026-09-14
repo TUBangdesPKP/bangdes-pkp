@@ -29,8 +29,13 @@ import {
   MapPin,
   ChevronDown,
   ChevronUp,
-  Paperclip
+  Plus
 } from 'lucide-react';
+
+if (typeof window !== 'undefined') {
+  window.tailwind = window.tailwind || {};
+  window.tailwind.config = window.tailwind.config || {};
+}
 
 const PALETTE_PKP = {
   krem: '#F2EEDF',
@@ -147,6 +152,52 @@ const fetchPegawaiData = async (forceRefresh = false) => {
   return { data: [], source: 'empty' };
 };
 
+const fetchLiveSptData = async () => {
+  try {
+    const rawCsvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1964926388&single=true&output=csv";
+    const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
+    if (!res.ok) throw new Error("Gagal mengambil data SPT dari CSV");
+    const text = await res.text();
+    
+    const lines = text.replace(/\r/g, '').split('\n');
+    if (lines.length < 2) return [];
+    
+    const headers = lines[0].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(h => h.replace(/^["']+|["']+$/g, '').trim());
+    const data = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+      const row = {};
+      headers.forEach((header, index) => {
+        let val = (cols[index] || '').replace(/^["']+|["']+$/g, '').trim();
+        if (header.toLowerCase() === 'nip' && val.startsWith("'")) {
+          val = val.substring(1);
+        }
+        row[header] = val;
+      });
+      data.push(row);
+    }
+    
+    return data.map(item => ({
+      timestamp: item['Timestamp'] || '',
+      nip: item['NIP'] || '',
+      nama: item['Nama Pegawai'] || item['Nama'] || '',
+      tujuan: item['Tujuan'] || '-',
+      tanggalBerangkat: item['Tanggal Berangkat'] || '-',
+      tanggalPulang: item['Tanggal Pulang'] || '-',
+      jumlahHari: parseInt(item['Jumlah Hari Dinas'] || item['Jumlah Hari'] || 0, 10),
+      bulan: item['Bulan Surat Tugas'] || item['Bulan'] || '-',
+      tahun: item['Tahun'] || '-',
+      linkAkses: item['Link Dokumen'] || item['Link Arsip'] || '#'
+    }));
+
+  } catch (err) {
+    console.error("Gagal menarik data SPT CSV:", err);
+    return [];
+  }
+};
+
 const parseIndoDate = (dateString) => {
   const parts = dateString.toString().split(' ');
   if (parts.length < 3) return new Date(0);
@@ -201,6 +252,37 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2026-05-15', '2026-05-27', '2026-05-28', '2026-05-31', '2026-06-01', 
   '2026-06-16', '2026-08-17', '2026-08-25', '2026-12-24', '2026-12-25'
 ];
+
+// Fungsi untuk menghitung hari kerja dengan membuang Sabtu, Minggu, dan Libur Nasional
+const hitungHariKerjaAktif = (startStr, endStr) => {
+  if (!startStr || !endStr) return 0;
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  if (start > end) return 0;
+
+  let count = 0;
+  let current = new Date(start);
+  
+  while (current <= end) {
+    const dayOfWeek = current.getDay();
+    // 0 = Minggu, 6 = Sabtu
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { 
+      const y = current.getFullYear();
+      const m = String(current.getMonth() + 1).padStart(2, '0');
+      const d = String(current.getDate()).padStart(2, '0');
+      const ymd = `${y}-${m}-${d}`;
+      
+      // Jika bukan hari libur nasional, hitung sebagai hari aktif
+      if (!DAFTAR_LIBUR_NASIONAL.includes(ymd)) {
+        count++;
+      }
+    }
+    // Lanjut ke hari berikutnya
+    current.setDate(current.getDate() + 1);
+  }
+  return count;
+};
 
 const fetchValidCities = async () => {
   const cachedCities = localStorage.getItem('cached_delineasi_cities_colD_v2');
@@ -260,7 +342,11 @@ const fetchValidCities = async () => {
   ];
 };
 
-const extractSptData = async (lines, fullText, dbPegawai = []) => {
+const fetchLiveCutiData = async () => {
+  return [];
+};
+
+const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
@@ -271,20 +357,76 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
     '197012151998032007', // Rini Dyah Mawarty
   ];
 
-  const textWithOcrFixes = fullText.replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
-  const onlyDigits = textWithOcrFixes.replace(/[^0-9]/g, '');
-  const nipMatches = onlyDigits.match(/(19\d{16}|20\d{16})/g) || [];
-  
-  for (const nipStr of nipMatches) {
-    if (!IGNORED_NIPS.includes(nipStr)) nipSet.add(nipStr);
-  }
+  if (modul === 'cuti') {
+    let foundCutiNip = false;
+    for (let i = 0; i < lines.length; i++) {
+      const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
+      const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
+      const lineMatches = lineDigits.match(/(19\d{16}|20\d{16})/g) || [];
+      
+      for (const nipStr of lineMatches) {
+        if (!IGNORED_NIPS.includes(nipStr)) {
+          nipSet.add(nipStr);
+          foundCutiNip = true;
+          break;
+        }
+      }
+      if (foundCutiNip) break;
+    }
 
-  for (let i = 0; i < lines.length; i++) {
-    const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
-    const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
-    const lineMatches = lineDigits.match(/(19\d{16}|20\d{16})/g) || [];
-    for (const nipStr of lineMatches) {
+    if (!foundCutiNip && dbPegawai && dbPegawai.length > 0) {
+      let extractedName = null;
+      for (let i = 0; i < Math.min(lines.length, 40); i++) {
+        const line = lines[i];
+        const nameMatch = line.match(/(?:NAMA|Nama)\s*(?:\||:)?\s*([A-Za-z\s'\.,\-]{3,50}?)\s*(?:\||NIP|Nip|$)/i);
+        if (nameMatch && nameMatch[1]) {
+           const possibleName = nameMatch[1].trim().toLowerCase();
+           if (possibleName.length > 3 && !possibleName.includes("data pegawai") && !possibleName.includes("pemberian cuti")) {
+             extractedName = possibleName;
+             break;
+           }
+        }
+      }
+
+      if (extractedName) {
+        const matchedPegawai = dbPegawai.find(p => p.Nama && p.Nama.toLowerCase() === extractedName) || 
+                               dbPegawai.find(p => p.Nama && (p.Nama.toLowerCase().includes(extractedName) || extractedName.includes(p.Nama.toLowerCase())));
+        if (matchedPegawai && matchedPegawai.NIP) {
+          nipSet.add(matchedPegawai.NIP);
+          foundCutiNip = true;
+        }
+      }
+
+      if (!foundCutiNip) {
+        const searchArea = lines.slice(0, 30).join(' ').toLowerCase();
+        const sortedPegawai = [...dbPegawai].sort((a, b) => (b.Nama || '').length - (a.Nama || '').length);
+        for (const pegawai of sortedPegawai) {
+          if (!pegawai.Nama) continue;
+          const dbName = pegawai.Nama.toLowerCase();
+          if (dbName.length > 5 && searchArea.includes(dbName)) {
+            nipSet.add(pegawai.NIP);
+            foundCutiNip = true;
+            break;
+          }
+        }
+      }
+    }
+  } else {
+    const textWithOcrFixes = fullText.replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
+    const onlyDigits = textWithOcrFixes.replace(/[^0-9]/g, '');
+    const nipMatches = onlyDigits.match(/(19\d{16}|20\d{16})/g) || [];
+    
+    for (const nipStr of nipMatches) {
       if (!IGNORED_NIPS.includes(nipStr)) nipSet.add(nipStr);
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
+      const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
+      const lineMatches = lineDigits.match(/(19\d{16}|20\d{16})/g) || [];
+      for (const nipStr of lineMatches) {
+        if (!IGNORED_NIPS.includes(nipStr)) nipSet.add(nipStr);
+      }
     }
   }
 
@@ -293,45 +435,68 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
   const textToSearch = normalizeDashes(fullText.replace(/\s+/g, ' '));
   const SEP = '(?:-{1,3}|s\\.?\\/?d\\.?|sampai(?:\\s*dengan)?|hingga)\\s*';
 
-  const fullRangeRegex = new RegExp(
-    `(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`,
-    'i'
-  );
-
-  const shortRangeRegex = new RegExp(
-    `(\\d{1,2})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`,
-    'i'
-  );
-
+  const fullRangeRegex = new RegExp(`(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`, 'i');
+  const shortRangeRegex = new RegExp(`(\\d{1,2})\\s*${SEP}\\s*(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`, 'i');
   const singleDateRegex = new RegExp(`(\\d{1,2})\\s*(${MONTHS})\\s*(\\d{4})`, 'gi');
   const contextRegex = /(?:Waktu|Tanggal|Hari|Periode|Pelaksanaan)/i;
 
+  const applyFullRange = (text) => {
+    const m = text.match(fullRangeRegex);
+    if (!m) return null;
+    return { berangkat: `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`, pulang: `${parseInt(m[4], 10)} ${m[5]} ${m[6]}` };
+  };
+  const applyShortRange = (text) => {
+    const m = text.match(shortRangeRegex);
+    if (!m) return null;
+    return { berangkat: `${parseInt(m[1], 10)} ${m[3]} ${m[4]}`, pulang: `${parseInt(m[2], 10)} ${m[3]} ${m[4]}` };
+  };
+  const applySingleDate = (text) => {
+    const matches = [...text.matchAll(singleDateRegex)];
+    if (matches.length !== 1) return null;
+    const m = matches[0];
+    const single = `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`;
+    return { berangkat: single, pulang: single };
+  };
+
   let found = null;
-  for (let i = 0; i < lines.length; i++) {
-    if (!contextRegex.test(lines[i])) continue;
-    const windowText = normalizeDashes(
-      lines.slice(i, Math.min(lines.length, i + 3)).join(' ').replace(/\s+/g, ' ')
-    );
-    const applyFullRange = (text) => {
-      const m = text.match(fullRangeRegex);
-      if (!m) return null;
-      return { berangkat: `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`, pulang: `${parseInt(m[4], 10)} ${m[5]} ${m[6]}` };
-    };
-    const applyShortRange = (text) => {
-      const m = text.match(shortRangeRegex);
-      if (!m) return null;
-      return { berangkat: `${parseInt(m[1], 10)} ${m[3]} ${m[4]}`, pulang: `${parseInt(m[2], 10)} ${m[3]} ${m[4]}` };
-    };
-    const applySingleDate = (text) => {
-      const matches = [...text.matchAll(singleDateRegex)];
-      if (matches.length !== 1) return null;
-      const m = matches[0];
-      const single = `${parseInt(m[1], 10)} ${m[2]} ${m[3]}`;
-      return { berangkat: single, pulang: single };
-    };
-    
-    found = applyFullRange(windowText) || applyShortRange(windowText) || applySingleDate(windowText);
-    if (found) break;
+  let cutiDuration = 1;
+
+  if (modul === 'cuti') {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/IV\.\s*LAMANYA\s*CUTI/i.test(line) || /LAMANYA\s*CUTI/i.test(line) || (/Selama/i.test(line) && /tanggal/i.test(line))) {
+        const windowText = normalizeDashes(lines.slice(i, Math.min(lines.length, i + 4)).join(' ').replace(/\s+/g, ' '));
+        
+        found = applyFullRange(windowText) || applyShortRange(windowText) || applySingleDate(windowText);
+        
+        const lamaMatch = windowText.match(/Selama\s+(\d+)\s+(?:\(|Satu|Dua|Tiga|Empat|Lima|hari)/i) || windowText.match(/Selama\s*:\s*(\d+)/i) || windowText.match(/Selama\s+(\d+)/i);
+        if (lamaMatch && lamaMatch[1]) {
+          cutiDuration = parseInt(lamaMatch[1], 10);
+        }
+
+        if (found) {
+           if (found.berangkat === found.pulang && cutiDuration > 1) {
+              const d1 = parseIndoDate(found.berangkat);
+              if (d1.getTime() > 0) {
+                 d1.setDate(d1.getDate() + (cutiDuration - 1));
+                 const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+                 found.pulang = `${d1.getDate()} ${months[d1.getMonth()]} ${d1.getFullYear()}`;
+              }
+           }
+           break;
+        }
+      }
+    }
+  }
+
+  if (!found) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!contextRegex.test(lines[i])) continue;
+      const windowText = normalizeDashes(lines.slice(i, Math.min(lines.length, i + 3)).join(' ').replace(/\s+/g, ' '));
+      
+      found = applyFullRange(windowText) || applyShortRange(windowText) || applySingleDate(windowText);
+      if (found) break;
+    }
   }
 
   if (!found) {
@@ -362,8 +527,16 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!rawTujuan && /(?:Tujuan|Tempat|Lokasi)\s*:/i.test(line)) {
-      const match = line.match(/(?:Tujuan|Tempat|Lokasi)\s*:\s*(.+)/i);
+    
+    const isTargetLine = modul === 'spt' 
+      ? /(?:Tujuan|Tempat|Lokasi)\s*:/i.test(line)
+      : /(?:Alasan|Keterangan|Jenis Cuti|Keperluan)\s*:/i.test(line);
+
+    if (!rawTujuan && isTargetLine) {
+      const match = modul === 'spt' 
+        ? line.match(/(?:Tujuan|Tempat|Lokasi)\s*:\s*(.+)/i)
+        : line.match(/(?:Alasan|Keterangan|Jenis Cuti|Keperluan)\s*:\s*(.+)/i);
+        
       let tempTujuan = "";
       let startIndex = i;
 
@@ -376,7 +549,7 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
 
       for (let j = startIndex; j < Math.min(lines.length, startIndex + 10); j++) {
           const nextLine = lines[j].trim();
-          if (!nextLine || /^(?:Waktu|Biaya|Demikian|Dikeluarkan|Transportasi)/i.test(nextLine)) break;
+          if (!nextLine || /^(?:Waktu|Biaya|Demikian|Dikeluarkan|Transportasi|Hormat)/i.test(nextLine)) break;
           tempTujuan += (tempTujuan ? " " : "") + nextLine;
       }
 
@@ -388,10 +561,9 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
 
   let finalTujuan = rawTujuan || '-';
 
-  if (finalTujuan !== '-') {
+  if (modul === 'spt' && finalTujuan !== '-') {
     const validCities = await fetchValidCities();
     let detectedCity = null;
-
     const lowerRaw = finalTujuan.toLowerCase();
 
     for (const city of validCities) {
@@ -404,10 +576,11 @@ const extractSptData = async (lines, fullText, dbPegawai = []) => {
         break;
       }
     }
-
     if (detectedCity) {
       finalTujuan = detectedCity;
     }
+  } else if (modul === 'cuti' && finalTujuan === '-') {
+    finalTujuan = 'Cuti / Alasan Lainnya';
   }
 
   if (!dbPegawai || dbPegawai.length === 0) {
@@ -577,19 +750,20 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     dbPegawai = fetched.data || [];
   }
 
-  if (activeTab === 'spt') {
-    const sptData = await extractSptData(lines, fullText, dbPegawai);
+  if (activeTab === 'spt' || activeTab === 'cuti') {
+    const isSpt = activeTab === 'spt';
+    const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab);
     return {
       isValid: true,
-      isSpt: true,
-      sptDateBerangkat: sptData.dateBerangkat,
-      sptDatePulang: sptData.datePulang,
-      sptTanggalSurat: sptData.tanggalSurat,
-      sptTujuan: sptData.tujuan,
-      sptNames: sptData.pegawaiList,
+      isArsip: true,
+      arsipDateBerangkat: arsipData.dateBerangkat,
+      arsipDatePulang: arsipData.datePulang,
+      arsipTanggalSurat: arsipData.tanggalSurat,
+      arsipTujuan: arsipData.tujuan,
+      arsipNames: arsipData.pegawaiList,
       nip: '-',
       nama: 'Berbagai Pegawai',
-      periodeFolder: 'Arsip_Surat_Tugas',
+      periodeFolder: isSpt ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
       rows: [],
       expectedDays: 0,
       totalHariMasuk: 0
@@ -1133,26 +1307,22 @@ const getPeriodEvents = () => {
     const startMonthName = monthNames[startDate.getMonth()];
     const startYear = startDate.getFullYear();
     const startStrMonth = String(startDate.getMonth() + 1).padStart(2, '0');
-
+    
     const endDay = endDate.getDate();
     const endMonthName = monthNames[endDate.getMonth()];
     const endYear = endDate.getFullYear();
     const endStrMonth = String(endDate.getMonth() + 1).padStart(2, '0');
 
-    const paymentMonthName = monthNames[paymentMonthIndex];
-    const expectedDays = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+    const strMonth = String(i + 1).padStart(2, '0');
 
     tukinPeriods.push({
-      id: `tukin-${year}-${String(paymentMonthIndex + 1).padStart(2, '0')}`,
+      id: `tukin-${year}-${strMonth}`,
       status: 'DIBUKA',
-      title: `Bukti Dukung Tunjangan Kinerja Bulan ${paymentMonthName} ${year}`,
+      title: `Bukti Dukung Tukin Bulan ${monthNames[i]} ${year}`,
       periodeLabel: `${startDay} ${startMonthName.substring(0,3)} ${startYear} – ${endDay} ${endMonthName.substring(0,3)} ${endYear}`,
       periodeEvent: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear} s/d ${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
-      startDate: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear}`,
-      endDate: `${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
-      periodeFolder: `Periode_Tukin_${year}-${String(paymentMonthIndex + 1).padStart(2, '0')}`,
-      tipe: 'Tunjangan Kinerja',
-      expectedDays: expectedDays
+      periodeFolder: `Periode_${year}-${strMonth}`,
+      tipe: 'Tunjangan Kinerja'
     });
   }
 
@@ -1165,7 +1335,7 @@ const getPeriodEvents = () => {
     sptPeriods.push({
       id: `spt-${year}-${strMonth}`,
       status: 'DIBUKA',
-      title: `Arsip Surat Tugas Bulan ${monthNames[i]} ${year}`,
+      title: `Arsip SPT Bulan ${monthNames[i]} ${year}`,
       periodeLabel: `Periode ${monthNames[i]} ${year}`,
       periodeEvent: `01-${strMonth}-${year} s/d 31-${strMonth}-${year}`, 
       periodeFolder: `Periode_SPT_${year}-${strMonth}`,
@@ -1173,228 +1343,147 @@ const getPeriodEvents = () => {
     });
   }
 
+  const cutiPeriods = [];
+  for (let i = 0; i < 12; i++) {
+    const year = 2026;
+    const month = i + 1;
+    const strMonth = String(month).padStart(2, '0');
+    
+    cutiPeriods.push({
+      id: `cuti-${year}-${strMonth}`,
+      status: 'DIBUKA',
+      title: `Arsip Surat Cuti Bulan ${monthNames[i]} ${year}`,
+      periodeLabel: `Periode ${monthNames[i]} ${year}`,
+      periodeEvent: `01-${strMonth}-${year} s/d 31-${strMonth}-${year}`, 
+      periodeFolder: `Periode_Cuti_${year}-${strMonth}`,
+      tipe: 'Surat Cuti'
+    });
+  }
+
   return {
     'uang-makan': uangMakanPeriods,
     'tukin': tukinPeriods,
     'spt': sptPeriods,
-    'cuti': []
+    'cuti': cutiPeriods
   };
 };
 
-const fetchLiveSptData = async () => {
-  const cb = new Date().getTime(); // Cache buster
-  // Use direct CSV export URL. This is much faster and bypasses CORS if the sheet is "Published to Web" as CSV
-  const rawCsvUrl = `https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1964926388&single=true&output=csv&cb=${cb}`;
+const ArsipRekapitulasiList = ({ modul }) => {
+  const isSpt = modul === 'spt';
+  const labelTujuan = isSpt ? 'kota tujuan' : 'keterangan cuti';
+  const labelSatuan = isSpt ? 'SPT' : 'Cuti';
+  const labelHari = isSpt ? 'dinas' : 'cuti';
   
-  const processCsvText = (text) => {
-    if (!text || text.trim().startsWith('<')) {
-      console.warn("Data terdeteksi sebagai HTML, bukan CSV murni. Pastikan Spreadsheet dipublikasikan sebagai CSV.");
-      return [];
-    }
-    
-    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
-    if (lines.length < 2) return [];
-    
-    // Asumsi header ada di baris pertama
-    const headers = lines[0].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(h => h.replace(/^"|"$/g, '').trim().toLowerCase());
-    const data = [];
-    
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-      
-      const getCol = (keywords) => {
-        const idx = headers.findIndex(h => keywords.some(kw => h.includes(kw)));
-        return idx !== -1 && cols[idx] ? cols[idx].replace(/^"|"$/g, '').trim() : '';
-      };
-
-      const nip = getCol(['nip']).replace(/^'/, ''); // Hapus petik tunggal jika ada
-      const nama = getCol(['nama']);
-      const tglBerangkat = getCol(['berangkat']);
-      const tglPulang = getCol(['pulang']);
-      
-      // Lewati baris kosong
-      if (!nip && !nama && !tglBerangkat) continue;
-
-      data.push({
-        nama: nama || 'Tanpa Nama',
-        nip: nip || '-',
-        tujuan: getCol(['tujuan']) || '-',
-        tglBerangkat: tglBerangkat || '-',
-        tglPulang: tglPulang || '-',
-        jmlHari: parseInt(getCol(['hari', 'jumlah']), 10) || 1,
-        bulan: getCol(['bulan']) || '-',
-        tahun: getCol(['tahun']) || '-',
-        link: getCol(['link', 'arsip', 'dokumen']) || '#'
-      });
-    }
-    return data;
-  };
-
-  try {
-    // Coba fetch langsung dulu (paling cepat jika diizinkan CORS oleh Google)
-    const res = await fetch(rawCsvUrl);
-    if (res.ok) {
-      const text = await res.text();
-      return processCsvText(text);
-    }
-  } catch(err2) {
-    console.warn("Direct fetch gagal, mencoba proxy...");
-  }
-  
-  // Fallback ke proxy jika direct fetch gagal karena CORS
-  try {
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rawCsvUrl)}`;
-      const res = await fetch(proxyUrl);
-      if (res.ok) {
-        const json = await res.json();
-        return processCsvText(json.contents);
-      }
-  } catch (err) {
-      console.warn("Proxy fetch juga gagal", err);
-  }
-  
-  return [];
-};
-
-const SptRekapitulasiList = () => {
   const [sptDataList, setSptDataList] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterYear, setFilterYear] = useState('Semua');
-
-  useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true);
-      const data = await fetchLiveSptData();
-      setSptDataList(data);
-      setIsLoading(false);
-    };
-    loadData();
-  }, []);
-
-  const availableYears = useMemo(() => {
-    const years = new Set(sptDataList.map(item => item.tahun).filter(y => y && y !== '-'));
-    return ['Semua', ...Array.from(years).sort((a,b) => b - a)];
-  }, [sptDataList]);
-
-  // Group data by Month/Year, then by Event (Tujuan + Dates)
-  const groupedData = useMemo(() => {
-    const filteredList = sptDataList.filter(item => {
-      const matchSearch = !searchQuery || 
-        (item.tujuan || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (item.nama || '').toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchYear = filterYear === 'Semua' || item.tahun === filterYear;
-      
-      return matchSearch && matchYear;
-    });
-
-    const grouped = {};
-    
-    filteredList.forEach(item => {
-      // 1. Grouping Level 1: Month and Year
-      const monthKey = `${item.bulan} ${item.tahun}`;
-      if (!grouped[monthKey]) {
-        // Create sorting index (e.g., 202608 for Agustus 2026)
-        const mList = ['jan', 'feb', 'mar', 'apr', 'mei', 'jun', 'jul', 'agu', 'sep', 'okt', 'nov', 'des'];
-        let mIdx = mList.findIndex(m => String(item.bulan).toLowerCase().startsWith(m));
-        if (mIdx === -1) mIdx = 0;
-        const orderIndex = parseInt(item.tahun || 0) * 100 + mIdx;
-
-        grouped[monthKey] = {
-          monthKey,
-          bulan: item.bulan,
-          tahun: item.tahun,
-          events: {},
-          totalSpt: 0,
-          totalHari: 0,
-          cities: new Set(),
-          orderIndex: orderIndex
-        };
-      }
-
-      // 2. Grouping Level 2: Specific Event (Tujuan + Dates)
-      // Extract just the day number for the badge
-      const getDay = (dateStr) => {
-          if (!dateStr || dateStr === '-') return '';
-          const match = dateStr.match(/^\d{1,2}/);
-          return match ? match[0] : '';
-      };
-      
-      const bDay = getDay(item.tglBerangkat);
-      const pDay = getDay(item.tglPulang);
-      const bMonth = (item.bulan || '').substring(0, 3).toUpperCase();
-      
-      let badgeDays = bDay === pDay ? bDay : `${bDay}-${pDay}`;
-      if(!bDay) badgeDays = '--';
-
-      // We group by destination, dates, AND document link to separate different SPT files even if dates match
-      const eventKey = `${item.tujuan}_${item.tglBerangkat}_${item.tglPulang}_${item.link}`;
-      
-      if (!grouped[monthKey].events[eventKey]) {
-        grouped[monthKey].events[eventKey] = {
-          eventKey,
-          tujuan: item.tujuan,
-          tglBerangkat: item.tglBerangkat,
-          tglPulang: item.tglPulang,
-          jmlHari: item.jmlHari,
-          badgeDays: badgeDays,
-          badgeMonth: bMonth,
-          pegawai: []
-        };
-      }
-      
-      // Add employee to the event
-      grouped[monthKey].events[eventKey].pegawai.push({
-        nama: item.nama,
-        nip: item.nip,
-        link: item.link
-      });
-      
-      // Collect unique cities for the month summary
-      grouped[monthKey].cities.add(item.tujuan);
-    });
-
-    // Convert to array and calculate summaries
-    return Object.values(grouped).map(month => {
-      month.totalSpt = Object.keys(month.events).length;
-      month.totalHari = Object.values(month.events).reduce((sum, ev) => sum + parseInt(ev.jmlHari), 0);
-      
-      const cityArray = Array.from(month.cities).filter(c => c && c !== '-');
-      let citiesStr = cityArray.slice(0, 3).join(' • ');
-      if (cityArray.length > 3) citiesStr += ` +${cityArray.length - 3} lagi`;
-      month.citiesStr = citiesStr || 'Lokasi tidak terdata';
-      
-      // Sort events within the month (descending by date)
-      month.eventsList = Object.values(month.events).sort((a, b) => {
-          const dayA = parseInt(a.badgeDays.split('-')[0]) || 0;
-          const dayB = parseInt(b.badgeDays.split('-')[0]) || 0;
-          return dayB - dayA;
-      });
-      return month;
-    }).sort((a, b) => b.orderIndex - a.orderIndex); // Sort months descending
-  }, [sptDataList, searchQuery, filterYear]);
-
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
 
-  useEffect(() => {
-    // Only auto-expand the first month if expandedMonth is completely null (initial load)
-    // and we haven't explicitly set it to an empty string to close all.
-    if (!isLoading && groupedData.length > 0 && expandedMonth === null) {
-      setExpandedMonth(groupedData[0].monthKey);
+  const loadData = async (manual = false) => {
+    if (manual) setIsRefreshing(true);
+    else setIsLoading(true);
+    
+    try {
+      const data = isSpt ? await fetchLiveSptData() : await fetchLiveCutiData();
+      setSptDataList(data);
+    } catch (e) {
+      console.error(`Gagal memuat data ${labelSatuan}:`, e);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }, [isLoading, groupedData, expandedMonth]);
+  };
 
-  const toggleMonth = (mKey) => {
-    if (expandedMonth === mKey) {
-      // Set to empty string instead of null to indicate user explicitly closed it,
-      // preventing the useEffect from auto-expanding it again.
+  useEffect(() => {
+    loadData();
+  }, [modul]); 
+
+  const availableYears = useMemo(() => {
+    const years = new Set(sptDataList.map(item => item.tahun).filter(y => y && y !== '-'));
+    return Array.from(years).sort((a, b) => b - a);
+  }, [sptDataList]);
+
+  const filteredAndGroupedData = useMemo(() => {
+    const filtered = sptDataList.filter(item => {
+      if (filterYear !== 'Semua' && item.tahun !== filterYear) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        return (item.tujuan.toLowerCase().includes(q) || item.nama.toLowerCase().includes(q));
+      }
+      return true;
+    });
+
+    const grouped = {};
+    filtered.forEach(item => {
+      const monthYear = `${item.bulan} ${item.tahun}`;
+      if (!grouped[monthYear]) grouped[monthYear] = { month: item.bulan, year: item.tahun, items: [] };
+      grouped[monthYear].items.push(item);
+    });
+
+    const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    
+    return Object.values(grouped).sort((a, b) => {
+      if (a.year !== b.year) return parseInt(b.year) - parseInt(a.year);
+      return monthNames.indexOf(b.month) - monthNames.indexOf(a.month);
+    }).map(group => {
+      const eventGroups = {};
+      group.items.forEach(item => {
+        const eventKey = `${item.tanggalBerangkat}_${item.tanggalPulang}_${item.tujuan}_${item.linkAkses}`;
+        if (!eventGroups[eventKey]) {
+          eventGroups[eventKey] = {
+            tanggalBerangkat: item.tanggalBerangkat,
+            tanggalPulang: item.tanggalPulang,
+            tujuan: item.tujuan,
+            jumlahHari: item.jumlahHari,
+            linkAkses: item.linkAkses,
+            pegawai: []
+          };
+        }
+        eventGroups[eventKey].pegawai.push({ nama: item.nama, nip: item.nip });
+      });
+
+      const sortedEvents = Object.values(eventGroups).sort((a, b) => {
+        const dA = parseInt(a.tanggalBerangkat.split(' ')[0] || 0);
+        const dB = parseInt(b.tanggalBerangkat.split(' ')[0] || 0);
+        return dB - dA;
+      });
+
+      const totalHari = sortedEvents.reduce((sum, ev) => sum + (ev.jumlahHari || 1), 0);
+      const uniqueCities = Array.from(new Set(sortedEvents.map(e => e.tujuan).filter(t => t && t !== '-')));
+
+      return {
+        id: `${group.month}-${group.year}`,
+        label: `${group.month} ${group.year}`,
+        month: group.month,
+        year: group.year,
+        totalSpt: sortedEvents.length,
+        totalHari: totalHari,
+        cities: uniqueCities,
+        events: sortedEvents
+      };
+    });
+  }, [sptDataList, filterYear, searchQuery]);
+
+  useEffect(() => {
+    if (expandedMonth === null && filteredAndGroupedData.length > 0) {
+      setExpandedMonth(filteredAndGroupedData[0].id);
+    }
+  }, [filteredAndGroupedData, expandedMonth]);
+
+  const toggleMonth = (id) => {
+    setExpandedMonth(expandedMonth === id ? '' : id);
+  };
+
+  const toggleAllMonths = () => {
+    if (expandedMonth !== '') {
       setExpandedMonth('');
-      setExpandedEvent(null);
     } else {
-      setExpandedMonth(mKey);
-      setExpandedEvent(null);
+      if (filteredAndGroupedData.length > 0) {
+        setExpandedMonth(filteredAndGroupedData[0].id);
+      }
     }
   };
 
@@ -1403,166 +1492,191 @@ const SptRekapitulasiList = () => {
     setExpandedEvent(expandedEvent === eKey ? null : eKey);
   };
 
-  if (isLoading) {
+  if (isLoading && !isRefreshing) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-gray-500 bg-white rounded-3xl border border-gray-100 shadow-xs">
-        <div className="w-10 h-10 border-4 border-[#0E5B73] border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-bold text-sm tracking-wide text-[#084C61]">Menarik Data Arsip SPT dari Spreadsheet...</p>
+        <div className="w-8 h-8 border-4 border-teal-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="font-bold text-sm">Menarik data rekapitulasi {labelSatuan}...</p>
       </div>
     );
   }
 
   return (
-    <div className="relative pl-4 sm:pl-8 pt-2 pb-6">
-      {/* Timeline vertical line */}
-      <div className="absolute left-5 sm:left-[35px] top-8 bottom-4 w-px bg-gray-300"></div>
-
+    <div>
       <div className="flex flex-col sm:flex-row gap-3 mb-6 relative z-10">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
           <input 
             type="text" 
-            placeholder="Cari kota tujuan atau nama pegawai..." 
+            placeholder={`Cari ${labelTujuan} atau nama pegawai...`}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold focus:outline-none focus:border-[#084C61] shadow-sm" 
           />
         </div>
         <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl p-1 shadow-sm shrink-0 overflow-x-auto custom-scrollbar">
+          <button
+            onClick={() => loadData(true)}
+            disabled={isRefreshing}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${isRefreshing ? 'bg-gray-100 text-gray-400' : 'text-gray-600 hover:bg-gray-100 hover:text-[#084C61]'}`}
+            title="Tarik ulang data terbaru"
+          >
+            <RotateCcw size={14} className={isRefreshing ? "animate-spin" : ""} />
+            {isRefreshing ? 'Memuat...' : 'Refresh'}
+          </button>
+          <div className="w-px h-5 bg-gray-200 mx-1"></div>
+          <button 
+            onClick={() => setFilterYear('Semua')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === 'Semua' ? 'bg-[#084C61] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
+          >
+            Semua
+          </button>
           {availableYears.map(year => (
             <button 
               key={year}
               onClick={() => setFilterYear(year)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${filterYear === year ? 'bg-[#114053] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === year ? 'bg-[#084C61] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
             >
               {year}
             </button>
           ))}
-           <div className="w-px h-5 bg-gray-200 mx-1"></div>
-           <button
-             onClick={() => {
-                setExpandedMonth(expandedMonth === '' ? (groupedData.length > 0 ? groupedData[0].monthKey : null) : '');
-                setExpandedEvent(null);
-             }}
-             className="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-gray-500 hover:bg-gray-100 flex items-center gap-1 whitespace-nowrap"
-             title={expandedMonth === '' ? "Buka Bulan Pertama" : "Tutup Semua Bulan"}
-           >
-             {expandedMonth === '' ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-             {expandedMonth === '' ? 'Buka' : 'Tutup Semua'}
-           </button>
+          <div className="w-px h-5 bg-gray-200 mx-1"></div>
+          <button 
+            onClick={toggleAllMonths}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-gray-600 hover:bg-gray-100 flex items-center gap-1 whitespace-nowrap"
+          >
+            {expandedMonth !== '' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {expandedMonth !== '' ? 'Tutup Semua' : 'Buka Semua'}
+          </button>
         </div>
       </div>
 
-      {groupedData.length === 0 ? (
-        <div className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-xs relative z-10">
-          <div className="w-16 h-16 rounded-full bg-gray-50 text-gray-400 mx-auto flex items-center justify-center mb-3">
-            <FileText size={24} />
-          </div>
-          <h4 className="font-bold text-gray-800">Belum Ada Arsip Sesuai Pencarian</h4>
-          <p className="text-xs text-gray-500 mt-1">Data SPT yang terpublikasi akan muncul di sini.</p>
-        </div>
-      ) : (
+      <div className="relative pl-6">
+        <div className="absolute left-[11px] top-4 bottom-8 w-px bg-gray-300 z-0"></div>
         <div className="space-y-4">
-          {groupedData.map((m, idx) => {
-            const isMonthExpanded = expandedMonth === m.monthKey;
-            
-            return (
-              <div key={m.monthKey} className="relative">
-                {/* Timeline Dot */}
-                <div className={`absolute -left-[18px] sm:-left-[18px] top-6 w-3 h-3 rounded-full border-2 ${isMonthExpanded ? 'bg-[#084C61] border-[#084C61] ring-4 ring-[#084C61]/20' : 'bg-[#D5C58A] border-[#D5C58A]'} z-10 transition-all`}></div>
-                
-                <div className={`rounded-2xl transition-all duration-300 ${isMonthExpanded ? 'bg-white border border-[#114053] shadow-md overflow-hidden' : 'bg-white border border-gray-200 shadow-sm hover:border-[#CDE5F1]'}`}>
-                  {/* Month Header */}
-                  <div 
-                    onClick={() => toggleMonth(m.monthKey)}
-                    className={`cursor-pointer p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors ${isMonthExpanded ? 'bg-[#114053] text-white' : 'bg-transparent'}`}
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`p-2 rounded-lg flex items-center justify-center ${isMonthExpanded ? 'bg-white/10 text-white' : 'bg-gray-100 text-gray-500'}`}>
-                        <Calendar size={20} />
-                      </div>
-                      <div>
-                        <h3 className={`font-black text-sm sm:text-base ${isMonthExpanded ? 'text-white' : 'text-gray-900'}`}>
-                          {m.bulan} <span className={isMonthExpanded ? 'text-gray-300 font-medium' : 'text-gray-400 font-medium'}>{m.tahun}</span>
-                        </h3>
-                        <p className={`text-[11px] sm:text-xs mt-0.5 ${isMonthExpanded ? 'text-gray-300' : 'text-gray-500'}`}>{m.citiesStr}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${isMonthExpanded ? 'bg-white/10 text-white border border-white/10' : 'bg-[#EAF5FA] text-[#084C61] border border-[#CDE5F1]'}`}>{m.totalSpt} SPT</span>
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${isMonthExpanded ? 'bg-white/10 text-white border border-white/10' : 'bg-[#F2EEDF] text-[#084C61] border border-[#D5C58A]/50'}`}>{m.totalHari} hari</span>
-                      <div className="p-1 rounded-full hover:bg-black/5 ml-1">
-                        {isMonthExpanded ? <ChevronUp size={18} className="text-gray-300" /> : <ChevronDown size={18} className="text-gray-400" />}
-                      </div>
-                    </div>
-                  </div>
+          {filteredAndGroupedData.length === 0 ? (
+            <div className="p-8 text-center text-gray-500 bg-white rounded-2xl border border-gray-200 shadow-xs relative z-10">
+              Tidak ada data {labelSatuan} yang ditemukan.
+            </div>
+          ) : (
+            filteredAndGroupedData.map((group, index) => {
+              const isExpanded = expandedMonth === group.id;
+              
+              return (
+                <div key={group.id} className="relative z-10">
+                  <div className={`absolute -left-6 top-5 w-3 h-3 rounded-full border-2 bg-white transition-colors ${isExpanded ? 'border-[#084C61] shadow-[0_0_0_4px_rgba(8,76,97,0.1)]' : 'border-gray-400'}`}></div>
                   
-                  {/* Event List (Expanded) */}
-                  {isMonthExpanded && (
-                    <div className="bg-white">
-                      {m.eventsList.map((ev, evIdx) => {
-                        const isEvExpanded = expandedEvent === ev.eventKey;
-                        return (
-                          <div key={ev.eventKey} className="border-b border-gray-100 last:border-0 p-4 sm:px-6 hover:bg-gray-50/50 transition-colors">
-                            {/* Event Row */}
-                            <div className="flex items-start justify-between cursor-pointer group" onClick={(e) => toggleEvent(ev.eventKey, e)}>
-                              <div className="flex items-start gap-4 pr-4">
-                                <div className="flex flex-col items-center justify-center w-12 sm:w-14 py-2 rounded-xl bg-[#114053] text-white shrink-0 shadow-sm border border-[#0A2E3D]">
-                                  <span className="text-sm font-black leading-none text-center whitespace-pre-wrap">{ev.badgeDays}</span>
-                                  <span className="text-[9px] font-bold uppercase mt-1 opacity-80">{ev.badgeMonth}</span>
-                                </div>
-                                <div className="mt-0.5">
-                                  <h4 className="font-bold text-sm text-gray-900 group-hover:text-[#084C61] transition-colors flex items-center gap-1.5 leading-tight">
-                                    <MapPin size={14} className="text-gray-400 shrink-0" /> {ev.tujuan}
-                                  </h4>
-                                  <p className="text-[11px] text-gray-500 mt-1.5">{ev.jmlHari} hari • Arsip Surat Tugas {m.bulan} {m.tahun}</p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2 sm:gap-3 shrink-0 mt-1">
-                                <span className="flex items-center gap-1.5 text-[11px] font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg border border-gray-200">
-                                  <Users size={12} className="text-gray-400" /> {ev.pegawai.length}
-                                </span>
-                                <div className="p-1 rounded-lg group-hover:bg-gray-200 transition-colors">
-                                  {isEvExpanded ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Employees List (Expanded) */}
-                            {isEvExpanded && (
-                              <div className="mt-4 sm:ml-16">
-                                <div className="bg-[#F8FAFC] border border-[#CDE5F1]/60 rounded-xl p-4 shadow-inner">
-                                  <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 mb-3 uppercase tracking-wider">
-                                    <Calendar size={12} className="text-[#084C61]" /> 
-                                    <span>{ev.tglBerangkat.toUpperCase()} – {ev.tglPulang.toUpperCase()} • DIUNGGAH OLEH</span>
-                                  </div>
-                                  <div className="space-y-0 relative">
-                                    {ev.pegawai.map((peg, pIdx) => (
-                                      <div key={pIdx} className="py-2.5 border-b border-[#CDE5F1]/60 border-dashed last:border-0 flex items-center justify-between group/pegawai hover:bg-white px-2 -mx-2 rounded-lg transition-colors">
-                                        <div className="pl-1">
-                                          <p className="font-extrabold text-xs text-[#114053]">{peg.nama}</p>
-                                          <p className="text-[10px] text-teal-600/70 font-mono mt-0.5 tracking-wide">{peg.nip}</p>
-                                        </div>
-                                        <a href={peg.link !== '#' ? peg.link : undefined} target="_blank" rel="noreferrer" className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-[#084C61] hover:text-white hover:border-[#084C61] transition-all shadow-sm active:scale-95 cursor-pointer">
-                                          <Eye size={12} /> Lihat
-                                        </a>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                  <div 
+                    onClick={() => toggleMonth(group.id)}
+                    className={`rounded-2xl border transition-all cursor-pointer shadow-xs overflow-hidden ${isExpanded ? 'bg-[#084C61] border-[#084C61] text-white' : 'bg-white border-gray-200 text-gray-800 hover:border-[#084C61]'}`}
+                  >
+                    <div className="px-5 py-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-xl ${isExpanded ? 'bg-white/10 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                          <Calendar size={18} />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-sm flex items-center gap-2">
+                            {group.month} <span className={isExpanded ? "text-teal-200/80 font-medium" : "text-gray-400 font-medium"}>{group.year}</span>
+                          </h4>
+                          <p className={`text-[11px] truncate max-w-xs sm:max-w-md ${isExpanded ? 'text-teal-100' : 'text-gray-500'}`}>
+                            {group.cities.slice(0, 3).join(' • ')} {group.cities.length > 3 ? `+${group.cities.length - 3} lagi` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex gap-2">
+                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-700'}`}>{group.totalSpt} {labelSatuan}</span>
+                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-amber-50 text-amber-700'}`}>{group.totalHari} {labelHari}</span>
+                        </div>
+                        {isExpanded ? <ChevronUp size={18} className="opacity-80" /> : <ChevronDown size={18} className="opacity-50" />}
+                      </div>
                     </div>
-                  )}
+
+                    {isExpanded && (
+                      <div className="bg-white text-gray-800 border-t border-gray-100">
+                        <div className="p-3 space-y-2">
+                          {group.events.map((ev, evIdx) => {
+                            const eKey = `${group.id}-${evIdx}`;
+                            const isEvExpanded = expandedEvent === eKey;
+                            
+                            const partsBerangkat = ev.tanggalBerangkat.split(' ');
+                            const dateBadge = partsBerangkat[0] || '00';
+                            const monthBadge = partsBerangkat[1] ? partsBerangkat[1].substring(0, 3).toUpperCase() : 'MTH';
+
+                            let shortTglBerangkatPulang = `${ev.tanggalBerangkat.split(' ').slice(0, 2).join(' ')} - ${ev.tanggalPulang}`;
+                            if (ev.tanggalBerangkat === ev.tanggalPulang) shortTglBerangkatPulang = ev.tanggalBerangkat;
+
+                            return (
+                              <div key={evIdx} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-[#084C61] transition-colors">
+                                <div 
+                                  onClick={(e) => toggleEvent(eKey, e)}
+                                  className="px-4 py-3 flex items-center justify-between cursor-pointer"
+                                >
+                                  <div className="flex items-start gap-4">
+                                    <div className="bg-[#084C61] text-white rounded-xl overflow-hidden shrink-0 shadow-sm border border-[#084C61]/20">
+                                      <div className="px-3 py-1 font-black text-sm text-center leading-none mt-1">{dateBadge}{ev.tanggalBerangkat !== ev.tanggalPulang ? `-${ev.tanggalPulang.split(' ')[0]}` : ''}</div>
+                                      <div className="px-3 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase bg-black/20">{monthBadge}</div>
+                                    </div>
+                                    <div className="pt-0.5">
+                                      <div className="flex items-center gap-1.5 mb-1">
+                                        <MapPin size={14} className="text-gray-400 shrink-0" />
+                                        <span className="font-extrabold text-sm text-gray-900 leading-none">{ev.tujuan}</span>
+                                      </div>
+                                      <div className="text-[11px] text-gray-500 font-medium">
+                                        {ev.jumlahHari} {labelHari} • Arsip Surat {labelSatuan} {group.month} {group.year}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-[10px] font-bold text-gray-600">
+                                      <Users size={12} /> {ev.pegawai.length}
+                                    </div>
+                                    <ChevronDown size={16} className={`text-gray-400 transition-transform ${isEvExpanded ? 'rotate-180' : ''}`} />
+                                  </div>
+                                </div>
+
+                                {isEvExpanded && (
+                                  <div className="bg-[#F8FAFC] border-t border-gray-100 p-4 pl-[72px]">
+                                    <div className="flex items-center gap-2 mb-3 text-[10px] font-extrabold text-[#084C61] uppercase tracking-wider">
+                                      <Calendar size={12} />
+                                      {shortTglBerangkatPulang.toUpperCase()} • DIUNGGAH OLEH
+                                    </div>
+                                    <div className="space-y-2 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-[#CDE5F1]">
+                                      {ev.pegawai.map((peg, pIdx) => (
+                                        <div key={pIdx} className="flex items-center justify-between pl-6 relative">
+                                          <div className="absolute left-2.5 top-1.5 w-1.5 h-1.5 rounded-full bg-[#084C61]"></div>
+                                          <div>
+                                            <div className="text-[13px] font-extrabold text-[#084C61] leading-tight">{peg.nama}</div>
+                                            <div className="text-[10px] font-medium text-teal-600/70 font-mono mt-0.5">{peg.nip}</div>
+                                          </div>
+                                          <a 
+                                            href={ev.linkAkses} 
+                                            target="_blank" 
+                                            rel="noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="px-3 py-1.5 bg-[#084C61] hover:bg-[#0E5B73] text-white rounded-lg text-[10px] font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                                          >
+                                            <FileText size={12} /> Lihat
+                                          </a>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
@@ -1575,9 +1689,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
   const [parsedData, setParsedData] = useState(null);
   
-  const [sptFiles, setSptFiles] = useState([]);
-  const [isReadingSpt, setIsReadingSpt] = useState(false);
-  const [sptReadingProgress, setSptReadingProgress] = useState({ current: 0, total: 0 });
+  const [arsipFiles, setArsipFiles] = useState([]);
+  const [isReadingArsip, setIsReadingArsip] = useState(false);
+  const [arsipReadingProgress, setArsipReadingProgress] = useState({ current: 0, total: 0 });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -1586,20 +1700,25 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  const [sptSubTab, setSptSubTab] = useState('terdata');
+  const [arsipSubTab, setArsipSubTab] = useState('terdata');
   const [dbPegawai, setDbPegawai] = useState([]);
 
-  const [editingSptId, setEditingSptId] = useState(null);
-  const [editSptForm, setEditSptForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '', tujuan: '' });
+  const [editingArsipId, setEditingArsipId] = useState(null);
+  const [editArsipForm, setEditArsipForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '', tujuan: '' });
   
   const [addingPegawaiId, setAddingPegawaiId] = useState(null);
-  const [sptSearchQuery, setSptSearchQuery] = useState('');
-  
+  const [arsipSearchQuery, setArsipSearchQuery] = useState('');
   const [editingPegawaiData, setEditingPegawaiData] = useState(null);
   const [inlineSearchQuery, setInlineSearchQuery] = useState('');
 
   const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
   const [previewPdfName, setPreviewPdfName] = useState("");
+
+  // STATE UNTUK MANUAL UPLOAD
+  const [isManualUpload, setIsManualUpload] = useState(false);
+  const [manualEntries, setManualEntries] = useState([
+    { id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }
+  ]);
 
   useEffect(() => {
     const cached = localStorage.getItem('cached_pegawai_json');
@@ -1621,13 +1740,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const PERIOD_EVENTS = getPeriodEvents();
 
   useEffect(() => {
-    if (activeTab !== 'spt' && activeStep > 1 && !selectedPeriod) {
+    if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
       navigate(currentView, 1);
     }
   }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
 
   const handleTabClick = (targetView) => {
-    if ((selectedFile || sptFiles.length > 0) && !submitResult) {
+    if ((selectedFile || arsipFiles.length > 0) && !submitResult) {
       setPendingTargetView({ view: targetView, step: 1 });
       setShowConfirmModal(true);
     } else {
@@ -1652,21 +1771,23 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const resetUploadState = () => {
     setSelectedFile(null);
     setParsedData(null);
-    setSptFiles([]);
+    setArsipFiles([]);
     setSubmitResult(null);
     setIsParsing(false);
     setParseStatus('Mengekstrak dan memverifikasi data...');
     setIsSubmitting(false);
     setIsAlreadyUploaded(false); 
-    setEditingSptId(null);
+    setEditingArsipId(null);
     setAddingPegawaiId(null);
     setEditingPegawaiData(null);
+    // Reset Manual Form State
+    setIsManualUpload(false);
+    setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
   };
 
   const handleClearFile = (idToClear = null) => {
-    if (activeTab === 'spt' && idToClear) {
-      setSptFiles(prev => prev.filter(f => f.id !== idToClear));
-      setSubmitResult(null);
+    if ((activeTab === 'spt' || activeTab === 'cuti') && idToClear) {
+      setArsipFiles(prev => prev.filter(f => f.id !== idToClear));
       return;
     }
     const fileInput = document.getElementById('pdf-upload-input');
@@ -1676,14 +1797,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const handleFileChange = async (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      if (activeTab === 'spt') {
+      if (activeTab === 'spt' || activeTab === 'cuti') {
         const newFiles = Array.from(e.target.files).map(f => ({
           id: Math.random().toString(36).substring(7),
           file: f,
           status: 'pending',
           parsedData: null
         }));
-        setSptFiles(prev => [...prev, ...newFiles].slice(0, 10));
+        setArsipFiles(prev => [...prev, ...newFiles].slice(0, 10));
         setSubmitResult(null);
         setIsAlreadyUploaded(false);
         e.target.value = '';
@@ -1729,19 +1850,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }
   };
 
-  const handleBacaDokumenSpt = async () => {
-    const pendingFiles = sptFiles.filter(f => f.status === 'pending');
+  const handleBacaDokumenArsip = async () => {
+    const pendingFiles = arsipFiles.filter(f => f.status === 'pending');
     if (pendingFiles.length === 0) return;
 
-    setIsReadingSpt(true);
-    let currentList = [...sptFiles];
+    setIsReadingArsip(true);
+    let currentList = [...arsipFiles];
 
     for (let i = 0; i < pendingFiles.length; i++) {
       const fileObj = pendingFiles[i];
-      setSptReadingProgress({ current: i + 1, total: pendingFiles.length });
+      setArsipReadingProgress({ current: i + 1, total: pendingFiles.length });
       
       currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'reading' } : f);
-      setSptFiles([...currentList]);
+      setArsipFiles([...currentList]);
       
       try {
         const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, activeTab); 
@@ -1750,18 +1871,18 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           status: 'success', 
           parsedData: {
             ...result,
-            sptDateBerangkat: result.sptDateBerangkat,
-            sptDatePulang: result.sptDatePulang,
-            sptTanggalSurat: result.sptTanggalSurat,
-            sptTujuan: result.sptTujuan
+            arsipDateBerangkat: result.arsipDateBerangkat,
+            arsipDatePulang: result.arsipDatePulang,
+            arsipTanggalSurat: result.arsipTanggalSurat,
+            arsipTujuan: result.arsipTujuan
           }
         } : f);
       } catch (err) {
         currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'error' } : f);
       }
-      setSptFiles([...currentList]);
+      setArsipFiles([...currentList]);
     }
-    setIsReadingSpt(false);
+    setIsReadingArsip(false);
   };
 
   const fileToBase64 = (file) => {
@@ -1795,23 +1916,22 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     });
   };
 
-  const updateSptFileData = (fileId, updater) => {
-    setSptFiles(prev => prev.map(f => {
+  const updateArsipFileData = (fileId, updater) => {
+    setArsipFiles(prev => prev.map(f => {
       if (f.id !== fileId) return f;
       return { ...f, parsedData: updater(f.parsedData) };
     }));
-    setSubmitResult(null);
   };
 
-  const handleSaveSptDetails = (fileId) => {
-    updateSptFileData(fileId, pd => ({
+  const handleSaveArsipDetails = (fileId) => {
+    updateArsipFileData(fileId, pd => ({
       ...pd,
-      sptDateBerangkat: editSptForm.berangkat,
-      sptDatePulang: editSptForm.pulang,
-      sptTanggalSurat: editSptForm.tanggalSurat,
-      sptTujuan: editSptForm.tujuan
+      arsipDateBerangkat: editArsipForm.berangkat,
+      arsipDatePulang: editArsipForm.pulang,
+      arsipTanggalSurat: editArsipForm.tanggalSurat,
+      arsipTujuan: editArsipForm.tujuan
     }));
-    setEditingSptId(null);
+    setEditingArsipId(null);
   };
 
   const handleUploadSubmit = async (e) => {
@@ -1890,20 +2010,22 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }
   };
 
-  const handleUploadSubmitSpt = async (e) => {
+  const handleUploadSubmitArsip = async (e) => {
     e.preventDefault();
-    const filesToUpload = sptFiles.filter(f => f.status === 'success' && f.parsedData.sptNames.some(p => p.selected));
+    const filesToUpload = arsipFiles.filter(f => f.status === 'success' && f.parsedData.arsipNames.some(p => p.selected));
     if (filesToUpload.length === 0) return;
 
     setIsSubmitting(true);
+    setSubmitResult(null); 
     try {
       for (const fObj of filesToUpload) {
         const base64Raw = await fileToBase64(fObj.file);
         const base64Data = base64Raw.split(',')[1]; 
 
-        const sptDataPayload = fObj.parsedData.sptNames.filter(p => p.selected).map(pegawai => {
-          const tglBerangkat = fObj.parsedData.sptDateBerangkat || '-';
-          const tglPulang = fObj.parsedData.sptDatePulang || '-';
+        const arsipDataPayload = fObj.parsedData.arsipNames.filter(p => p.selected).map(pegawai => {
+          const tglBerangkat = fObj.parsedData.arsipDateBerangkat || '-';
+          const tglPulang = fObj.parsedData.arsipDatePulang || '-';
+          const jumlahHari = activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang)) : hitungHariDinas(tglBerangkat, tglPulang);
           
           let bulan = '-';
           let tahun = '-';
@@ -1918,25 +2040,25 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           return {
             nama: pegawai.nama,
             nip: pegawai.nip,
-            tanggalSurat: fObj.parsedData.sptTanggalSurat || '-',
             tanggalBerangkat: tglBerangkat,
             tanggalPulang: tglPulang,
-            tujuan: fObj.parsedData.sptTujuan || '-',
+            tujuan: fObj.parsedData.arsipTujuan || '-',
+            jumlahHariDinas: jumlahHari,
             bulan: bulan,
             tahun: tahun
           };
         });
 
         const payload = {
-          modul: 'spt',
+          modul: activeTab,
           nip: loggedInUser.NIP,
           nama: loggedInUser.Nama,
           periode: '',
-          bulanTahun: 'Arsip_Surat_Tugas',
+          bulanTahun: activeTab === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
           fileName: fObj.file.name,
           fileBase64: base64Data, 
           sheetData: [],
-          sptData: sptDataPayload,
+          sptData: arsipDataPayload, 
           ringkasan: {}
         };
 
@@ -1949,12 +2071,121 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         if (json.status !== 'success') throw new Error(json.message);
       }
 
-      setSubmitResult({ type: 'success', message: 'Semua Arsip SPT berhasil disimpan!' });
+      setSubmitResult({ type: 'success', message: `Semua Arsip ${activeTab === 'spt' ? 'SPT' : 'Cuti'} berhasil disimpan!` });
+      setTimeout(() => {
+         setArsipFiles([]); // Hapus list file setelah selesai supaya bisa langsung lanjut
+      }, 2000);
       
-      // Menghilangkan setTimeout resetUploadState agar preview dan dokumen tidak hilang
-
     } catch (err) {
       setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleAddManualEntry = () => {
+    setManualEntries(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
+  };
+
+  const handleManualEntryChange = (id, field, value) => {
+    setManualEntries(prev => prev.map(entry => entry.id === id ? { ...entry, [field]: value } : entry));
+  };
+  
+  const handleManualFileChange = (id, e) => {
+    if (e.target.files && e.target.files[0]) {
+      setManualEntries(prev => prev.map(entry => entry.id === id ? { ...entry, file: e.target.files[0] } : entry));
+    }
+  };
+
+  const handleAddPegawaiManual = (id, peg) => {
+    setManualEntries(prev => prev.map(entry => {
+      if (entry.id === id) {
+        if (!entry.pegawai.some(p => p.nip === peg.NIP)) {
+          return { ...entry, pegawai: [...entry.pegawai, { nama: peg.Nama, nip: peg.NIP }], searchQuery: '' };
+        }
+      }
+      return entry;
+    }));
+  };
+
+  const handleRemovePegawaiManual = (id, nipToRemove) => {
+    setManualEntries(prev => prev.map(entry => {
+      if (entry.id === id) {
+        return { ...entry, pegawai: entry.pegawai.filter(p => p.nip !== nipToRemove) };
+      }
+      return entry;
+    }));
+  };
+
+  const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
+  const isManualUploadValid = manualEntries.every(e => e.file && e.startDate && e.endDate && e.pegawai.length > 0);
+
+  const handleUploadManualSubmit = async () => {
+    if (!isManualUploadValid || isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitResult(null);
+
+    try {
+      for (const entry of manualEntries) {
+        const base64Raw = await fileToBase64(entry.file);
+        const base64Data = base64Raw.split(',')[1];
+        
+        const tglBerangkat = formatYMDtoIndo(entry.startDate);
+        const tglPulang = formatYMDtoIndo(entry.endDate);
+        const jumlahHari = activeTab === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) : hitungHariDinas(tglBerangkat, tglPulang);
+        
+        let bulan = '-';
+        let tahun = '-';
+        if (tglBerangkat !== '-') {
+          const parts = tglBerangkat.split(' ');
+          if (parts.length >= 3) {
+            bulan = parts[1];
+            tahun = parts[2];
+          }
+        }
+
+        const manualDataPayload = entry.pegawai.map(p => ({
+          nama: p.nama,
+          nip: p.nip,
+          tanggalBerangkat: tglBerangkat,
+          tanggalPulang: tglPulang,
+          tujuan: '-', // Manual Cuti/SPT tidak ada field tujuan, default ke '-'
+          jumlahHariDinas: jumlahHari,
+          bulan: bulan,
+          tahun: tahun
+        }));
+
+        const payload = {
+          modul: activeTab,
+          nip: loggedInUser.NIP,
+          nama: loggedInUser.Nama,
+          periode: '',
+          bulanTahun: activeTab === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
+          fileName: entry.file.name,
+          fileBase64: base64Data,
+          sheetData: [],
+          sptData: manualDataPayload,
+          ringkasan: {}
+        };
+
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.status !== 'success') throw new Error(json.message);
+      }
+
+      setSubmitResult({ type: 'success', message: `Semua dokumen manual berhasil disimpan!` });
+      setTimeout(() => {
+        setIsManualUpload(false);
+        setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
+        setSubmitResult(null);
+      }, 2000);
+
+    } catch (err) {
+      setSubmitResult({ type: 'error', message: 'Gagal mengunggah dokumen manual: ' + err.message });
     } finally {
       setIsSubmitting(false);
     }
@@ -1963,12 +2194,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const currentPeriodList = PERIOD_EVENTS[activeTab] || [];
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
-  const sptSuccessfulFiles = sptFiles.filter(f => f.status === 'success');
-  const sptTotalSelectedPegawai = sptSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.sptNames.filter(p => p.selected).length, 0);
+  const arsipSuccessfulFiles = arsipFiles.filter(f => f.status === 'success');
+  const arsipTotalSelectedPegawai = arsipSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.arsipNames.filter(p => p.selected).length, 0);
 
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       
+      {/* MODAL PREVIEW DOKUMEN DENGAN IFRAME */}
       {previewPdfUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white text-gray-900 rounded-2xl w-full max-w-5xl h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-gray-100">
@@ -2029,6 +2261,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
+      {}
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
@@ -2059,10 +2292,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             <button onClick={() => handleTabClick('absensi-tunjangan-kinerja')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileCheck size={16} /> Absensi Tunjangan Kinerja
             </button>
-            <button onClick={() => { setSptSubTab('terdata'); handleTabClick('arsip-surat-tugas'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+            <button onClick={() => { setArsipSubTab('terdata'); handleTabClick('arsip-surat-tugas'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileText size={16} /> Arsip Surat Tugas
             </button>
-            <button onClick={() => handleTabClick('arsip-surat-cuti')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+            <button onClick={() => { setArsipSubTab('terdata'); handleTabClick('arsip-surat-cuti'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <Clock size={16} /> Arsip Surat Cuti
             </button>
           </nav>
@@ -2077,6 +2310,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
+      {}
       <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
         <div className="w-full">
           {activeTab === 'rekap' ? (
@@ -2087,14 +2321,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               <h2 className="text-2xl md:text-3xl font-black mb-3" style={{ color: PALETTE_PKP.midnightGreen }}>Selamat Datang di Modul Rekap</h2>
               <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Halaman rekapitulasi data kedisiplinan dan kinerja bulanan sedang dalam penyiapan. Silakan pilih modul lain pada menu di sebelah kiri.</p>
             </div>
-          ) : activeTab === 'spt' ? (
+          ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div>
               <div 
                 className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
                 style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
               >
                 <div className="space-y-2">
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">Arsip Surat Tugas</h2>
+                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">{activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Arsip Surat Cuti'}</h2>
                   <div className="text-sm font-medium text-teal-100/90 tracking-wide">
                     Direktorat Pembangunan Perumahan Perdesaan
                   </div>
@@ -2118,36 +2352,35 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
               <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex gap-6">
-                  <button onClick={() => setSptSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${sptSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  <button onClick={() => setArsipSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                     Sudah Dikumpulkan
                   </button>
-                  <button onClick={() => setSptSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${sptSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  <button onClick={() => setArsipSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                     Simpanan Saya
-                  </button>
-                  <button onClick={() => {}} className={`py-3 px-1 border-b-2 border-transparent font-bold text-sm transition-colors cursor-pointer text-gray-500 hover:text-gray-700`}>
-                    Laporan Perjadin
                   </button>
                 </nav>
               </div>
 
-              {sptSubTab === 'terdata' ? (
-                <SptRekapitulasiList />
+              {}
+              {arsipSubTab === 'terdata' ? (
+                <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
                   <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[20px]">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                      <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload SPT (di luar periode pengumpulan)</h3>
+                      <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'SPT' : 'Cuti'} (di luar periode pengumpulan)</h3>
                       <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
-                        Upload scan SPT perjalanan dinas Anda. Sistem akan mendeteksi nama, NIP, tanggal, dan tujuan.
+                        Upload scan {activeTab === 'spt' ? 'SPT perjalanan dinas' : 'Surat Cuti'} Anda. Sistem akan mendeteksi nama, NIP, tanggal, dan {activeTab === 'spt' ? 'tujuan' : 'keterangan'}.
                       </p>
                       <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs font-bold text-red-700 mb-4">
                         <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                        <span>KHUSUS SPT SAJA! Dokumen selain Surat Perintah Tugas akan ditolak.</span>
+                        <span>KHUSUS {activeTab === 'spt' ? 'SPT' : 'CUTI'} SAJA! Dokumen selain Surat {activeTab === 'spt' ? 'Perintah Tugas' : 'Cuti'} akan ditolak.</span>
                       </div>
                       <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl text-xs text-[#084C61] leading-relaxed mb-6">
-                        <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen SPT memuat kata "Surat Tugas" atau "Perjalanan Dinas" dengan nama, NIP, tanggal, dan tujuan yang jelas.
+                        <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen memuat kata "{activeTab === 'spt' ? 'Surat Tugas' : 'Cuti'}" dengan nama, NIP, tanggal, dan {activeTab === 'spt' ? 'tujuan' : 'keterangan'} yang jelas.
                       </div>
                       
+                      {/* FILE INPUT */}
                       <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
                         <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
                           <UploadCloud size={24} />
@@ -2159,16 +2392,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <input id="pdf-upload-input" type="file" accept=".pdf" multiple onChange={handleFileChange} className="hidden" />
                       </label>
 
+                      {/* SELECTED FILES & ACTIONS */}
                       <div className="space-y-4">
                         <div>
-                          <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({sptFiles.length}/10):</h4>
+                          <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({arsipFiles.length}/10):</h4>
                           <div className="space-y-2">
-                            {sptFiles.length === 0 ? (
+                            {arsipFiles.length === 0 ? (
                                <div className="p-3 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-400 py-6">
                                  Belum ada dokumen yang diunggah.
                                </div>
                             ) : (
-                               sptFiles.map((fObj, idx) => (
+                               arsipFiles.map((fObj, idx) => (
                                 <div key={fObj.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs ${fObj.status === 'success' ? 'bg-[#EAF5FA] border-[#CDE5F1] text-[#1E5D77]' : 'bg-[#F8FAFC] border-gray-200 text-gray-700'}`}>
                                   <div className="flex items-center gap-2 truncate pr-4">
                                     <FileText size={16} className={fObj.status === 'success' ? "text-emerald-600 shrink-0" : "text-gray-400 shrink-0"} />
@@ -2187,42 +2421,181 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         </div>
 
                         <button 
-                          onClick={handleBacaDokumenSpt}
-                          disabled={sptFiles.filter(f => f.status === 'pending').length === 0 || isReadingSpt}
-                          className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${(sptFiles.filter(f => f.status === 'pending').length > 0 && !isReadingSpt) ? 'text-white hover:opacity-95 active:scale-[0.99] cursor-pointer' : 'text-gray-400 bg-gray-200 cursor-not-allowed'}`}
-                          style={(sptFiles.filter(f => f.status === 'pending').length > 0 && !isReadingSpt) ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                          onClick={handleBacaDokumenArsip}
+                          disabled={arsipFiles.filter(f => f.status === 'pending').length === 0 || isReadingArsip}
+                          className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? 'text-white hover:opacity-95 active:scale-[0.99] cursor-pointer' : 'text-gray-400 bg-gray-200 cursor-not-allowed'}`}
+                          style={(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
                         >
-                          {isReadingSpt ? (
-                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Membaca {sptReadingProgress.current}/{sptReadingProgress.total}...</>
-                          ) : (sptFiles.length > 0 && sptFiles.filter(f => f.status === 'pending').length === 0) ? (
+                          {isReadingArsip ? (
+                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Membaca {arsipReadingProgress.current}/{arsipReadingProgress.total}...</>
+                          ) : (arsipFiles.length > 0 && arsipFiles.filter(f => f.status === 'pending').length === 0) ? (
                             <><CheckCircle2 size={16} /> Semua file sudah dibaca</>
                           ) : (
-                            <><FileText size={16} /> Baca Dokumen ({sptFiles.filter(f => f.status === 'pending').length} file)</>
+                            <><FileText size={16} /> Baca Dokumen ({arsipFiles.filter(f => f.status === 'pending').length} file)</>
                           )}
                         </button>
 
-                        <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between">
+                        {/* TOGGLE UPLOAD MANUAL */}
+                        <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between mt-6">
                           <div className="flex items-start gap-3">
                             <FileText size={18} className="text-[#084C61] mt-0.5" />
                             <div>
-                              <p className="text-xs font-extrabold text-gray-900">Upload Manual SPT</p>
-                              <p className="text-[10px] text-gray-500 font-medium">Isi data SPT secara manual tanpa OCR</p>
+                              <p className="text-xs font-extrabold text-gray-900">Upload Manual {activeTab === 'spt' ? 'SPT' : 'Cuti'}</p>
+                              <p className="text-[10px] text-gray-500 font-medium">Gunakan form ini untuk dokumen yang tidak terbaca oleh sistem OCR</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-gray-400 font-medium">Upload Manual</span>
-                            <div className="w-8 h-4 bg-gray-300 rounded-full relative cursor-not-allowed">
-                               <div className="w-3 h-3 bg-white rounded-full absolute top-0.5 left-0.5 shadow-sm"></div>
+                          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setIsManualUpload(!isManualUpload)}>
+                            <div className={`w-10 h-5 rounded-full relative transition-colors ${isManualUpload ? 'bg-[#084C61]' : 'bg-gray-300'}`}>
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isManualUpload ? 'left-5' : 'left-1'}`}></div>
                             </div>
                           </div>
                         </div>
+
+                        {/* FORM UPLOAD MANUAL (MUNCUL JIKA TOGGLE AKTIF) */}
+                        {isManualUpload && (
+                          <div className="mt-4 space-y-4">
+                            {manualEntries.map((entry, index) => (
+                              <div key={entry.id} className="p-4 bg-white border border-gray-200 rounded-xl relative shadow-sm">
+                                {manualEntries.length > 1 && (
+                                  <button onClick={() => setManualEntries(prev => prev.filter(e => e.id !== entry.id))} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors">
+                                    <X size={16} />
+                                  </button>
+                                )}
+                                <div className="text-[11px] font-extrabold text-gray-800 mb-3 flex items-center gap-2">
+                                  <FileText size={14} className="text-[#084C61]" /> {activeTab === 'spt' ? 'SPT' : 'Cuti'} Manual #{index + 1}
+                                </div>
+                                
+                                <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer text-center mb-4">
+                                  <UploadCloud size={20} className="text-gray-400" />
+                                  <span className="text-xs font-semibold text-gray-600">{entry.file ? entry.file.name : `Pilih file ${activeTab === 'spt' ? 'SPT' : 'Cuti'}`}</span>
+                                  <input type="file" accept=".pdf, .jpg, .png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
+                                </label>
+
+                                <div className="grid grid-cols-2 gap-3 mb-3">
+                                  <div>
+                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Mulai</label>
+                                    <input type="date" value={entry.startDate} onChange={e => handleManualEntryChange(entry.id, 'startDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Selesai</label>
+                                    <input type="date" value={entry.endDate} onChange={e => handleManualEntryChange(entry.id, 'endDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
+                                  </div>
+                                </div>
+                                
+                                {/* Badge Ringkasan Jumlah Hari */}
+                                {entry.startDate && entry.endDate && (
+                                    <div className="flex justify-end mb-3">
+                                        <span className="text-[10px] font-bold text-[#0E5B73] bg-[#EAF5FA] px-2.5 py-1 rounded-md border border-[#CDE5F1]">
+                                          Total Hari {activeTab === 'spt' ? 'Dinas' : 'Cuti'}: {activeTab === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) + ' Hari Kerja' : hitungHariDinas(formatYMDtoIndo(entry.startDate), formatYMDtoIndo(entry.endDate)) + ' Hari'}
+                                        </span>
+                                    </div>
+                                )}
+
+                                <div className="relative">
+                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">Pegawai</label>
+                                  
+                                  {/* Daftar Pegawai Terpilih dengan Style Baru (Tanpa Checkbox, Ada Ikon Edit & Hapus) */}
+                                  <div className="mt-2 mb-3 space-y-2">
+                                    {entry.pegawai.map((p, i) => {
+                                      const isEditingThisManualPegawai = editingPegawaiData && editingPegawaiData.entryId === entry.id && editingPegawaiData.idx === i;
+
+                                      return (
+                                        <div key={i} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors border border-transparent hover:border-gray-200 group">
+                                          {isEditingThisManualPegawai ? (
+                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
+                                              <Search size={16} className="text-gray-400 ml-3" />
+                                              <input 
+                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
+                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                              />
+                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                              
+                                              {inlineSearchQuery.trim().length > 1 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                                  {dbPegawai.filter(peg => peg.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || peg.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, iCat) => (
+                                                    <div key={iCat} onClick={() => {
+                                                      setManualEntries(prev => prev.map(e => {
+                                                        if (e.id === entry.id) {
+                                                          const newPegawai = [...e.pegawai];
+                                                          newPegawai[i] = { nama: peg.Nama, nip: peg.NIP };
+                                                          return { ...e, pegawai: newPegawai };
+                                                        }
+                                                        return e;
+                                                      }));
+                                                      setEditingPegawaiData(null);
+                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <>
+                                              <div className="flex-1 overflow-hidden pr-2">
+                                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                  <span className="font-extrabold text-sm text-gray-900 truncate">{p.nama}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
+                                                   <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500 font-mono">{p.nip}</div>
+                                              </div>
+                                              
+                                              {/* Aksi Edit dan Hapus hanya muncul jika di-hover */}
+                                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                                <button onClick={() => { setEditingPegawaiData({ entryId: entry.id, idx: i }); setInlineSearchQuery(p.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"><Edit3 size={14} /></button>
+                                                <button onClick={() => handleRemovePegawaiManual(entry.id, p.nip)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"><Trash2 size={14} /></button>
+                                              </div>
+                                            </>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Kolom Pencarian Tambah Pegawai Baru */}
+                                  <div className="relative flex items-center mt-2">
+                                    <Search size={14} className="absolute left-3 text-gray-400" />
+                                    <input type="text" placeholder="+ Tambah Pegawai (Ketik Nama/NIP)..." value={entry.searchQuery} onChange={e => handleManualEntryChange(entry.id, 'searchQuery', e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-dashed border-[#CDE5F1] rounded-xl text-xs outline-none focus:border-[#0E5B73] focus:border-solid text-gray-700 bg-[#F8FBFD] hover:bg-[#EAF5FA] transition-colors" />
+                                  </div>
+                                  {entry.searchQuery.trim().length > 1 && (
+                                    <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                      {dbPegawai.filter(p => p.Nama.toLowerCase().includes(entry.searchQuery.toLowerCase()) || p.NIP.includes(entry.searchQuery)).slice(0, 5).map((peg, i) => (
+                                        <div key={i} onClick={() => handleAddPegawaiManual(entry.id, peg)} className="px-4 py-2 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                          <div className="text-[11px] font-bold text-gray-800">{peg.Nama}</div>
+                                          <div className="text-[9px] text-gray-500">{peg.NIP}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+
+                            <button onClick={handleAddManualEntry} className="w-full py-2.5 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2">
+                              <Plus size={14} /> Tambah {activeTab === 'spt' ? 'SPT' : 'Cuti'} Manual Lainnya
+                            </button>
+
+                            <button 
+                              onClick={handleUploadManualSubmit}
+                              disabled={!isManualUploadValid || isSubmitting}
+                              className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${!isManualUploadValid || isSubmitting ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
+                              style={isManualUploadValid && !isSubmitting ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                            >
+                              {isSubmitting ? 'Memproses ke Server...' : `Upload ${manualEntries.length} Manual (${totalManualPegawai} pegawai)`}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
+                  {/* KOLOM KANAN: RINCIAN ARSIP */}
                   <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
-                      {sptSuccessfulFiles.length === 0 ? (
+                      {arsipSuccessfulFiles.length === 0 ? (
                         <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70 h-full">
                           <FileText size={40} className="mb-4" />
                           <h4 className="font-bold text-gray-700 text-sm mb-1">Hasil Pembacaan Dokumen</h4>
@@ -2231,42 +2604,42 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       ) : (
                         <div className="space-y-6">
                           <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-base font-black text-gray-900">Rincian SPT</h3>
-                            <span className="text-xs font-bold text-[#0E5B73]">{sptTotalSelectedPegawai} pegawai dipilih</span>
+                            <h3 className="text-base font-black text-gray-900">Rincian {activeTab === 'spt' ? 'SPT' : 'Cuti'}</h3>
+                            <span className="text-xs font-bold text-[#0E5B73]">{arsipTotalSelectedPegawai} pegawai dipilih</span>
                           </div>
 
                           <div className="space-y-6">
-                            {sptSuccessfulFiles.map((fileObj) => {
+                            {arsipSuccessfulFiles.map((fileObj) => {
                               const pd = fileObj.parsedData;
-                              const isEditingThisSpt = editingSptId === fileObj.id;
+                              const isEditingThisArsip = editingArsipId === fileObj.id;
                               const isAddingPegawaiHere = addingPegawaiId === fileObj.id;
 
                               return (
                                 <div key={fileObj.id} className="bg-white rounded-2xl border border-[#CDE5F1] shadow-sm overflow-hidden">
                                   <div className="bg-[#F0F7F9] px-5 py-4 border-b border-[#CDE5F1] relative">
-                                    {isEditingThisSpt ? (
+                                    {isEditingThisArsip ? (
                                       <div className="space-y-3">
                                         <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">Mulai:</label>
-                                          <input type="date" value={formatIndoToYMD(editSptForm.berangkat)} onChange={(e) => setEditSptForm({...editSptForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          <input type="date" value={formatIndoToYMD(editArsipForm.berangkat)} onChange={(e) => setEditArsipForm({...editArsipForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
-                                          <input type="date" value={formatIndoToYMD(editSptForm.pulang)} onChange={(e) => setEditSptForm({...editSptForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          <input type="date" value={formatIndoToYMD(editArsipForm.pulang)} onChange={(e) => setEditArsipForm({...editArsipForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">Tgl SPT:</label>
-                                          <input type="date" value={formatIndoToYMD(editSptForm.tanggalSurat)} onChange={(e) => setEditSptForm({...editSptForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Tgl Surat:</label>
+                                          <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">Tujuan:</label>
-                                          <input type="text" value={editSptForm.tujuan} onChange={(e) => setEditSptForm({...editSptForm, tujuan: e.target.value})} placeholder="Tujuan Dinas" className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Keterangan'}:</label>
+                                          <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder={activeTab === 'spt' ? 'Tujuan Dinas' : 'Keterangan Cuti'} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex justify-end pt-2 gap-2">
-                                          <button onClick={() => setEditingSptId(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs shadow-sm transition-colors cursor-pointer">
+                                          <button onClick={() => setEditingArsipId(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs shadow-sm transition-colors cursor-pointer">
                                             Batal
                                           </button>
-                                          <button onClick={() => handleSaveSptDetails(fileObj.id)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
+                                          <button onClick={() => handleSaveArsipDetails(fileObj.id)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
                                             <Save size={14} /> Simpan
                                           </button>
                                         </div>
@@ -2276,21 +2649,21 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         <div className="space-y-1.5 pr-24">
                                           <div className="flex items-center gap-2">
                                             <Calendar size={16} className="text-[#114053] shrink-0" />
-                                            <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.sptDateBerangkat} - {pd.sptDatePulang}</span>
-                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({hitungHariDinas(pd.sptDateBerangkat, pd.sptDatePulang)} Hari)</span>
+                                            <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
+                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
                                           </div>
                                           <div className="flex items-center gap-2 pl-[22px]">
                                             <FileText size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium">Tgl SPT: {pd.sptTanggalSurat}</span>
+                                            <span className="text-[11px] text-gray-600 font-medium">Tgl Surat: {pd.arsipTanggalSurat}</span>
                                           </div>
                                           <div className="flex items-center gap-2 pl-[22px]">
                                             <MapPin size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.sptTujuan}>Tujuan: {pd.sptTujuan || '-'}</span>
+                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{activeTab === 'spt' ? 'Tujuan' : 'Keterangan'}: {pd.arsipTujuan || '-'}</span>
                                           </div>
                                         </div>
                                         <button onClick={() => {
-                                          setEditSptForm({ berangkat: pd.sptDateBerangkat, pulang: pd.sptDatePulang, tanggalSurat: pd.sptTanggalSurat, tujuan: pd.sptTujuan || '-' });
-                                          setEditingSptId(fileObj.id);
+                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-' });
+                                          setEditingArsipId(fileObj.id);
                                         }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
                                           <Edit3 size={14} /> Ubah Data
                                         </button>
@@ -2299,7 +2672,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   </div>
 
                                   <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar">
-                                    {pd.sptNames.map((pegawai, idx) => {
+                                    {pd.arsipNames.map((pegawai, idx) => {
                                       const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
                                       
                                       return (
@@ -2308,11 +2681,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                             type="checkbox" 
                                             checked={pegawai.selected} 
                                             onChange={(e) => {
-                                              updateSptFileData(fileObj.id, oldData => {
-                                                const newNames = [...oldData.sptNames];
+                                              updateArsipFileData(fileObj.id, oldData => {
+                                                const newNames = [...oldData.arsipNames];
                                                 newNames[idx].selected = e.target.checked;
-                                                return { ...oldData, sptNames: newNames };
+                                                return { ...oldData, arsipNames: newNames };
                                               });
+                                              setSubmitResult(null);
                                             }}
                                             className="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 cursor-pointer"
                                           />
@@ -2330,12 +2704,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                 <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
                                                   {dbPegawai.filter(p => p.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || p.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, i) => (
                                                     <div key={i} onClick={() => {
-                                                      updateSptFileData(fileObj.id, oldData => {
-                                                        const newNames = [...oldData.sptNames];
+                                                      updateArsipFileData(fileObj.id, oldData => {
+                                                        const newNames = [...oldData.arsipNames];
                                                         newNames[idx] = { nama: peg.Nama, nip: peg.NIP, selected: newNames[idx].selected };
-                                                        return { ...oldData, sptNames: newNames };
+                                                        return { ...oldData, arsipNames: newNames };
                                                       });
                                                       setEditingPegawaiData(null);
+                                                      setSubmitResult(null);
                                                     }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
                                                       <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
                                                       <div className="text-[10px] text-gray-500">{peg.NIP}</div>
@@ -2358,10 +2733,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                                               <button onClick={() => { setEditingPegawaiData({ fileId: fileObj.id, idx }); setInlineSearchQuery(pegawai.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer"><Edit3 size={14} /></button>
                                               <button onClick={() => {
-                                                updateSptFileData(fileObj.id, oldData => {
-                                                  const newNames = oldData.sptNames.filter((_, i) => i !== idx);
-                                                  return { ...oldData, sptNames: newNames };
+                                                updateArsipFileData(fileObj.id, oldData => {
+                                                  const newNames = oldData.arsipNames.filter((_, i) => i !== idx);
+                                                  return { ...oldData, arsipNames: newNames };
                                                 });
+                                                setSubmitResult(null);
                                               }} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"><Trash2 size={14} /></button>
                                             </div>
                                           )}
@@ -2373,22 +2749,22 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                       <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm mt-3 mb-2 mx-2">
                                         <Search size={16} className="text-gray-400 ml-3" />
                                         <input 
-                                          type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={sptSearchQuery} onChange={(e) => setSptSearchQuery(e.target.value)}
+                                          type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={arsipSearchQuery} onChange={(e) => setArsipSearchQuery(e.target.value)}
                                           className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
                                         />
-                                        <button onClick={() => { setAddingPegawaiId(null); setSptSearchQuery(''); }} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                        <button onClick={() => { setAddingPegawaiId(null); setArsipSearchQuery(''); }} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
                                         
-                                        {sptSearchQuery.trim().length > 1 && (
+                                        {arsipSearchQuery.trim().length > 1 && (
                                           <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                            {dbPegawai.filter(p => p.Nama.toLowerCase().includes(sptSearchQuery.toLowerCase()) || p.NIP.includes(sptSearchQuery)).slice(0, 10).map((peg, idx) => (
+                                            {dbPegawai.filter(p => p.Nama.toLowerCase().includes(arsipSearchQuery.toLowerCase()) || p.NIP.includes(arsipSearchQuery)).slice(0, 10).map((peg, idx) => (
                                               <div key={idx} onClick={() => {
-                                                updateSptFileData(fileObj.id, oldData => {
-                                                  if (!oldData.sptNames.some(existing => existing.nip === peg.NIP)) {
-                                                    return { ...oldData, sptNames: [...oldData.sptNames, { nama: peg.Nama, nip: peg.NIP, selected: true }] };
+                                                updateArsipFileData(fileObj.id, oldData => {
+                                                  if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
+                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: true }] };
                                                   }
                                                   return oldData;
                                                 });
-                                                setAddingPegawaiId(null); setSptSearchQuery('');
+                                                setAddingPegawaiId(null); setArsipSearchQuery(''); setSubmitResult(null);
                                               }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
                                                 <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
                                                 <div className="text-[10px] text-gray-500">{peg.NIP}</div>
@@ -2414,27 +2790,21 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       )}
                     </div>
 
-                    {sptSuccessfulFiles.length > 0 && (
-                      <div className="flex flex-col gap-3 mt-2">
-                        {submitResult && submitResult.type === 'success' && (
-                          <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 shadow-sm animate-in fade-in">
-                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                            {submitResult.message}
-                          </div>
-                        )}
-                        {submitResult && submitResult.type === 'error' && (
-                          <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-semibold flex items-center gap-2 shadow-sm animate-in fade-in">
-                            <AlertCircle size={18} className="text-red-600 shrink-0" />
-                            {submitResult.message}
+                    {arsipSuccessfulFiles.length > 0 && (
+                      <div className="space-y-3">
+                        {submitResult && (
+                          <div className={`p-4 rounded-xl text-xs flex items-center gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                            {submitResult.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" /> : <AlertCircle size={16} className="text-red-600 shrink-0" />}
+                            <span className="font-semibold">{submitResult.message}</span>
                           </div>
                         )}
                         <button 
-                          onClick={handleUploadSubmitSpt}
-                          disabled={isSubmitting || sptTotalSelectedPegawai === 0}
-                          className={`w-full py-4 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmitting || sptTotalSelectedPegawai === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
+                          onClick={handleUploadSubmitArsip}
+                          disabled={isSubmitting || arsipTotalSelectedPegawai === 0}
+                          className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmitting || arsipTotalSelectedPegawai === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
                           style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
                         >
-                          {isSubmitting ? 'Memproses ke Server...' : submitResult?.type === 'success' ? `Upload Ulang SPT (${sptTotalSelectedPegawai} pegawai)` : `Upload Semua SPT (${sptTotalSelectedPegawai} pegawai)`}
+                          {isSubmitting ? 'Memproses ke Server...' : submitResult?.type === 'success' ? `Upload Ulang Data (${arsipTotalSelectedPegawai} pegawai)` : `Upload Semua ${activeTab === 'spt' ? 'SPT' : 'Cuti'} (${arsipTotalSelectedPegawai} pegawai)`}
                         </button>
                       </div>
                     )}
@@ -3027,6 +3397,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </main>
       
+      {}
       <style dangerouslySetInnerHTML={{__html: `
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
