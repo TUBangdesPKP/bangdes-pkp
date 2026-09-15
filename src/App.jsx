@@ -173,8 +173,123 @@ const fetchLiveSptData = async () => {
   }
 };
 
+const standardizeDate = (dateStr) => {
+  if (!dateStr || dateStr === '-') return '-';
+  
+  // If it's already in "DD Bulan YYYY" format, return it
+  if (/[a-zA-Z]/.test(dateStr)) return dateStr;
+
+  // Handle formats like DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
+  const parts = dateStr.split(/[\/\-]/);
+  if (parts.length === 3) {
+    let day, month, year;
+    
+    if (parts[0].length === 4) {
+      // YYYY-MM-DD
+      year = parts[0];
+      month = parts[1];
+      day = parts[2];
+    } else {
+      // Assume DD/MM/YYYY for Indonesian context by default if ambiguous
+      // Google sheets might export M/D/YYYY depending on locale, but let's try to parse smartly
+      if (parseInt(parts[1]) > 12) {
+         // MM/DD/YYYY
+         month = parts[0];
+         day = parts[1];
+         year = parts[2];
+      } else {
+         // DD/MM/YYYY
+         day = parts[0];
+         month = parts[1];
+         year = parts[2];
+      }
+    }
+    
+    // Convert 2 digit year to 4 digit
+    if (year.length === 2) {
+      year = '20' + year;
+    }
+
+    const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    const monthIndex = parseInt(month, 10) - 1;
+    
+    if (monthIndex >= 0 && monthIndex < 12) {
+      return `${parseInt(day, 10)} ${monthNames[monthIndex]} ${year}`;
+    }
+  }
+  return dateStr;
+};
+
 const fetchLiveCutiData = async () => {
-  return [];
+  try {
+    const rawCsvUrl = "https://docs.google.com/spreadsheets/d/1bIQbiWAQ67TYFmvb3WZkvjJaN1moP1fQlmegsFZJWfI/export?format=csv&gid=185022342";
+    
+    let text = '';
+    try {
+      const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
+      if (!res.ok) throw new Error("Gagal direct fetch");
+      text = await res.text();
+    } catch(e) {
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rawCsvUrl)}`;
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error("Gagal proxy fetch");
+      const json = await res.json();
+      text = json.contents;
+    }
+    
+    const lines = text.replace(/\r/g, '').split('\n');
+    if (lines.length < 2) return [];
+    
+    const headers = lines[0].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(h => h.replace(/^["']+|["']+$/g, '').trim());
+    const data = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+      const row = {};
+      headers.forEach((header, index) => {
+        let val = (cols[index] || '').replace(/^["']+|["']+$/g, '').trim();
+        if (header.toLowerCase() === 'nip' && val.startsWith("'")) {
+          val = val.substring(1);
+        }
+        row[header] = val;
+      });
+      data.push(row);
+    }
+    
+    return data.map(item => {
+      const tglBerangkatRaw = item['Tanggal Mulai'] || '-';
+      const tglPulangRaw = item['Tanggal Selesai'] || '-';
+      
+      const tglBerangkatStr = standardizeDate(tglBerangkatRaw);
+      const tglPulangStr = standardizeDate(tglPulangRaw);
+      
+      // Fallback for jumlah hari
+      let jmlHari = parseInt(item['Jumlah Hari Cuti'] || item['Jumlah Hari'] || 0, 10);
+      if (!jmlHari || isNaN(jmlHari) || jmlHari === 0) {
+          if (tglBerangkatStr !== '-' && tglPulangStr !== '-') {
+             jmlHari = hitungHariKerjaAktif(formatIndoToYMD(tglBerangkatStr), formatIndoToYMD(tglPulangStr));
+          }
+      }
+
+      return {
+        timestamp: item['Timestamp'] || '',
+        nip: item['NIP'] || '',
+        nama: item['Nama Pegawai'] || item['Nama'] || '',
+        tujuan: item['Jenis Cuti'] || '-', 
+        tanggalBerangkat: tglBerangkatStr,
+        tanggalPulang: tglPulangStr,
+        jumlahHari: jmlHari,
+        bulan: item['Bulan'] || '-',
+        tahun: item['Tahun'] || '-',
+        linkAkses: item['Link Arsip'] || '#'
+      };
+    });
+
+  } catch (err) {
+    console.error("Gagal menarik data Cuti CSV:", err);
+    return [];
+  }
 };
 
 const parseIndoDate = (dateString) => {
@@ -1652,7 +1767,7 @@ const ArsipRekapitulasiList = ({ modul }) => {
                                 >
                                   <div className="flex items-start gap-4">
                                     <div className="bg-[#084C61] text-white rounded-xl overflow-hidden shrink-0 shadow-sm border border-[#084C61]/20">
-                                      <div className="px-3 py-1 font-black text-sm text-center leading-none mt-1">{dateBadge}{ev.tanggalBerangkat !== ev.tanggalPulang ? `-${ev.tanggalPulang.split(' ')[0]}` : ''}</div>
+                                      <div className="px-3 py-1 font-black text-sm text-center leading-none mt-1">{dateBadge}{ev.tanggalBerangkat !== ev.tanggalPulang ? `-${ev.tanggalPulang.split(' ')[0] || ''}` : ''}</div>
                                       <div className="px-3 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase bg-black/20">{monthBadge}</div>
                                     </div>
                                     <div className="pt-0.5">
@@ -2421,10 +2536,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               <div className="mb-6 border-b border-gray-200">
                 <nav className="-mb-px flex gap-6">
                   <button onClick={() => setArsipSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    Sudah Dikumpulkan
+                    {activeTab === 'spt' ? 'Rekapitulasi SPT' : 'Rekapitulasi Cuti'}
                   </button>
                   <button onClick={() => setArsipSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    Simpanan Saya
+                    {activeTab === 'spt' ? 'Upload Dokumen SPT' : 'Upload Dokumen Cuti'}
                   </button>
                 </nav>
               </div>
