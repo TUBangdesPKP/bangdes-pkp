@@ -1,35 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  FileText, 
-  HelpCircle, 
-  MessageCircle, 
-  User, 
-  Trophy, 
-  ChevronRight, 
-  FileBarChart, 
-  ArrowLeft,
-  Search,
-  Briefcase,
-  CheckCircle2,
-  AlertCircle,
-  Calendar,
-  Clock,
-  LogOut,
-  FileCheck,
-  KeyRound,
-  RotateCcw,
-  UploadCloud,
-  FileSpreadsheet,
-  Trash2,
-  Users,
-  Edit3,
-  Save,
-  X,
-  Eye,
-  MapPin,
-  ChevronDown,
-  ChevronUp,
-  Plus
+  FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
+  FileBarChart, ArrowLeft, Search, Briefcase, CheckCircle2, AlertCircle, 
+  Calendar, Clock, LogOut, FileCheck, KeyRound, RotateCcw, UploadCloud, 
+  FileSpreadsheet, Trash2, Users, Edit3, Save, X, Eye, MapPin, 
+  ChevronDown, ChevronUp, Plus
 } from 'lucide-react';
 
 if (typeof window !== 'undefined') {
@@ -198,6 +173,10 @@ const fetchLiveSptData = async () => {
   }
 };
 
+const fetchLiveCutiData = async () => {
+  return [];
+};
+
 const parseIndoDate = (dateString) => {
   const parts = dateString.toString().split(' ');
   if (parts.length < 3) return new Date(0);
@@ -253,7 +232,6 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2026-06-16', '2026-08-17', '2026-08-25', '2026-12-24', '2026-12-25'
 ];
 
-// Fungsi untuk menghitung hari kerja dengan membuang Sabtu, Minggu, dan Libur Nasional
 const hitungHariKerjaAktif = (startStr, endStr) => {
   if (!startStr || !endStr) return 0;
   const start = new Date(startStr);
@@ -266,19 +244,16 @@ const hitungHariKerjaAktif = (startStr, endStr) => {
   
   while (current <= end) {
     const dayOfWeek = current.getDay();
-    // 0 = Minggu, 6 = Sabtu
     if (dayOfWeek !== 0 && dayOfWeek !== 6) { 
       const y = current.getFullYear();
       const m = String(current.getMonth() + 1).padStart(2, '0');
       const d = String(current.getDate()).padStart(2, '0');
       const ymd = `${y}-${m}-${d}`;
       
-      // Jika bukan hari libur nasional, hitung sebagai hari aktif
       if (!DAFTAR_LIBUR_NASIONAL.includes(ymd)) {
         count++;
       }
     }
-    // Lanjut ke hari berikutnya
     current.setDate(current.getDate() + 1);
   }
   return count;
@@ -342,10 +317,6 @@ const fetchValidCities = async () => {
   ];
 };
 
-const fetchLiveCutiData = async () => {
-  return [];
-};
-
 const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') => {
   const nipSet = new Set();
   let dateBerangkat = '-';
@@ -354,26 +325,65 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
   let rawTujuan = '';
 
   const IGNORED_NIPS = [
-    '197012151998032007', // Rini Dyah Mawarty
+    '197012151998032007', 
   ];
 
   if (modul === 'cuti') {
     let foundCutiNip = false;
-    for (let i = 0; i < lines.length; i++) {
-      const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
-      const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
-      const lineMatches = lineDigits.match(/(19\d{16}|20\d{16})/g) || [];
-      
-      for (const nipStr of lineMatches) {
-        if (!IGNORED_NIPS.includes(nipStr)) {
-          nipSet.add(nipStr);
-          foundCutiNip = true;
-          break;
+    const top30Lines = lines.slice(0, 30);
+    const top30Text = top30Lines.join(' ');
+    
+    /* TAHAP 1: Cari NIP presisi dari Database di 30 baris pertama (Mengatasi spasi terputus) */
+    if (dbPegawai && dbPegawai.length > 0) {
+      const top30Digits = top30Text.replace(/[Oo]/g, '0').replace(/[lI]/g, '1').replace(/[^0-9]/g, '');
+      for (const pegawai of dbPegawai) {
+        if (pegawai.NIP && pegawai.NIP.length >= 18 && top30Digits.includes(pegawai.NIP)) {
+          if (!IGNORED_NIPS.includes(pegawai.NIP)) {
+             nipSet.add(pegawai.NIP);
+             foundCutiNip = true;
+             break;
+          }
         }
       }
-      if (foundCutiNip) break;
     }
 
+    /* TAHAP 2: Cari Nama presisi tanpa spasi di 30 baris pertama (Kebal error OCR "B U D I") */
+    if (!foundCutiNip && dbPegawai && dbPegawai.length > 0) {
+      const top30Alpha = top30Text.toLowerCase().replace(/[^a-z]/g, '');
+      const sortedPegawai = [...dbPegawai].sort((a, b) => (b.Nama || '').length - (a.Nama || '').length);
+      for (const pegawai of sortedPegawai) {
+        if (!pegawai.Nama) continue;
+        const dbNameAlpha = pegawai.Nama.toLowerCase().replace(/[^a-z]/g, '');
+        // Syarat panjang nama min 6 huruf untuk menghindari false positive
+        if (dbNameAlpha.length > 5 && top30Alpha.includes(dbNameAlpha)) {
+           if (!IGNORED_NIPS.includes(pegawai.NIP)) {
+             nipSet.add(pegawai.NIP);
+             foundCutiNip = true;
+             break;
+           }
+        }
+      }
+    }
+
+    /* TAHAP 3: Fallback ke Regex 18 Digit Standar */
+    if (!foundCutiNip) {
+      for (let i = 0; i < lines.length; i++) {
+        const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
+        const lineDigits = lineWithOcrFixes.replace(/[^0-9]/g, '');
+        const lineMatches = lineDigits.match(/(19\d{16}|20\d{16})/g) || [];
+        
+        for (const nipStr of lineMatches) {
+          if (!IGNORED_NIPS.includes(nipStr)) {
+            nipSet.add(nipStr);
+            foundCutiNip = true;
+            break;
+          }
+        }
+        if (foundCutiNip) break;
+      }
+    }
+
+    /* TAHAP 4: Fallback ke Regex pola pencarian teks 'NAMA: ' */
     if (!foundCutiNip && dbPegawai && dbPegawai.length > 0) {
       let extractedName = null;
       for (let i = 0; i < Math.min(lines.length, 40); i++) {
@@ -394,20 +404,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
         if (matchedPegawai && matchedPegawai.NIP) {
           nipSet.add(matchedPegawai.NIP);
           foundCutiNip = true;
-        }
-      }
-
-      if (!foundCutiNip) {
-        const searchArea = lines.slice(0, 30).join(' ').toLowerCase();
-        const sortedPegawai = [...dbPegawai].sort((a, b) => (b.Nama || '').length - (a.Nama || '').length);
-        for (const pegawai of sortedPegawai) {
-          if (!pegawai.Nama) continue;
-          const dbName = pegawai.Nama.toLowerCase();
-          if (dbName.length > 5 && searchArea.includes(dbName)) {
-            nipSet.add(pegawai.NIP);
-            foundCutiNip = true;
-            break;
-          }
         }
       }
     }
@@ -559,6 +555,37 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
     }
   }
 
+  let detectedJenisCuti = '';
+  if (modul === 'cuti') {
+    const marks = '([vVxX✓✔])';
+    // Hanya mendeteksi mark (v, x, check) yang berada TEPAT DI SEBELAH KANAN dari teks jenis cuti
+    const cutiPatterns = [
+      { name: "Cuti Tahunan", regex: new RegExp(`(?:1\\.?\\s*)?CUTI\\s*TAHUNAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
+      { name: "Cuti Besar", regex: new RegExp(`(?:2\\.?\\s*)?CUTI\\s*BESAR[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
+      { name: "Cuti Sakit", regex: new RegExp(`(?:3\\.?\\s*)?CUTI\\s*SAKIT[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
+      { name: "Cuti Melahirkan", regex: new RegExp(`(?:4\\.?\\s*)?CUTI\\s*MELAHIRKAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
+      { name: "Cuti Karena Alasan Penting", regex: new RegExp(`(?:5\\.?\\s*)?(?:CUTI\\s*KARENA\\s*)?ALASAN\\s*PENTING[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
+      { name: "Cuti diluar Tanggungan Negara", regex: new RegExp(`(?:6\\.?\\s*)?CUTI\\s*DILUAR\\s*TANGGUNGAN\\s*NEGARA[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') }
+    ];
+
+    let jenisCutiBlock = '';
+    let inJenisCuti = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (/JENIS CUTI/i.test(lines[i])) inJenisCuti = true;
+      if (inJenisCuti) jenisCutiBlock += ' ' + lines[i];
+      if (/ALASAN CUTI|LAMANYA CUTI/i.test(lines[i])) break;
+    }
+    
+    let textToScan = jenisCutiBlock.length > 20 ? jenisCutiBlock : fullText;
+
+    for (const pattern of cutiPatterns) {
+      if (pattern.regex.test(textToScan)) {
+        detectedJenisCuti = pattern.name;
+        break;
+      }
+    }
+  }
+
   let finalTujuan = rawTujuan || '-';
 
   if (modul === 'spt' && finalTujuan !== '-') {
@@ -579,8 +606,12 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
     if (detectedCity) {
       finalTujuan = detectedCity;
     }
-  } else if (modul === 'cuti' && finalTujuan === '-') {
-    finalTujuan = 'Cuti / Alasan Lainnya';
+  } else if (modul === 'cuti') {
+    if (detectedJenisCuti) {
+      finalTujuan = detectedJenisCuti;
+    } else if (finalTujuan === '-') {
+      finalTujuan = 'Cuti / Alasan Lainnya';
+    }
   }
 
   if (!dbPegawai || dbPegawai.length === 0) {
@@ -751,8 +782,16 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   }
 
   if (activeTab === 'spt' || activeTab === 'cuti') {
-    const isSpt = activeTab === 'spt';
     const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab);
+    
+    let finalNames = arsipData.pegawaiList;
+    if (activeTab === 'cuti') {
+      const calculatedDays = hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang));
+      if (calculatedDays === 0 || arsipData.tujuan === 'Cuti / Alasan Lainnya') {
+        finalNames = finalNames.map(p => ({ ...p, selected: false }));
+      }
+    }
+
     return {
       isValid: true,
       isArsip: true,
@@ -760,10 +799,10 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       arsipDatePulang: arsipData.datePulang,
       arsipTanggalSurat: arsipData.tanggalSurat,
       arsipTujuan: arsipData.tujuan,
-      arsipNames: arsipData.pegawaiList,
+      arsipNames: finalNames,
       nip: '-',
       nama: 'Berbagai Pegawai',
-      periodeFolder: isSpt ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
+      periodeFolder: activeTab === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
       rows: [],
       expectedDays: 0,
       totalHariMasuk: 0
@@ -1714,10 +1753,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
   const [previewPdfName, setPreviewPdfName] = useState("");
 
-  // STATE UNTUK MANUAL UPLOAD
   const [isManualUpload, setIsManualUpload] = useState(false);
   const [manualEntries, setManualEntries] = useState([
-    { id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }
+    { id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }
   ]);
 
   useEffect(() => {
@@ -1780,9 +1818,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setEditingArsipId(null);
     setAddingPegawaiId(null);
     setEditingPegawaiData(null);
-    // Reset Manual Form State
     setIsManualUpload(false);
-    setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
+    setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
   };
 
   const handleClearFile = (idToClear = null) => {
@@ -2073,7 +2110,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
       setSubmitResult({ type: 'success', message: `Semua Arsip ${activeTab === 'spt' ? 'SPT' : 'Cuti'} berhasil disimpan!` });
       setTimeout(() => {
-         setArsipFiles([]); // Hapus list file setelah selesai supaya bisa langsung lanjut
+         setArsipFiles([]);
       }, 2000);
       
     } catch (err) {
@@ -2084,7 +2121,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const handleAddManualEntry = () => {
-    setManualEntries(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
+    setManualEntries(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
   };
 
   const handleManualEntryChange = (id, field, value) => {
@@ -2118,7 +2155,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
-  const isManualUploadValid = manualEntries.every(e => e.file && e.startDate && e.endDate && e.pegawai.length > 0);
+  const isManualUploadValid = manualEntries.every(e => e.file && e.startDate && e.endDate && e.tujuan && e.pegawai.length > 0);
 
   const handleUploadManualSubmit = async () => {
     if (!isManualUploadValid || isSubmitting) return;
@@ -2149,7 +2186,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           nip: p.nip,
           tanggalBerangkat: tglBerangkat,
           tanggalPulang: tglPulang,
-          tujuan: '-', // Manual Cuti/SPT tidak ada field tujuan, default ke '-'
+          tujuan: entry.tujuan || '-', 
           jumlahHariDinas: jumlahHari,
           bulan: bulan,
           tahun: tahun
@@ -2180,7 +2217,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setSubmitResult({ type: 'success', message: `Semua dokumen manual berhasil disimpan!` });
       setTimeout(() => {
         setIsManualUpload(false);
-        setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', searchQuery: '', pegawai: [] }]);
+        setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
         setSubmitResult(null);
       }, 2000);
 
@@ -2261,7 +2298,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       )}
 
-      {}
       <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
@@ -2310,7 +2346,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      {}
       <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
         <div className="w-full">
           {activeTab === 'rekap' ? (
@@ -2482,6 +2517,35 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   </div>
                                 </div>
                                 
+                                <div className="mb-3">
+                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">
+                                    {activeTab === 'spt' ? 'Tujuan / Lokasi' : 'Jenis Cuti'}
+                                  </label>
+                                  {activeTab === 'spt' ? (
+                                    <input 
+                                      type="text" 
+                                      placeholder="Masukkan tujuan dinas..."
+                                      value={entry.tujuan} 
+                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
+                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" 
+                                    />
+                                  ) : (
+                                    <select 
+                                      value={entry.tujuan} 
+                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
+                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700 cursor-pointer"
+                                    >
+                                      <option value="">Pilih Jenis Cuti...</option>
+                                      <option value="Cuti Tahunan">Cuti Tahunan</option>
+                                      <option value="Cuti Besar">Cuti Besar</option>
+                                      <option value="Cuti Sakit">Cuti Sakit</option>
+                                      <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+                                      <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
+                                      <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
+                                    </select>
+                                  )}
+                                </div>
+
                                 {/* Badge Ringkasan Jumlah Hari */}
                                 {entry.startDate && entry.endDate && (
                                     <div className="flex justify-end mb-3">
@@ -2632,8 +2696,20 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
                                         <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Keterangan'}:</label>
-                                          <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder={activeTab === 'spt' ? 'Tujuan Dinas' : 'Keterangan Cuti'} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
+                                          {activeTab === 'spt' ? (
+                                            <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder="Tujuan Dinas" className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          ) : (
+                                            <select value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500 cursor-pointer">
+                                              <option value="Cuti / Alasan Lainnya">Pilih Jenis Cuti...</option>
+                                              <option value="Cuti Tahunan">Cuti Tahunan</option>
+                                              <option value="Cuti Besar">Cuti Besar</option>
+                                              <option value="Cuti Sakit">Cuti Sakit</option>
+                                              <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+                                              <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
+                                              <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
+                                            </select>
+                                          )}
                                         </div>
                                         <div className="flex justify-end pt-2 gap-2">
                                           <button onClick={() => setEditingArsipId(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs shadow-sm transition-colors cursor-pointer">
@@ -2647,6 +2723,18 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                     ) : (
                                       <div className="flex justify-between items-start gap-4">
                                         <div className="space-y-1.5 pr-24">
+                                          {activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0 && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Data rentang cuti tidak valid (0 hari). Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
+                                          {activeTab === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya' && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Jenis Cuti belum sesuai. Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
                                           <div className="flex items-center gap-2">
                                             <Calendar size={16} className="text-[#114053] shrink-0" />
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
@@ -2658,7 +2746,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           </div>
                                           <div className="flex items-center gap-2 pl-[22px]">
                                             <MapPin size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{activeTab === 'spt' ? 'Tujuan' : 'Keterangan'}: {pd.arsipTujuan || '-'}</span>
+                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}: {pd.arsipTujuan || '-'}</span>
                                           </div>
                                         </div>
                                         <button onClick={() => {
@@ -2674,12 +2762,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar">
                                     {pd.arsipNames.map((pegawai, idx) => {
                                       const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
+                                      const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
+                                      const isInvalidCutiType = activeTab === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
+                                      const isErrorState = isZeroDays || isInvalidCutiType;
                                       
                                       return (
-                                        <div key={idx} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors group">
+                                        <div key={idx} className={`flex items-center gap-3 p-3 rounded-xl transition-colors border group ${isErrorState ? 'bg-red-50/30 border-red-100 hover:border-red-200' : 'hover:bg-gray-50 border-transparent hover:border-gray-200'}`}>
                                           <input 
                                             type="checkbox" 
                                             checked={pegawai.selected} 
+                                            disabled={isErrorState}
+                                            title={isErrorState ? "Ubah data cuti yang tidak valid agar dapat mencentang" : ""}
                                             onChange={(e) => {
                                               updateArsipFileData(fileObj.id, oldData => {
                                                 const newNames = [...oldData.arsipNames];
@@ -2688,7 +2781,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                               });
                                               setSubmitResult(null);
                                             }}
-                                            className="w-4 h-4 text-teal-600 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 cursor-pointer"
+                                            className={`w-4 h-4 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 ${isErrorState ? 'cursor-not-allowed opacity-50' : 'text-teal-600 cursor-pointer'}`}
                                           />
                                           
                                           {isEditingThisPegawai ? (
@@ -2722,10 +2815,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           ) : (
                                             <div className="flex-1 overflow-hidden pr-2">
                                               <div className="flex items-center gap-2 flex-wrap">
-                                                <span className="font-extrabold text-sm text-gray-900 truncate">{pegawai.nama}</span>
-                                                <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
+                                                <span className={`font-extrabold text-sm truncate ${isErrorState ? 'text-red-800 line-through' : 'text-gray-900'}`}>{pegawai.nama}</span>
+                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0 ${isErrorState ? 'text-red-700 bg-red-100' : 'text-emerald-700 bg-emerald-100'}`}><CheckCircle2 size={10}/> 100%</span>
                                               </div>
-                                              <div className="text-[10px] text-gray-500 font-mono mt-0.5">{pegawai.nip}</div>
+                                              <div className={`text-[10px] font-mono mt-0.5 ${isErrorState ? 'text-red-500' : 'text-gray-500'}`}>{pegawai.nip}</div>
                                             </div>
                                           )}
 
@@ -2760,7 +2853,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                               <div key={idx} onClick={() => {
                                                 updateArsipFileData(fileObj.id, oldData => {
                                                   if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
-                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: true }] };
+                                                    const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
+                                                    const isInvalidCutiType = activeTab === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
+                                                    const isErrorState = isZeroDays || isInvalidCutiType;
+                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !isErrorState }] };
                                                   }
                                                   return oldData;
                                                 });
