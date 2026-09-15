@@ -258,8 +258,8 @@ const fetchLiveCutiData = async () => {
     }
     
     return data.map(item => {
-      const tglBerangkatRaw = item['Tanggal Mulai'] || '-';
-      const tglPulangRaw = item['Tanggal Selesai'] || '-';
+      const tglBerangkatRaw = item['Tanggal Awal'] || item['Tanggal Mulai'] || item['Tanggal Berangkat'] || item['Mulai'] || '-';
+      const tglPulangRaw = item['Tanggal Akhir'] || item['Tanggal Selesai'] || item['Tanggal Pulang'] || item['Selesai'] || '-';
       
       const tglBerangkatStr = standardizeDate(tglBerangkatRaw);
       const tglPulangStr = standardizeDate(tglPulangRaw);
@@ -372,6 +372,16 @@ const hitungHariKerjaAktif = (startStr, endStr) => {
     current.setDate(current.getDate() + 1);
   }
   return count;
+};
+
+const removeTitlesFromName = (fullName) => {
+  if (!fullName) return '';
+  // Pola regex untuk menghapus gelar umum di depan dan belakang nama
+  // Mengabaikan koma dan titik yang berhubungan dengan gelar
+  return fullName
+    .replace(/^(Dr\.|Drs\.|Dra\.|Ir\.|Prof\.|H\.|Hj\.)\s*/gi, '') // Gelar depan
+    .replace(/,\s*(S\.T\.|S\.E\.|S\.H\.|S\.Kom\.|S\.Sos\.|S\.Pd\.|M\.T\.|M\.M\.|M\.Si\.|M\.Pd\.|Ph\.D\.|B\.Sc\.|M\.Sc\.|A\.Md\.|M\.A\.).*$/gi, '') // Gelar belakang setelah koma
+    .trim();
 };
 
 const fetchValidCities = async () => {
@@ -1524,7 +1534,7 @@ const ArsipRekapitulasiList = ({ modul }) => {
   const isSpt = modul === 'spt';
   const labelTujuan = isSpt ? 'kota tujuan' : 'keterangan cuti';
   const labelSatuan = isSpt ? 'SPT' : 'Cuti';
-  const labelHari = isSpt ? 'dinas' : 'cuti';
+  const labelHari = isSpt ? 'hari dinas' : 'hari cuti';
   
   const [sptDataList, setSptDataList] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -1591,6 +1601,7 @@ const ArsipRekapitulasiList = ({ modul }) => {
             tujuan: item.tujuan,
             jumlahHari: item.jumlahHari,
             linkAkses: item.linkAkses,
+            bulan: item.bulan,
             pegawai: []
           };
         }
@@ -1731,9 +1742,11 @@ const ArsipRekapitulasiList = ({ modul }) => {
                           <h4 className="font-extrabold text-sm flex items-center gap-2">
                             {group.month} <span className={isExpanded ? "text-teal-200/80 font-medium" : "text-gray-400 font-medium"}>{group.year}</span>
                           </h4>
-                          <p className={`text-[11px] truncate max-w-xs sm:max-w-md ${isExpanded ? 'text-teal-100' : 'text-gray-500'}`}>
-                            {group.cities.slice(0, 3).join(' • ')} {group.cities.length > 3 ? `+${group.cities.length - 3} lagi` : ''}
-                          </p>
+                          {isSpt && (
+                            <p className={`text-[11px] truncate max-w-xs sm:max-w-md ${isExpanded ? 'text-teal-100' : 'text-gray-500'}`}>
+                              {group.cities.slice(0, 3).join(' • ')} {group.cities.length > 3 ? `+${group.cities.length - 3} lagi` : ''}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -1753,11 +1766,24 @@ const ArsipRekapitulasiList = ({ modul }) => {
                             const isEvExpanded = expandedEvent === eKey;
                             
                             const partsBerangkat = ev.tanggalBerangkat.split(' ');
-                            const dateBadge = partsBerangkat[0] || '00';
-                            const monthBadge = partsBerangkat[1] ? partsBerangkat[1].substring(0, 3).toUpperCase() : 'MTH';
+                            const partsPulang = ev.tanggalPulang.split(' ');
+                            
+                            const dateBadgeStart = ev.tanggalBerangkat === '-' ? '-' : (partsBerangkat[0] || '00');
+                            const dateBadgeEnd = ev.tanggalPulang === '-' ? '' : (partsPulang[0] || '');
+                            
+                            const monthBadge = ev.tanggalBerangkat !== '-' && partsBerangkat[1] 
+                                             ? partsBerangkat[1].substring(0, 3).toUpperCase() 
+                                             : (ev.bulan && ev.bulan !== '-' ? ev.bulan.substring(0, 3).toUpperCase() : 'MTH');
 
                             let shortTglBerangkatPulang = `${ev.tanggalBerangkat.split(' ').slice(0, 2).join(' ')} - ${ev.tanggalPulang}`;
                             if (ev.tanggalBerangkat === ev.tanggalPulang) shortTglBerangkatPulang = ev.tanggalBerangkat;
+                            if (ev.tanggalBerangkat === '-' && ev.tanggalPulang === '-') shortTglBerangkatPulang = `Bulan ${ev.bulan} ${ev.tahun}`;
+
+                            let eventTitle = ev.tujuan;
+                            if (modul === 'cuti' && ev.pegawai.length > 0) {
+                              const pegawaiNames = ev.pegawai.map(p => removeTitlesFromName(p.nama)).join(', ');
+                              eventTitle = `${pegawaiNames} - ${ev.tujuan}`;
+                            }
 
                             return (
                               <div key={evIdx} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-[#084C61] transition-colors">
@@ -1766,14 +1792,16 @@ const ArsipRekapitulasiList = ({ modul }) => {
                                   className="px-4 py-3 flex items-center justify-between cursor-pointer"
                                 >
                                   <div className="flex items-start gap-4">
-                                    <div className="bg-[#084C61] text-white rounded-xl overflow-hidden shrink-0 shadow-sm border border-[#084C61]/20">
-                                      <div className="px-3 py-1 font-black text-sm text-center leading-none mt-1">{dateBadge}{ev.tanggalBerangkat !== ev.tanggalPulang ? `-${ev.tanggalPulang.split(' ')[0] || ''}` : ''}</div>
-                                      <div className="px-3 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase bg-black/20">{monthBadge}</div>
+                                    <div className="bg-[#084C61] text-white rounded-xl overflow-hidden shrink-0 shadow-sm border border-[#084C61]/20 min-w-[48px]">
+                                      <div className="px-2 py-1 font-black text-sm text-center leading-none mt-1">
+                                          {dateBadgeStart}{dateBadgeEnd && dateBadgeStart !== dateBadgeEnd ? `-${dateBadgeEnd}` : ''}
+                                      </div>
+                                      <div className="px-2 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase bg-black/20">{monthBadge}</div>
                                     </div>
                                     <div className="pt-0.5">
                                       <div className="flex items-center gap-1.5 mb-1">
                                         <MapPin size={14} className="text-gray-400 shrink-0" />
-                                        <span className="font-extrabold text-sm text-gray-900 leading-none">{ev.tujuan}</span>
+                                        <span className="font-extrabold text-sm text-gray-900 leading-none">{eventTitle}</span>
                                       </div>
                                       <div className="text-[11px] text-gray-500 font-medium">
                                         {ev.jumlahHari} {labelHari} • Arsip Surat {labelSatuan} {group.month} {group.year}
@@ -3644,7 +3672,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </main>
       
-      {}
+      {/* Scrollbar styling */}
       <style dangerouslySetInnerHTML={{__html: `
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
