@@ -2024,7 +2024,18 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
-      const json = await res.json();
+      
+      const responseText = await res.text();
+      let json;
+      try {
+        json = JSON.parse(responseText);
+      } catch (e) {
+        console.error("Non-JSON Response dari Google:", responseText);
+        let errMsg = responseText.includes('<html') 
+          ? 'Google Apps Script mengembalikan halaman HTML. Pastikan Anda telah melakukan Deploy "New Version" dan mengatur Akses ke "Anyone".' 
+          : responseText.substring(0, 100);
+        throw new Error('Server mengembalikan data yang tidak valid: ' + errMsg);
+      }
 
       if (json.status === 'success') {
         const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
@@ -2102,7 +2113,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(payload)
         });
-        const json = await res.json();
+        
+        const responseText = await res.text();
+        let json;
+        try {
+          json = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Non-JSON Response dari Google:", responseText);
+          let errMsg = responseText.includes('<html') 
+            ? 'Google Apps Script mengembalikan halaman HTML. Pastikan Anda telah melakukan Deploy "New Version" dan mengatur Akses ke "Anyone".' 
+            : responseText.substring(0, 100);
+          throw new Error('Server mengembalikan data yang tidak valid: ' + errMsg);
+        }
+        
         if (json.status !== 'success') throw new Error(json.message);
       }
 
@@ -2208,7 +2231,19 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(payload)
         });
-        const json = await res.json();
+        
+        const responseText = await res.text();
+        let json;
+        try {
+          json = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Non-JSON Response dari Google:", responseText);
+          let errMsg = responseText.includes('<html') 
+            ? 'Google Apps Script mengembalikan halaman HTML. Pastikan Anda telah melakukan Deploy "New Version" dan mengatur Akses ke "Anyone".' 
+            : responseText.substring(0, 100);
+          throw new Error('Server mengembalikan data yang tidak valid: ' + errMsg);
+        }
+        
         if (json.status !== 'success') throw new Error(json.message);
       }
 
