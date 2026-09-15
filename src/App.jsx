@@ -354,7 +354,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
       for (const pegawai of sortedPegawai) {
         if (!pegawai.Nama) continue;
         const dbNameAlpha = pegawai.Nama.toLowerCase().replace(/[^a-z]/g, '');
-        // Syarat panjang nama min 6 huruf untuk menghindari false positive
         if (dbNameAlpha.length > 5 && top30Alpha.includes(dbNameAlpha)) {
            if (!IGNORED_NIPS.includes(pegawai.NIP)) {
              nipSet.add(pegawai.NIP);
@@ -558,7 +557,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
   let detectedJenisCuti = '';
   if (modul === 'cuti') {
     const marks = '([vVxX✓✔])';
-    // Hanya mendeteksi mark (v, x, check) yang berada TEPAT DI SEBELAH KANAN dari teks jenis cuti
     const cutiPatterns = [
       { name: "Cuti Tahunan", regex: new RegExp(`(?:1\\.?\\s*)?CUTI\\s*TAHUNAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
       { name: "Cuti Besar", regex: new RegExp(`(?:2\\.?\\s*)?CUTI\\s*BESAR[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
@@ -2396,7 +2394,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </nav>
               </div>
 
-              {}
               {arsipSubTab === 'terdata' ? (
                 <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
@@ -2691,10 +2688,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                           <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
                                           <input type="date" value={formatIndoToYMD(editArsipForm.pulang)} onChange={(e) => setEditArsipForm({...editArsipForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">Tgl Surat:</label>
-                                          <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                                        </div>
+                                        {activeTab !== 'cuti' && (
+                                          <div className="flex items-center gap-3">
+                                            <label className="w-20 text-xs font-bold text-[#114053]">Tgl Surat:</label>
+                                            <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          </div>
+                                        )}
                                         <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
                                           {activeTab === 'spt' ? (
@@ -2740,10 +2739,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
                                             <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
                                           </div>
-                                          <div className="flex items-center gap-2 pl-[22px]">
-                                            <FileText size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium">Tgl Surat: {pd.arsipTanggalSurat}</span>
-                                          </div>
+                                          {activeTab !== 'cuti' && (
+                                            <div className="flex items-center gap-2 pl-[22px]">
+                                              <FileText size={12} className="text-gray-400 shrink-0" />
+                                              <span className="text-[11px] text-gray-600 font-medium">Tgl Surat: {pd.arsipTanggalSurat}</span>
+                                            </div>
+                                          )}
                                           <div className="flex items-center gap-2 pl-[22px]">
                                             <MapPin size={12} className="text-gray-400 shrink-0" />
                                             <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}: {pd.arsipTujuan || '-'}</span>
