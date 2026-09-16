@@ -1665,32 +1665,44 @@ const ArsipRekapitulasiList = ({ modul }) => {
   }
 
   return (
-    <div>
-      <div className="flex flex-col sm:flex-row gap-3 mb-6 relative z-10">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+    <div className="pt-4">
+      {/* Kolom Pencarian dan Filter Terpadu (Unified Bar) */}
+      <div className="flex flex-col md:flex-row items-center gap-3 mb-8 relative z-10 bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
+        <div className="relative flex-1 w-full flex items-center">
+          <Search size={16} className="absolute left-3 text-gray-400" />
           <input 
             type="text" 
-            placeholder={`Cari ${labelTujuan} atau nama pegawai...`}
+            placeholder={`Cari ${labelTujuan} atau kegiatan...`}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold focus:outline-none focus:border-[#084C61] shadow-sm" 
+            className="w-full pl-9 pr-4 py-2 bg-transparent text-sm font-medium focus:outline-none text-gray-700" 
           />
         </div>
-        <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl p-1 shadow-sm shrink-0 overflow-x-auto custom-scrollbar">
+        
+        <div className="h-6 w-px bg-gray-200 hidden md:block"></div>
+        
+        <div className="flex items-center gap-1.5 w-full md:w-auto shrink-0 overflow-x-auto custom-scrollbar pr-1">
           <button
             onClick={() => loadData(true)}
             disabled={isRefreshing}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${isRefreshing ? 'bg-gray-100 text-gray-400' : 'text-gray-600 hover:bg-gray-100 hover:text-[#084C61]'}`}
+            className={`p-2 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center ${isRefreshing ? 'text-gray-300' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800'}`}
             title="Tarik ulang data terbaru"
           >
-            <RotateCcw size={14} className={isRefreshing ? "animate-spin" : ""} />
-            {isRefreshing ? 'Memuat...' : 'Refresh'}
+            <RotateCcw size={16} className={isRefreshing ? "animate-spin" : ""} />
           </button>
+          <button 
+            onClick={toggleAllMonths}
+            className="p-2 rounded-lg text-xs font-bold transition-colors cursor-pointer text-gray-500 hover:bg-gray-100 flex items-center justify-center"
+            title={expandedMonth !== '' ? 'Tutup Semua' : 'Buka Semua'}
+          >
+            {expandedMonth !== '' ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          </button>
+          
           <div className="w-px h-5 bg-gray-200 mx-1"></div>
+          
           <button 
             onClick={() => setFilterYear('Semua')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === 'Semua' ? 'bg-[#084C61] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === 'Semua' ? 'bg-[#1E3A5F] text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
           >
             Semua
           </button>
@@ -1698,24 +1710,18 @@ const ArsipRekapitulasiList = ({ modul }) => {
             <button 
               key={year}
               onClick={() => setFilterYear(year)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === year ? 'bg-[#084C61] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${filterYear === year ? 'bg-[#1E3A5F] text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
             >
               {year}
             </button>
           ))}
-          <div className="w-px h-5 bg-gray-200 mx-1"></div>
-          <button 
-            onClick={toggleAllMonths}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-gray-600 hover:bg-gray-100 flex items-center gap-1 whitespace-nowrap"
-          >
-            {expandedMonth !== '' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            {expandedMonth !== '' ? 'Tutup Semua' : 'Buka Semua'}
-          </button>
         </div>
       </div>
 
-      <div className="relative pl-6">
-        <div className="absolute left-[11px] top-4 bottom-8 w-px bg-gray-300 z-0"></div>
+      {/* List Arsip dengan Style Timeline */}
+      <div className="relative pl-6 sm:pl-10">
+        <div className="absolute left-[11px] sm:left-[19px] top-4 bottom-8 w-[2px] bg-gray-200 z-0"></div>
+        
         <div className="space-y-4">
           {filteredAndGroupedData.length === 0 ? (
             <div className="p-8 text-center text-gray-500 bg-white rounded-2xl border border-gray-200 shadow-xs relative z-10">
@@ -1726,40 +1732,43 @@ const ArsipRekapitulasiList = ({ modul }) => {
               const isExpanded = expandedMonth === group.id;
               
               return (
-                <div key={group.id} className="relative z-10">
-                  <div className={`absolute -left-6 top-5 w-3 h-3 rounded-full border-2 bg-white transition-colors ${isExpanded ? 'border-[#084C61] shadow-[0_0_0_4px_rgba(8,76,97,0.1)]' : 'border-gray-400'}`}></div>
+                <div key={group.id} className="relative z-10 group">
+                  {/* Dot Timeline */}
+                  <div className={`absolute -left-6 sm:-left-10 top-5 w-[14px] h-[14px] rounded-full border-[3px] bg-white transition-colors z-20 ${isExpanded ? 'border-[#1E3A5F] ring-4 ring-[#1E3A5F]/10' : 'border-gray-300'}`}></div>
                   
+                  {/* Kartu Bulan */}
                   <div 
                     onClick={() => toggleMonth(group.id)}
-                    className={`rounded-2xl border transition-all cursor-pointer shadow-xs overflow-hidden ${isExpanded ? 'bg-[#084C61] border-[#084C61] text-white' : 'bg-white border-gray-200 text-gray-800 hover:border-[#084C61]'}`}
+                    className={`rounded-xl border transition-all cursor-pointer shadow-sm overflow-hidden ${isExpanded ? 'bg-[#1C3A53] border-[#1C3A53] text-white' : 'bg-white border-gray-200 text-gray-800 hover:border-gray-300'}`}
                   >
                     <div className="px-5 py-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-xl ${isExpanded ? 'bg-white/10 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                      <div className="flex items-center gap-4">
+                        <div className={`p-2.5 rounded-lg ${isExpanded ? 'bg-white/10 text-white border border-white/20' : 'bg-gray-50 text-gray-500 border border-gray-200'}`}>
                           <Calendar size={18} />
                         </div>
                         <div>
-                          <h4 className="font-extrabold text-sm flex items-center gap-2">
-                            {group.month} <span className={isExpanded ? "text-teal-200/80 font-medium" : "text-gray-400 font-medium"}>{group.year}</span>
+                          <h4 className="font-extrabold text-sm flex items-center gap-1.5">
+                            {group.month} <span className={isExpanded ? "text-blue-200/80 font-medium" : "text-gray-400 font-medium"}>{group.year}</span>
                           </h4>
                           {isSpt && (
-                            <p className={`text-[11px] truncate max-w-xs sm:max-w-md ${isExpanded ? 'text-teal-100' : 'text-gray-500'}`}>
+                            <p className={`text-[11px] truncate max-w-[200px] sm:max-w-md ${isExpanded ? 'text-blue-100/80' : 'text-gray-500'}`}>
                               {group.cities.slice(0, 3).join(' • ')} {group.cities.length > 3 ? `+${group.cities.length - 3} lagi` : ''}
                             </p>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-4">
                         <div className="flex gap-2">
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-700'}`}>{group.totalSpt} {labelSatuan}</span>
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-amber-50 text-amber-700'}`}>{group.totalHari} {labelHari}</span>
+                          <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-700'}`}>{group.totalSpt} {labelSatuan}</span>
+                          <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold ${isExpanded ? 'bg-white/20 text-white' : 'bg-amber-50 text-amber-700'}`}>{group.totalHari} {labelHari}</span>
                         </div>
-                        {isExpanded ? <ChevronUp size={18} className="opacity-80" /> : <ChevronDown size={18} className="opacity-50" />}
+                        {isExpanded ? <ChevronUp size={18} className="opacity-80 hidden sm:block" /> : <ChevronDown size={18} className="opacity-50 hidden sm:block" />}
                       </div>
                     </div>
 
+                    {/* Isi Kartu Bulan (Expanded) */}
                     {isExpanded && (
-                      <div className="bg-white text-gray-800 border-t border-gray-100">
+                      <div className="bg-white text-gray-800 border-t border-[#1C3A53]">
                         <div className="p-3 space-y-2">
                           {group.events.map((ev, evIdx) => {
                             const eKey = `${group.id}-${evIdx}`;
@@ -1786,17 +1795,17 @@ const ArsipRekapitulasiList = ({ modul }) => {
                             }
 
                             return (
-                              <div key={evIdx} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-[#084C61] transition-colors">
+                              <div key={evIdx} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-[#1C3A53] transition-colors">
                                 <div 
                                   onClick={(e) => toggleEvent(eKey, e)}
                                   className="px-4 py-3 flex items-center justify-between cursor-pointer"
                                 >
                                   <div className="flex items-start gap-4">
-                                    <div className="bg-[#084C61] text-white rounded-xl overflow-hidden shrink-0 shadow-sm border border-[#084C61]/20 min-w-[48px]">
-                                      <div className="px-2 py-1 font-black text-sm text-center leading-none mt-1">
+                                    <div className="bg-white text-[#1C3A53] rounded-lg overflow-hidden shrink-0 border border-gray-200 min-w-[50px] shadow-sm flex flex-col">
+                                      <div className="px-2 pt-1.5 pb-0.5 font-black text-sm text-center leading-none">
                                           {dateBadgeStart}{dateBadgeEnd && dateBadgeStart !== dateBadgeEnd ? `-${dateBadgeEnd}` : ''}
                                       </div>
-                                      <div className="px-2 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase bg-black/20">{monthBadge}</div>
+                                      <div className="px-2 py-0.5 text-[9px] font-bold tracking-widest text-center uppercase text-gray-500">{monthBadge}</div>
                                     </div>
                                     <div className="pt-0.5">
                                       <div className="flex items-center gap-1.5 mb-1">
@@ -1817,27 +1826,27 @@ const ArsipRekapitulasiList = ({ modul }) => {
                                 </div>
 
                                 {isEvExpanded && (
-                                  <div className="bg-[#F8FAFC] border-t border-gray-100 p-4 pl-[72px]">
-                                    <div className="flex items-center gap-2 mb-3 text-[10px] font-extrabold text-[#084C61] uppercase tracking-wider">
+                                  <div className="bg-[#F8FAFC] border-t border-gray-100 p-4 pl-[80px]">
+                                    <div className="flex items-center gap-2 mb-3 text-[10px] font-extrabold text-[#1C3A53] uppercase tracking-wider">
                                       <Calendar size={12} />
                                       {shortTglBerangkatPulang.toUpperCase()} • DIUNGGAH OLEH
                                     </div>
-                                    <div className="space-y-2 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-[#CDE5F1]">
+                                    <div className="space-y-2 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-gray-300">
                                       {ev.pegawai.map((peg, pIdx) => (
                                         <div key={pIdx} className="flex items-center justify-between pl-6 relative">
-                                          <div className="absolute left-2.5 top-1.5 w-1.5 h-1.5 rounded-full bg-[#084C61]"></div>
+                                          <div className="absolute left-2.5 top-1.5 w-1.5 h-1.5 rounded-full bg-[#1C3A53]"></div>
                                           <div>
-                                            <div className="text-[13px] font-extrabold text-[#084C61] leading-tight">{peg.nama}</div>
-                                            <div className="text-[10px] font-medium text-teal-600/70 font-mono mt-0.5">{peg.nip}</div>
+                                            <div className="text-[13px] font-extrabold text-gray-800 leading-tight">{peg.nama}</div>
+                                            <div className="text-[10px] font-medium text-gray-500 font-mono mt-0.5">{peg.nip}</div>
                                           </div>
                                           <a 
                                             href={ev.linkAkses} 
                                             target="_blank" 
                                             rel="noreferrer"
                                             onClick={(e) => e.stopPropagation()}
-                                            className="px-3 py-1.5 bg-[#084C61] hover:bg-[#0E5B73] text-white rounded-lg text-[10px] font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                                            className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg text-[10px] font-bold shadow-sm transition-colors flex items-center gap-1.5"
                                           >
-                                            <FileText size={12} /> Lihat
+                                            <FileText size={12} className="text-[#1C3A53]" /> Lihat
                                           </a>
                                         </div>
                                       ))}
@@ -1864,6 +1873,21 @@ const ArsipRekapitulasiList = ({ modul }) => {
 const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   
+  const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pkp_period_status');
+      return saved ? JSON.parse(saved) : {};
+    } catch(e) { return {}; }
+  });
+  
+  const togglePeriodStatus = (periodId, currentStatus, e) => {
+    e.stopPropagation();
+    const newStatus = currentStatus === 'DIBUKA' ? 'DITUTUP' : 'DIBUKA';
+    const newOverrides = { ...periodStatusOverrides, [periodId]: newStatus };
+    setPeriodStatusOverrides(newOverrides);
+    localStorage.setItem('pkp_period_status', JSON.stringify(newOverrides));
+  };
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
@@ -2404,7 +2428,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }
   };
 
-  const currentPeriodList = PERIOD_EVENTS[activeTab] || [];
+  const PERIOD_EVENTS_DATA = PERIOD_EVENTS[activeTab] || [];
+  const currentPeriodList = useMemo(() => {
+    return PERIOD_EVENTS_DATA.map(p => ({
+      ...p,
+      status: periodStatusOverrides[p.id] !== undefined ? periodStatusOverrides[p.id] : p.status
+    }));
+  }, [PERIOD_EVENTS_DATA, periodStatusOverrides]);
+
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
   const arsipSuccessfulFiles = arsipFiles.filter(f => f.status === 'success');
@@ -2533,41 +2564,38 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             </div>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div>
-              <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)]">
-                <div 
-                  className="rounded-3xl p-6 sm:p-8 text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
-                  style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
-                >
-                  <div className="space-y-2">
-                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">{activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Arsip Surat Cuti'}</h2>
-                    <div className="text-sm font-medium text-teal-100/90 tracking-wide">
-                      Direktorat Pembangunan Perumahan Perdesaan
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                    <div className="text-right flex-1">
-                      <p className="text-xs text-gray-200 leading-snug font-medium">
-                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload arsipnya!
-                      </p>
-                      <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
-                    </div>
-                    {loggedInUser?.Foto_Pegawai ? (
-                      <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
-                        {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
-                      </div>
-                    )}
-                  </div>
+              <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 shadow-sm">
+                {/* Header Baru Minimalis */}
+                <div className="mb-6 pl-2">
+                  <h2 className="text-2xl sm:text-3xl font-black text-gray-900 leading-tight mb-1.5">
+                    {activeTab === 'spt' ? 'Arsip SPT' : 'Arsip Cuti'}
+                  </h2>
+                  <p className="text-sm text-gray-500 font-medium">
+                    {activeTab === 'spt' 
+                      ? 'Arsip Surat Perintah Tugas perjalanan dinas Anda' 
+                      : 'Arsip Surat Cuti dan keterangan ketidakhadiran Anda'}
+                  </p>
                 </div>
 
-                <div className="border-b border-gray-200 flex">
-                  <nav className="-mb-px flex gap-6">
-                    <button onClick={() => setArsipSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                      {activeTab === 'spt' ? 'Rekapitulasi SPT' : 'Rekapitulasi Cuti'}
+                <div className="border-b border-gray-200 flex overflow-x-auto custom-scrollbar pl-2">
+                  <nav className="-mb-px flex gap-8">
+                    <button 
+                      onClick={() => setArsipSubTab('terdata')} 
+                      className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'terdata' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Sudah Dikumpulkan
                     </button>
-                    <button onClick={() => setArsipSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                      {activeTab === 'spt' ? 'Upload Dokumen SPT' : 'Upload Dokumen Cuti'}
+                    <button 
+                      onClick={() => setArsipSubTab('simpanan')} 
+                      className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'simpanan' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Simpanan Saya
+                    </button>
+                    <button 
+                      className="py-3 border-b-2 border-transparent font-bold text-sm text-gray-400 cursor-not-allowed whitespace-nowrap"
+                      title="Fitur dalam pengembangan"
+                    >
+                      Laporan Perjadin
                     </button>
                   </nav>
                 </div>
@@ -2591,7 +2619,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen memuat kata "{activeTab === 'spt' ? 'Surat Tugas' : 'Cuti'}" dengan nama, NIP, tanggal, dan {activeTab === 'spt' ? 'tujuan' : 'keterangan'} yang jelas.
                       </div>
                       
-                      {/* FILE INPUT */}
                       <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
                         <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
                           <UploadCloud size={24} />
@@ -2603,7 +2630,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                         <input id="pdf-upload-input" type="file" accept=".pdf" multiple onChange={handleFileChange} className="hidden" />
                       </label>
 
-                      {/* SELECTED FILES & ACTIONS */}
                       <div className="space-y-4">
                         <div>
                           <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({arsipFiles.length}/10):</h4>
@@ -2646,7 +2672,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           )}
                         </button>
 
-                        {/* TOGGLE UPLOAD MANUAL */}
                         <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between mt-6">
                           <div className="flex items-start gap-3">
                             <FileText size={18} className="text-[#084C61] mt-0.5" />
@@ -2662,7 +2687,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </div>
                         </div>
 
-                        {/* FORM UPLOAD MANUAL (MUNCUL JIKA TOGGLE AKTIF) */}
                         {isManualUpload && (
                           <div className="mt-4 space-y-4">
                             {manualEntries.map((entry, index) => (
@@ -2722,7 +2746,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                   )}
                                 </div>
 
-                                {/* Badge Ringkasan Jumlah Hari */}
                                 {entry.startDate && entry.endDate && (
                                     <div className="flex justify-end mb-3">
                                         <span className="text-[10px] font-bold text-[#0E5B73] bg-[#EAF5FA] px-2.5 py-1 rounded-md border border-[#CDE5F1]">
@@ -2734,7 +2757,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                 <div className="relative">
                                   <label className="block text-[10px] text-gray-500 mb-1 font-medium">Pegawai</label>
                                   
-                                  {/* Daftar Pegawai Terpilih dengan Style Baru (Tanpa Checkbox, Ada Ikon Edit & Hapus) */}
                                   <div className="mt-2 mb-3 space-y-2">
                                     {entry.pegawai.map((p, i) => {
                                       const isEditingThisManualPegawai = editingPegawaiData && editingPegawaiData.entryId === entry.id && editingPegawaiData.idx === i;
@@ -2783,7 +2805,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                 <div className="text-[10px] text-gray-500 font-mono">{p.nip}</div>
                                               </div>
                                               
-                                              {/* Aksi Edit dan Hapus hanya muncul jika di-hover */}
                                               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                                                 <button onClick={() => { setEditingPegawaiData({ entryId: entry.id, idx: i }); setInlineSearchQuery(p.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"><Edit3 size={14} /></button>
                                                 <button onClick={() => handleRemovePegawaiManual(entry.id, p.nip)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"><Trash2 size={14} /></button>
@@ -2795,7 +2816,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                     })}
                                   </div>
 
-                                  {/* Kolom Pencarian Tambah Pegawai Baru */}
                                   <div className="relative flex items-center mt-2">
                                     <Search size={14} className="absolute left-3 text-gray-400" />
                                     <input type="text" placeholder="+ Tambah Pegawai (Ketik Nama/NIP)..." value={entry.searchQuery} onChange={e => handleManualEntryChange(entry.id, 'searchQuery', e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-dashed border-[#CDE5F1] rounded-xl text-xs outline-none focus:border-[#0E5B73] focus:border-solid text-gray-700 bg-[#F8FBFD] hover:bg-[#EAF5FA] transition-colors" />
@@ -2832,7 +2852,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </div>
                   </div>
 
-                  {/* KOLOM KANAN: RINCIAN ARSIP */}
                   <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
                     <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
                       {arsipSuccessfulFiles.length === 0 ? (
@@ -3177,53 +3196,81 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
                 <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentPeriodList.map((period) => {
-                  const isSelected = selectedPeriod?.id === period.id;
-                    const isClosed = period.status === 'DITUTUP';
-                    return (
-                      <div 
-                        key={period.id}
-                        onClick={() => {
-                          if (isClosed) return;
-                          if (selectedPeriod?.id !== period.id) {
-                            setSelectedPeriod(period);
-                            resetUploadState();
-                          }
-                          navigate(currentView, 2);
-                        }}
-                        className={`group rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 ${isClosed ? 'bg-gray-50 opacity-60 cursor-not-allowed border-gray-200' : 'bg-white cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61]'} ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
-                      >
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${isClosed ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                              {!isClosed && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
-                              {isClosed && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
-                              {period.status}
-                            </span>
-                            {isSelected && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                <CheckCircle2 size={10} /> Dipilih
+                  {currentPeriodList.filter(p => loggedInUser?.Akun_Role === 'admin' || p.status !== 'DITUTUP').length === 0 ? (
+                    <div className="text-center py-20 bg-white rounded-3xl border border-gray-200 shadow-sm p-8">
+                      <Calendar size={48} className="mx-auto mb-4 text-gray-300" />
+                      <h3 className="text-xl font-black text-gray-800 mb-2">Belum Ada Periode Dibuka</h3>
+                      <p className="text-sm text-gray-500">Saat ini tidak ada periode pengumpulan yang sedang dibuka untuk Anda.</p>
+                    </div>
+                  ) : (
+                    currentPeriodList
+                      .filter((period) => loggedInUser?.Akun_Role === 'admin' || period.status !== 'DITUTUP')
+                      .map((period) => {
+                      const isSelected = selectedPeriod?.id === period.id;
+                      const isClosed = period.status === 'DITUTUP';
+                      const isAdmin = loggedInUser?.Akun_Role === 'admin';
+                      
+                      return (
+                        <div 
+                          key={period.id}
+                          onClick={() => {
+                            if (isClosed && !isAdmin) return;
+                            if (selectedPeriod?.id !== period.id) {
+                              setSelectedPeriod(period);
+                              resetUploadState();
+                            }
+                            navigate(currentView, 2);
+                          }}
+                          className={`group rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 ${isClosed ? 'bg-gray-50 opacity-70 border-gray-200' : 'bg-white cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61]'} ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${isClosed ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                {!isClosed && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
+                                {isClosed && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
+                                {period.status}
                               </span>
-                            )}
-                          </div>
-                          <h3 className={`text-lg font-black transition-colors ${isClosed ? 'text-gray-500' : 'text-gray-900 group-hover:text-[#084C61]'}`}>{period.title}</h3>
-                          <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
-                            <span className="flex items-center gap-1.5">
-                              <Calendar size={14} className="text-gray-400" />
-                              {period.periodeLabel}
-                            </span>
-                            <span>•</span>
-                            <span>{period.tipe}</span>
-                          </div>
-                        </div>
 
-                        <div className={`px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform ${isClosed ? 'bg-gray-400' : 'group-active:scale-95 bg-[#143E50]'}`}>
-                          {isClosed ? <X size={16} /> : <UploadCloud size={16} />}
-                          <span>{isClosed ? 'Ditutup' : 'Pilih & Lanjut'}</span>
+                              {isAdmin && (
+                                <div 
+                                  onClick={(e) => togglePeriodStatus(period.id, period.status, e)}
+                                  className="flex items-center gap-2 cursor-pointer"
+                                  title={isClosed ? "Klik untuk membuka periode ini" : "Klik untuk menutup periode ini"}
+                                >
+                                  <div className={`w-9 h-5 rounded-full relative transition-colors ${isClosed ? 'bg-gray-300' : 'bg-emerald-500'}`}>
+                                    <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isClosed ? 'left-0.5' : 'left-[18px]'}`}></div>
+                                  </div>
+                                  <span className={`text-[10px] font-bold ${isClosed ? 'text-gray-400' : 'text-emerald-700'}`}>
+                                    {isClosed ? 'Akses Ditutup' : 'Akses Dibuka'}
+                                  </span>
+                                </div>
+                              )}
+
+                              {isSelected && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                  <CheckCircle2 size={10} /> Dipilih
+                                </span>
+                              )}
+                            </div>
+                            <h3 className={`text-lg font-black transition-colors ${isClosed ? 'text-gray-500' : 'text-gray-900 group-hover:text-[#084C61]'}`}>{period.title}</h3>
+                            <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
+                              <span className="flex items-center gap-1.5">
+                                <Calendar size={14} className="text-gray-400" />
+                                {period.periodeLabel}
+                              </span>
+                              <span>•</span>
+                              <span>{period.tipe}</span>
+                            </div>
+                          </div>
+
+                          <div className={`px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform ${isClosed && !isAdmin ? 'bg-gray-400 cursor-not-allowed' : 'group-active:scale-95 bg-[#143E50] cursor-pointer'}`}>
+                            {isClosed ? <X size={16} /> : <UploadCloud size={16} />}
+                            <span>{isClosed ? 'Ditutup' : 'Pilih & Lanjut'}</span>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
