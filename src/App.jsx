@@ -446,6 +446,21 @@ const fetchValidCities = async () => {
   ];
 };
 
+const isValidSptLocation = (tujuan) => {
+  if (!tujuan || tujuan === '-') return false;
+  const lower = tujuan.toLowerCase().trim();
+  if (lower.startsWith('kota ') || lower.startsWith('kab. ') || lower.startsWith('kabupaten ') || lower.startsWith('provinsi ')) return true;
+  
+  try {
+    const cached = localStorage.getItem('cached_delineasi_cities_colD_v2');
+    if (cached) {
+      const cities = JSON.parse(cached);
+      if (cities.some(c => c.fullName.toLowerCase() === lower)) return true;
+    }
+  } catch(e) {}
+  return false;
+};
+
 const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') => {
   const nipSet = new Set();
   let dateBerangkat = '-';
@@ -911,6 +926,10 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     if (activeTab === 'cuti') {
       const calculatedDays = hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang));
       if (calculatedDays === 0 || arsipData.tujuan === 'Cuti / Alasan Lainnya') {
+        finalNames = finalNames.map(p => ({ ...p, selected: false }));
+      }
+    } else if (activeTab === 'spt') {
+      if (!isValidSptLocation(arsipData.tujuan)) {
         finalNames = finalNames.map(p => ({ ...p, selected: false }));
       }
     }
@@ -2198,13 +2217,28 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const handleSaveArsipDetails = (fileId) => {
-    updateArsipFileData(fileId, pd => ({
-      ...pd,
-      arsipDateBerangkat: editArsipForm.berangkat,
-      arsipDatePulang: editArsipForm.pulang,
-      arsipTanggalSurat: editArsipForm.tanggalSurat,
-      arsipTujuan: editArsipForm.tujuan
-    }));
+    updateArsipFileData(fileId, pd => {
+      const newTujuan = editArsipForm.tujuan;
+      let newNames = [...pd.arsipNames];
+      
+      if (activeTab === 'spt') {
+        if (isValidSptLocation(newTujuan)) newNames = newNames.map(p => ({ ...p, selected: true }));
+        else newNames = newNames.map(p => ({ ...p, selected: false }));
+      } else if (activeTab === 'cuti') {
+        const validDays = hitungHariKerjaAktif(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang)) > 0;
+        if (validDays && newTujuan !== 'Cuti / Alasan Lainnya') newNames = newNames.map(p => ({ ...p, selected: true }));
+        else newNames = newNames.map(p => ({ ...p, selected: false }));
+      }
+
+      return {
+        ...pd,
+        arsipDateBerangkat: editArsipForm.berangkat,
+        arsipDatePulang: editArsipForm.pulang,
+        arsipTanggalSurat: editArsipForm.tanggalSurat,
+        arsipTujuan: newTujuan,
+        arsipNames: newNames
+      };
+    });
     setEditingArsipId(null);
   };
 
@@ -2735,13 +2769,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       onClick={() => setArsipSubTab('terdata')} 
                       className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'terdata' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
                     >
-                      Sudah Dikumpulkan
+                      {activeTab === 'spt' ? 'Rekapitulasi SPT' : 'Rekapitulasi Cuti'}
                     </button>
                     <button 
                       onClick={() => setArsipSubTab('simpanan')} 
                       className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'simpanan' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
                     >
-                      Simpanan Saya
+                      Upload Dokumen
                     </button>
                   </nav>
                 </div>
@@ -2750,12 +2784,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               {arsipSubTab === 'terdata' ? (
                 <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
-                  <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[20px]">
-                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                      <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'SPT' : 'Cuti'} (di luar periode pengumpulan)</h3>
-                      <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
-                        Upload scan {activeTab === 'spt' ? 'SPT perjalanan dinas' : 'Surat Cuti'} Anda. Sistem akan mendeteksi nama, NIP, tanggal, dan {activeTab === 'spt' ? 'tujuan' : 'keterangan'}.
+                <div className="pt-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
+                    <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[120px]">
+                      <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
+                        <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'SPT' : 'Cuti'} (di luar periode pengumpulan)</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
                       </p>
                       <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs font-bold text-red-700 mb-4">
                         <AlertCircle size={14} className="shrink-0 mt-0.5" />
@@ -3018,6 +3052,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               const pd = fileObj.parsedData;
                               const isEditingThisArsip = editingArsipId === fileObj.id;
                               const isAddingPegawaiHere = addingPegawaiId === fileObj.id;
+                              const isInvalidSptLocationState = activeTab === 'spt' && !isValidSptLocation(pd.arsipTujuan);
 
                               return (
                                 <div key={fileObj.id} className="bg-white rounded-2xl border border-[#CDE5F1] shadow-sm overflow-hidden">
@@ -3041,7 +3076,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                         <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
                                           {activeTab === 'spt' ? (
-                                            <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder="Tujuan Dinas" className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                            <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder="Cth: Kota Bandung, Kab. Lebak..." className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                           ) : (
                                             <select value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500 cursor-pointer">
                                               <option value="Cuti / Alasan Lainnya">Pilih Jenis Cuti...</option>
@@ -3078,6 +3113,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                   <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Jenis Cuti belum sesuai. Silakan klik "Ubah Data".</span>
                                               </div>
                                           )}
+                                          {isInvalidSptLocationState && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Kota/Kabupaten tujuan tidak valid. Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
                                           <div className="flex items-center gap-2">
                                             <Calendar size={16} className="text-[#114053] shrink-0" />
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
@@ -3109,7 +3150,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                       const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
                                       const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
                                       const isInvalidCutiType = activeTab === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                      const isErrorState = isZeroDays || isInvalidCutiType;
+                                      const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState;
                                       
                                       return (
                                         <div key={idx} className={`flex items-center gap-3 p-3 rounded-xl transition-colors border group ${isErrorState ? 'bg-red-50/30 border-red-100 hover:border-red-200' : 'hover:bg-gray-50 border-transparent hover:border-gray-200'}`}>
@@ -3117,7 +3158,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                             type="checkbox" 
                                             checked={pegawai.selected} 
                                             disabled={isErrorState}
-                                            title={isErrorState ? "Ubah data cuti yang tidak valid agar dapat mencentang" : ""}
+                                            title={isErrorState ? "Ubah data agar valid untuk dapat mencentang" : ""}
                                             onChange={(e) => {
                                               updateArsipFileData(fileObj.id, oldData => {
                                                 const newNames = [...oldData.arsipNames];
@@ -3200,8 +3241,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                                   if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
                                                     const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
                                                     const isInvalidCutiType = activeTab === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                                    const isErrorState = isZeroDays || isInvalidCutiType;
-                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !isErrorState }] };
+                                                    const currentErrorState = isZeroDays || isInvalidCutiType || (activeTab === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
+                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !currentErrorState }] };
                                                   }
                                                   return oldData;
                                                 });
@@ -3250,6 +3291,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       </div>
                     )}
                   </div>
+                </div>
                 </div>
               )}
             </div>
