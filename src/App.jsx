@@ -4,7 +4,7 @@ import {
   FileBarChart, ArrowLeft, Search, Briefcase, CheckCircle2, AlertCircle, 
   Calendar, Clock, LogOut, FileCheck, KeyRound, RotateCcw, UploadCloud, 
   FileSpreadsheet, Trash2, Users, Edit3, Save, X, Eye, MapPin, 
-  ChevronDown, ChevronUp, Plus
+  ChevronDown, ChevronUp, Plus, FolderOpen
 } from 'lucide-react';
 
 if (typeof window !== 'undefined') {
@@ -1923,6 +1923,15 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     { id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }
   ]);
 
+  // State untuk Tahap 3: Daftar Klaim SPT
+  const [sptKlaimList, setSptKlaimList] = useState([]);
+  const [isSptKlaimLoading, setIsSptKlaimLoading] = useState(false);
+  const [isSptListExpanded, setIsSptListExpanded] = useState(true);
+  
+  const [claimedSptList, setClaimedSptList] = useState([]);
+  const [isClaimingSptId, setIsClaimingSptId] = useState(null);
+  const [isClaimedListExpanded, setIsClaimedListExpanded] = useState(true);
+
   useEffect(() => {
     const cached = localStorage.getItem('cached_pegawai_json');
     if (cached) { try { setDbPegawai(JSON.parse(cached)); } catch(e){} }
@@ -1941,6 +1950,68 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const activeTab = getModuleKey(currentView);
   const PERIOD_EVENTS = getPeriodEvents();
+
+  // Effect khusus untuk mengambil dan menyaring SPT otomatis pada Tahap 3
+  useEffect(() => {
+    if (activeStep === 3 && (activeTab === 'uang-makan' || activeTab === 'tukin')) {
+      const fetchSptForClaim = async () => {
+        setIsSptKlaimLoading(true);
+        try {
+          const data = await fetchLiveSptData();
+          
+          // Gunakan NIP/Nama dari file presensi (Tahap 2) jika ada, jika tidak gunakan profil login
+          const targetNip = parsedData?.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser?.NIP;
+          const targetNama = parsedData?.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser?.Nama;
+
+          // Parse rentang tanggal periode submission yang sedang dipilih
+          let periodStartObj = null;
+          let periodEndObj = null;
+          if (selectedPeriod?.periodeEvent) {
+             const parts = selectedPeriod.periodeEvent.match(/(\d{2})-(\d{2})-(\d{4})\s*s\/d\s*(\d{2})-(\d{2})-(\d{4})/);
+             if (parts) {
+               periodStartObj = new Date(parseInt(parts[3]), parseInt(parts[2])-1, parseInt(parts[1]));
+               periodEndObj = new Date(parseInt(parts[6]), parseInt(parts[5])-1, parseInt(parts[4]));
+               periodStartObj.setHours(0,0,0,0);
+               periodEndObj.setHours(23,59,59,999);
+             }
+          }
+
+          const filtered = data.filter(item => {
+            let isUserMatch = false;
+            if (targetNip && item.nip && item.nip.includes(targetNip)) isUserMatch = true;
+            else if (targetNama && item.nama && item.nama.toLowerCase().includes(targetNama.toLowerCase())) isUserMatch = true;
+            
+            if (!isUserMatch) return false;
+
+            // Filter SPT berdasarkan rentang tanggal yang overlap dengan periode submission
+            if (periodStartObj && periodEndObj) {
+               const sptStart = parseIndoDate(item.tanggalBerangkat);
+               const sptEnd = parseIndoDate(item.tanggalPulang !== '-' ? item.tanggalPulang : item.tanggalBerangkat);
+               
+               if (sptStart.getTime() === new Date(0).getTime()) return false; // Abaikan jika tanggal tidak valid
+               
+               // Cek irisan tanggal (overlap): start SPT <= end Periode DAN end SPT >= start Periode
+               if (sptStart <= periodEndObj && sptEnd >= periodStartObj) {
+                  return true;
+               }
+               return false;
+            }
+
+            return true;
+          });
+
+          // Hilangkan duplikasi jika url arsipnya sama
+          const uniqueFiltered = Array.from(new Map(filtered.map(item => [item.linkAkses, item])).values());
+          setSptKlaimList(uniqueFiltered);
+        } catch (e) {
+          console.error("Gagal memuat SPT untuk klaim", e);
+        } finally {
+          setIsSptKlaimLoading(false);
+        }
+      };
+      fetchSptForClaim();
+    }
+  }, [activeStep, activeTab, parsedData, loggedInUser, selectedPeriod]);
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
@@ -1985,6 +2056,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setEditingPegawaiData(null);
     setIsManualUpload(false);
     setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
+    setClaimedSptList([]);
   };
 
   const handleClearFile = (idToClear = null) => {
@@ -2342,6 +2414,75 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }));
   };
 
+  const handleKlaimSpt = async (sptItem) => {
+    const safeNama = (loggedInUser.Nama || 'Pegawai').replace(/\s+/g, '_');
+    const formatDate = (dateStr) => {
+       if (!dateStr || dateStr === '-') return '';
+       const parts = dateStr.split(' ');
+       if (parts.length >= 3) {
+           return `${parts[0]}${parts[1].substring(0,3)}${parts[2]}`;
+       }
+       return dateStr.replace(/\s+/g, '');
+    };
+    const safeBerangkat = formatDate(sptItem.tanggalBerangkat);
+    const safePulang = formatDate(sptItem.tanggalPulang) || safeBerangkat;
+    const safeTujuan = (sptItem.tujuan || 'Dinas').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20);
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const fileName = `SPT_${safeNama}_${safeBerangkat}-${safePulang}_${safeTujuan}_klaim_${randomSuffix}.pdf`;
+
+    setIsClaimingSptId(sptItem.linkAkses);
+
+    try {
+      const nipForPayload = parsedData?.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
+      const bulanTahunForPayload = selectedPeriod ? selectedPeriod.title : (parsedData?.periodeFolder || 'Periode_Unknown');
+
+      const payload = {
+        action: 'klaim_spt',
+        modul: activeTab,
+        nip: nipForPayload,
+        nama: parsedData?.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
+        periode: selectedPeriod?.periodeEvent || '',
+        bulanTahun: bulanTahunForPayload,
+        sourceUrl: sptItem.linkAkses,
+        fileName: fileName
+      };
+
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      
+    } catch (error) {
+      console.error("Gagal klaim SPT:", error);
+    } finally {
+      setClaimedSptList(prev => [...prev, {
+         ...sptItem,
+         fileName: fileName,
+         klaimId: randomSuffix
+      }]);
+      setIsClaimingSptId(null);
+    }
+  };
+
+  const handleHapusKlaimSpt = async (klaimId, fileName) => {
+    setClaimedSptList(prev => prev.filter(item => item.klaimId !== klaimId));
+    try {
+        const payload = {
+            action: 'hapus_klaim_spt',
+            fileName: fileName,
+            bulanTahun: selectedPeriod ? selectedPeriod.title : (parsedData?.periodeFolder || 'Periode_Unknown')
+        };
+        await fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload)
+        });
+    } catch (e) {
+        console.error("Gagal menghapus klaim:", e);
+    }
+  };
+
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
   const isManualUploadValid = manualEntries.every(e => e.file && e.startDate && e.endDate && e.tujuan && e.pegawai.length > 0);
 
@@ -2430,10 +2571,21 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const PERIOD_EVENTS_DATA = PERIOD_EVENTS[activeTab] || [];
   const currentPeriodList = useMemo(() => {
-    return PERIOD_EVENTS_DATA.map(p => ({
+    const mappedList = PERIOD_EVENTS_DATA.map(p => ({
       ...p,
       status: periodStatusOverrides[p.id] !== undefined ? periodStatusOverrides[p.id] : p.status
     }));
+
+    return mappedList.sort((a, b) => {
+      // 1. Urutkan berdasarkan Status (DIBUKA di atas DITUTUP)
+      if (a.status === 'DIBUKA' && b.status === 'DITUTUP') return -1;
+      if (a.status === 'DITUTUP' && b.status === 'DIBUKA') return 1;
+      
+      // 2. Urutkan berdasarkan urutan Bulan (Ascending: Jan -> Des)
+      const monthA = parseInt(a.id.split('-').pop(), 10);
+      const monthB = parseInt(b.id.split('-').pop(), 10);
+      return monthA - monthB;
+    });
   }, [PERIOD_EVENTS_DATA, periodStatusOverrides]);
 
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
@@ -2590,12 +2742,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'simpanan' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
                     >
                       Simpanan Saya
-                    </button>
-                    <button 
-                      className="py-3 border-b-2 border-transparent font-bold text-sm text-gray-400 cursor-not-allowed whitespace-nowrap"
-                      title="Fitur dalam pengembangan"
-                    >
-                      Laporan Perjadin
                     </button>
                   </nav>
                 </div>
@@ -3526,6 +3672,162 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </div>
                   </div>
                 </div>
+              ) : activeStep === 3 && selectedPeriod ? (
+                <div className="max-w-4xl mx-auto space-y-6">
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
+                    <div className="mt-1 text-gray-400"><FolderOpen size={24} /></div>
+                    <div>
+                      <h3 className="text-sm font-extrabold text-gray-900 mb-1">Upload Bukti Dukung (SPT, Cuti, Izin)</h3>
+                      <p className="text-xs text-gray-600 leading-relaxed">
+                        Di halaman ini terdapat <strong>3 section upload</strong>: SPT (Surat Perintah Tugas), Surat Cuti, dan Surat Izin. Upload dalam format <strong>JPG/PNG (lebih cepat)</strong> atau PDF. Sistem akan membaca dokumen dan ekstrak data pegawai secara otomatis.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm">
+                    <div 
+                      className="bg-[#F0F7F9] px-5 py-4 flex justify-between items-center cursor-pointer hover:bg-[#EAF5FA] transition-colors"
+                      onClick={() => setIsSptListExpanded(!isSptListExpanded)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <CheckCircle2 size={18} className="text-[#084C61]" />
+                        <h3 className="text-sm font-extrabold text-[#084C61]">Dinas Luar dari Rekapitulasi SPT</h3>
+                        <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
+                          {isSptKlaimLoading ? '...' : `${sptKlaimList.length} item`}
+                        </span>
+                      </div>
+                      {isSptListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
+                    </div>
+
+                    {isSptListExpanded && (
+                      <div className="p-4 bg-white border-t border-[#CDE5F1] space-y-3">
+                        {isSptKlaimLoading ? (
+                          <div className="text-center py-10 text-gray-400">
+                            <div className="w-6 h-6 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                            <p className="text-xs font-medium">Mencari data SPT Anda pada sistem arsip...</p>
+                          </div>
+                        ) : sptKlaimList.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <FileText size={32} className="mx-auto mb-2 opacity-50" />
+                            <p className="text-xs font-medium">Tidak ada riwayat SPT yang tercatat untuk NIP/Nama Anda di periode ini.</p>
+                          </div>
+                        ) : (
+                          sptKlaimList.map((item, idx) => {
+                            const d1 = item.tanggalBerangkat !== '-' ? item.tanggalBerangkat : '';
+                            const d2 = item.tanggalPulang !== '-' ? item.tanggalPulang : '';
+                            let dateRange = d1;
+                            if (d2 && d1 !== d2) dateRange += ` - ${d2}`;
+
+                            let uploadDateStr = 'baru-baru ini';
+                            if (item.timestamp) {
+                               const tsDate = new Date(item.timestamp);
+                               if (!isNaN(tsDate.getTime())) {
+                                   uploadDateStr = `${tsDate.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][tsDate.getMonth()]} ${tsDate.getFullYear()}`;
+                               }
+                            }
+
+                            return (
+                              <div key={idx} className="border border-gray-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                                <div>
+                                  <h4 className="text-sm font-extrabold text-gray-900 mb-1">
+                                    {item.tujuan} {dateRange ? `(${dateRange})` : ''}
+                                  </h4>
+                                  <p className="text-[11px] text-gray-500">
+                                    diupload oleh <strong className="text-gray-700">{item.nama}</strong> pada {uploadDateStr}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <a 
+                                    href={item.linkAkses} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="px-3 py-1.5 text-[11px] font-bold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-1.5 transition-colors"
+                                  >
+                                    <Eye size={14} /> View
+                                  </a>
+                                  <button 
+                                    onClick={() => handleKlaimSpt(item)}
+                                    disabled={isClaimingSptId === item.linkAkses || claimedSptList.some(c => c.linkAkses === item.linkAkses)}
+                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg flex items-center gap-1.5 transition-colors ${
+                                      claimedSptList.some(c => c.linkAkses === item.linkAkses) 
+                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                                        : 'text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 cursor-pointer'
+                                    }`}
+                                  >
+                                    {isClaimingSptId === item.linkAkses ? (
+                                      <><div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div> Proses...</>
+                                    ) : claimedSptList.some(c => c.linkAkses === item.linkAkses) ? (
+                                      <><CheckCircle2 size={14} /> Diklaim</>
+                                    ) : (
+                                      <><UploadCloud size={14} /> Klaim untuk event ini</>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Section: File yang Sudah Diupload */}
+                  {claimedSptList.length > 0 && (
+                    <div className="bg-[#F0F7F9] border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm mt-6 animate-in slide-in-from-top-4 duration-300">
+                      <div 
+                        className="px-5 py-4 flex justify-between items-center cursor-pointer transition-colors hover:bg-[#EAF5FA]"
+                        onClick={() => setIsClaimedListExpanded(!isClaimedListExpanded)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <CheckCircle2 size={18} className="text-[#084C61]" />
+                          <h3 className="text-sm font-extrabold text-[#084C61]">File yang Sudah Diupload</h3>
+                          <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
+                            {claimedSptList.length} file
+                          </span>
+                        </div>
+                        {isClaimedListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
+                      </div>
+                      
+                      {isClaimedListExpanded && (
+                        <div className="px-5 pb-5">
+                          <div className="text-[11px] font-bold text-gray-500 mb-3">SPT ({claimedSptList.length} file)</div>
+                          <div className="space-y-2">
+                            {claimedSptList.map(item => (
+                              <div key={item.klaimId} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-gray-200 rounded-lg p-3 gap-3 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                                <span className="text-xs font-medium text-gray-700 truncate">{item.fileName}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <a 
+                                    href={item.linkAkses} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="px-3 py-1.5 text-[11px] font-bold text-[#084C61] bg-[#F0F7F9] border border-[#CDE5F1] rounded-md hover:bg-[#EAF5FA] flex items-center gap-1.5 transition-colors shadow-sm"
+                                  >
+                                    <Eye size={14} /> Lihat
+                                  </a>
+                                  <button 
+                                    onClick={() => handleHapusKlaimSpt(item.klaimId, item.fileName)}
+                                    className="px-3 py-1.5 text-[11px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md hover:bg-red-100 flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                                  >
+                                    <Trash2 size={14} /> Hapus
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex justify-center gap-3 pt-6 border-t border-gray-100">
+                    <button onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
+                      <ArrowLeft size={16} /> Kembali
+                    </button>
+                    <button onClick={() => navigate(currentView, 4)} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+                      Lanjut ke Tahap 4 <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
               ) : activeStep === 5 && selectedPeriod ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
@@ -3710,14 +4012,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>
                   <h2 className="text-2xl font-black mb-3 text-gray-900">Tahap {activeStep} dalam Pengembangan</h2>
                   <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">
-                    {(activeStep === 3 || activeStep === 4) ? 'Fitur upload Bukti Pendukung tambahan sedang dalam tahap pengembangan. Silakan lanjutkan ke tahap berikutnya.' : 'Fitur untuk tahap ini sedang dalam proses penyusunan data. Silakan kembali ke tahap sebelumnya.'}
+                    {(activeStep === 4) ? 'Fitur upload Bukti Pendukung tambahan sedang dalam tahap pengembangan. Silakan lanjutkan ke tahap berikutnya.' : 'Fitur untuk tahap ini sedang dalam proses penyusunan data. Silakan kembali ke tahap sebelumnya.'}
                   </p>
                   <div className="flex gap-3">
-                    <button onClick={() => navigate(currentView, activeStep > 1 ? activeStep - 1 : 1)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
+                    <button onClick={() => navigate(currentView, activeStep > 1 ? activeStep - 1 : 1)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
                       <ArrowLeft size={16} /> Kembali
                     </button>
-                    {(activeStep === 3 || activeStep === 4) && (
-                      <button onClick={() => navigate(currentView, activeStep + 1)} className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+                    {(activeStep === 4) && (
+                      <button onClick={() => navigate(currentView, activeStep + 1)} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
                       Lanjut ke Tahap {activeStep + 1} <ChevronRight size={16} />
                     </button>
                   )}
