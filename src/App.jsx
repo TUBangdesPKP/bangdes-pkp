@@ -176,36 +176,28 @@ const fetchLiveSptData = async () => {
 const standardizeDate = (dateStr) => {
   if (!dateStr || dateStr === '-') return '-';
   
-  // If it's already in "DD Bulan YYYY" format, return it
   if (/[a-zA-Z]/.test(dateStr)) return dateStr;
 
-  // Handle formats like DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
   const parts = dateStr.split(/[\/\-]/);
   if (parts.length === 3) {
     let day, month, year;
     
     if (parts[0].length === 4) {
-      // YYYY-MM-DD
       year = parts[0];
       month = parts[1];
       day = parts[2];
     } else {
-      // Assume DD/MM/YYYY for Indonesian context by default if ambiguous
-      // Google sheets might export M/D/YYYY depending on locale, but let's try to parse smartly
       if (parseInt(parts[1]) > 12) {
-         // MM/DD/YYYY
          month = parts[0];
          day = parts[1];
          year = parts[2];
       } else {
-         // DD/MM/YYYY
          day = parts[0];
          month = parts[1];
          year = parts[2];
       }
     }
     
-    // Convert 2 digit year to 4 digit
     if (year.length === 2) {
       year = '20' + year;
     }
@@ -264,7 +256,6 @@ const fetchLiveCutiData = async () => {
       const tglBerangkatStr = standardizeDate(tglBerangkatRaw);
       const tglPulangStr = standardizeDate(tglPulangRaw);
       
-      // Fallback for jumlah hari
       let jmlHari = parseInt(item['Jumlah Hari Cuti'] || item['Jumlah Hari'] || 0, 10);
       if (!jmlHari || isNaN(jmlHari) || jmlHari === 0) {
           if (tglBerangkatStr !== '-' && tglPulangStr !== '-') {
@@ -339,12 +330,25 @@ const hitungHariDinas = (tglBerangkat, tglPulang) => {
   return '-';
 };
 
+// 2026 National Holidays based on official data
 const DAFTAR_LIBUR_NASIONAL = [
-  '2026-01-01', '2026-01-16', '2026-02-16', '2026-02-17', '2026-03-18', 
-  '2026-03-19', '2026-03-20', '2026-03-21', '2026-03-22', '2026-03-23', 
-  '2026-03-24', '2026-04-03', '2026-04-05', '2026-05-01', '2026-05-14', 
-  '2026-05-15', '2026-05-27', '2026-05-28', '2026-05-31', '2026-06-01', 
-  '2026-06-16', '2026-08-17', '2026-08-25', '2026-12-24', '2026-12-25'
+  '2026-01-01', // Tahun Baru Masehi
+  '2026-01-16', // Isra Mi'raj Nabi Muhammad SAW
+  '2026-02-17', // Tahun Baru Imlek
+  '2026-03-19', // Hari Suci Nyepi (Tahun Baru Saka)
+  '2026-03-21', // Hari Raya Idul Fitri 1447 H
+  '2026-03-22', // Hari Raya Idul Fitri 1447 H
+  '2026-04-03', // Wafat Yesus Kristus
+  '2026-04-05', // Kebangkitan Yesus Kristus (Paskah)
+  '2026-05-01', // Hari Buruh Internasional
+  '2026-05-14', // Kenaikan Yesus Kristus
+  '2026-05-27', // Hari Raya Idul Adha 1447 H
+  '2026-05-31', // Hari Raya Waisak
+  '2026-06-01', // Hari Lahir Pancasila
+  '2026-06-16', // Tahun Baru Islam (1 Muharram)
+  '2026-08-17', // Hari Kemerdekaan RI
+  '2026-08-25', // Maulid Nabi Muhammad SAW
+  '2026-12-25'  // Hari Raya Natal
 ];
 
 const hitungHariKerjaAktif = (startStr, endStr) => {
@@ -359,12 +363,14 @@ const hitungHariKerjaAktif = (startStr, endStr) => {
   
   while (current <= end) {
     const dayOfWeek = current.getDay();
+    // Exclude weekends (0 = Sunday, 6 = Saturday)
     if (dayOfWeek !== 0 && dayOfWeek !== 6) { 
       const y = current.getFullYear();
       const m = String(current.getMonth() + 1).padStart(2, '0');
       const d = String(current.getDate()).padStart(2, '0');
       const ymd = `${y}-${m}-${d}`;
       
+      // Also exclude national holidays
       if (!DAFTAR_LIBUR_NASIONAL.includes(ymd)) {
         count++;
       }
@@ -376,11 +382,9 @@ const hitungHariKerjaAktif = (startStr, endStr) => {
 
 const removeTitlesFromName = (fullName) => {
   if (!fullName) return '';
-  // Pola regex untuk menghapus gelar umum di depan dan belakang nama
-  // Mengabaikan koma dan titik yang berhubungan dengan gelar
   return fullName
-    .replace(/^(Dr\.|Drs\.|Dra\.|Ir\.|Prof\.|H\.|Hj\.)\s*/gi, '') // Gelar depan
-    .replace(/,\s*(S\.T\.|S\.E\.|S\.H\.|S\.Kom\.|S\.Sos\.|S\.Pd\.|M\.T\.|M\.M\.|M\.Si\.|M\.Pd\.|Ph\.D\.|B\.Sc\.|M\.Sc\.|A\.Md\.|M\.A\.).*$/gi, '') // Gelar belakang setelah koma
+    .replace(/^(Dr\.|Drs\.|Dra\.|Ir\.|Prof\.|H\.|Hj\.)\s*/gi, '') 
+    .replace(/,\s*(S\.T\.|S\.E\.|S\.H\.|S\.Kom\.|S\.Sos\.|S\.Pd\.|M\.T\.|M\.M\.|M\.Si\.|M\.Pd\.|Ph\.D\.|B\.Sc\.|M\.Sc\.|A\.Md\.|M\.A\.).*$/gi, '') 
     .trim();
 };
 
@@ -458,7 +462,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
     const top30Lines = lines.slice(0, 30);
     const top30Text = top30Lines.join(' ');
     
-    /* TAHAP 1: Cari NIP presisi dari Database di 30 baris pertama (Mengatasi spasi terputus) */
     if (dbPegawai && dbPegawai.length > 0) {
       const top30Digits = top30Text.replace(/[Oo]/g, '0').replace(/[lI]/g, '1').replace(/[^0-9]/g, '');
       for (const pegawai of dbPegawai) {
@@ -472,7 +475,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
       }
     }
 
-    /* TAHAP 2: Cari Nama presisi tanpa spasi di 30 baris pertama (Kebal error OCR "B U D I") */
     if (!foundCutiNip && dbPegawai && dbPegawai.length > 0) {
       const top30Alpha = top30Text.toLowerCase().replace(/[^a-z]/g, '');
       const sortedPegawai = [...dbPegawai].sort((a, b) => (b.Nama || '').length - (a.Nama || '').length);
@@ -489,7 +491,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
       }
     }
 
-    /* TAHAP 3: Fallback ke Regex 18 Digit Standar */
     if (!foundCutiNip) {
       for (let i = 0; i < lines.length; i++) {
         const lineWithOcrFixes = lines[i].replace(/[Oo]/g, '0').replace(/[lI]/g, '1');
@@ -507,7 +508,6 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
       }
     }
 
-    /* TAHAP 4: Fallback ke Regex pola pencarian teks 'NAMA: ' */
     if (!foundCutiNip && dbPegawai && dbPegawai.length > 0) {
       let extractedName = null;
       for (let i = 0; i < Math.min(lines.length, 40); i++) {
@@ -1445,7 +1445,7 @@ const getPeriodEvents = () => {
     
     uangMakanPeriods.push({
       id: `um-${year}-${strMonth}`,
-      status: 'DIBUKA',
+      status: i < 6 ? 'DITUTUP' : 'DIBUKA',
       title: `Bukti Dukung Uang Makan Bulan ${monthNames[i]} ${year}`,
       periodeLabel: `1 ${monthNames[i].substring(0,3)} ${year} – ${daysInMonth} ${monthNames[i].substring(0,3)} ${year}`,
       periodeEvent: `01-${strMonth}-${year} s/d ${daysInMonth}-${strMonth}-${year}`,
@@ -1479,7 +1479,7 @@ const getPeriodEvents = () => {
 
     tukinPeriods.push({
       id: `tukin-${year}-${strMonth}`,
-      status: 'DIBUKA',
+      status: i < 6 ? 'DITUTUP' : 'DIBUKA',
       title: `Bukti Dukung Tukin Bulan ${monthNames[i]} ${year}`,
       periodeLabel: `${startDay} ${startMonthName.substring(0,3)} ${startYear} – ${endDay} ${endMonthName.substring(0,3)} ${endYear}`,
       periodeEvent: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear} s/d ${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
@@ -2413,7 +2413,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       
-      {/* MODAL PREVIEW DOKUMEN DENGAN IFRAME */}
       {previewPdfUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white text-gray-900 rounded-2xl w-full max-w-5xl h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-gray-100">
@@ -2522,8 +2521,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         </div>
       </aside>
 
-      <main className="flex-1 bg-[#F8FAFC] text-gray-900 p-6 md:p-10 h-full overflow-y-auto">
-        <div className="w-full">
+      <main className={`flex-1 bg-[#F8FAFC] text-gray-900 h-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
+        <div className={`w-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'h-full flex flex-col' : ''}`}>
           {activeTab === 'rekap' ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
               <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
@@ -2534,42 +2533,44 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
             </div>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div>
-              <div 
-                className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
-                style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
-              >
-                <div className="space-y-2">
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">{activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Arsip Surat Cuti'}</h2>
-                  <div className="text-sm font-medium text-teal-100/90 tracking-wide">
-                    Direktorat Pembangunan Perumahan Perdesaan
-                  </div>
-                </div>
-                <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                  <div className="text-right flex-1">
-                    <p className="text-xs text-gray-200 leading-snug font-medium">
-                      <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload arsipnya!
-                    </p>
-                    <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
-                  </div>
-                  {loggedInUser?.Foto_Pegawai ? (
-                    <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                  ) : (
-                    <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
-                      {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+              <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)]">
+                <div 
+                  className="rounded-3xl p-6 sm:p-8 text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+                  style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
+                >
+                  <div className="space-y-2">
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">{activeTab === 'spt' ? 'Arsip Surat Tugas' : 'Arsip Surat Cuti'}</h2>
+                    <div className="text-sm font-medium text-teal-100/90 tracking-wide">
+                      Direktorat Pembangunan Perumahan Perdesaan
                     </div>
-                  )}
+                  </div>
+                  <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                    <div className="text-right flex-1">
+                      <p className="text-xs text-gray-200 leading-snug font-medium">
+                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload arsipnya!
+                      </p>
+                      <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                    </div>
+                    {loggedInUser?.Foto_Pegawai ? (
+                      <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                        {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="mb-6 border-b border-gray-200">
-                <nav className="-mb-px flex gap-6">
-                  <button onClick={() => setArsipSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    {activeTab === 'spt' ? 'Rekapitulasi SPT' : 'Rekapitulasi Cuti'}
-                  </button>
-                  <button onClick={() => setArsipSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                    {activeTab === 'spt' ? 'Upload Dokumen SPT' : 'Upload Dokumen Cuti'}
-                  </button>
-                </nav>
+                <div className="border-b border-gray-200 flex">
+                  <nav className="-mb-px flex gap-6">
+                    <button onClick={() => setArsipSubTab('terdata')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'terdata' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                      {activeTab === 'spt' ? 'Rekapitulasi SPT' : 'Rekapitulasi Cuti'}
+                    </button>
+                    <button onClick={() => setArsipSubTab('simpanan')} className={`py-3 px-1 border-b-2 font-bold text-sm transition-colors cursor-pointer ${arsipSubTab === 'simpanan' ? 'border-[#084C61] text-[#084C61]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                      {activeTab === 'spt' ? 'Upload Dokumen SPT' : 'Upload Dokumen Cuti'}
+                    </button>
+                  </nav>
+                </div>
               </div>
 
               {arsipSubTab === 'terdata' ? (
@@ -3087,45 +3088,48 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </div>
               )}
             </div>
-          ) : (
-            <div>
-              <div 
-                className="rounded-3xl p-6 sm:p-8 text-white mb-8 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6 sticky top-0 z-20 backdrop-blur-md"
-                style={{ backgroundColor: 'rgba(8, 76, 97, 0.95)', borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
-              >
-                <div className="space-y-2">
-                  <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
-                    OPEN SUBMISSION
-                  </span>
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
-                    {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
-                  </h2>
-                  <div className="flex items-center gap-2 text-xs text-gray-200">
-                    <Calendar size={14} />
-                    <span>
-                      {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
-                    </span>
-                    {selectedPeriod && (
-                      <>
-                        <span>•</span>
-                        <span>{selectedPeriod.tipe}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
 
-                {selectedPeriod && (
-                  <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                    <div className="text-right flex-1">
-                      <p className="text-xs text-gray-200 leading-snug font-medium">
-                        <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
-                      </p>
-                      <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+          ) : (
+            <div className="flex flex-col h-full w-full">
+              {/* HEADER: banner + tab 1-5 — TIDAK ikut scroll */}
+              <div className="shrink-0 bg-[#F8FAFC] pt-6 md:pt-10 px-6 md:px-10 pb-6 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)] z-20 relative">
+                <div 
+                  className="rounded-3xl p-6 sm:p-8 text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+                  style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
+                >
+                <div className="space-y-2">
+                    <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
+                      OPEN SUBMISSION
+                    </span>
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
+                      {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
+                    </h2>
+                    <div className="flex items-center gap-2 text-xs text-gray-200">
+                      <Calendar size={14} />
+                      <span>
+                        {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
+                      </span>
+                      {selectedPeriod && (
+                        <>
+                          <span>•</span>
+                          <span>{selectedPeriod.tipe}</span>
+                        </>
+                      )}
                     </div>
-                    {loggedInUser?.Foto_Pegawai ? (
-                      <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                  </div>
+
+                  {selectedPeriod && (
+                    <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
+                      <div className="text-right flex-1">
+                        <p className="text-xs text-gray-200 leading-snug font-medium">
+                          <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
+                        </p>
+                        <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                      </div>
+                      {loggedInUser?.Foto_Pegawai ? (
+                        <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
                         {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
                       </div>
                     )}
@@ -3133,61 +3137,67 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 )}
               </div>
 
-              <div className="flex items-center justify-center gap-3 mb-8 sticky top-[140px] z-10 bg-[#F8FAFC]/90 backdrop-blur-sm py-4">
+              <div className="flex items-center justify-center gap-3">
                 {[1, 2, 3, 4, 5].map((num) => {
                   const isActive = activeStep === num;
-                  const isDisabled = !selectedPeriod && num > 1;
-                  return (
-                    <button
-                      key={num}
-                      type="button"
-                      disabled={isDisabled}
-                      onClick={() => {
-                        if (num === 1) {
-                          navigate(currentView, 1);
-                        } else {
-                          navigate(currentView, num);
-                        }
-                      }}
-                      title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
-                      className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
-                        isActive
-                          ? 'text-white ring-4 shadow-sm scale-105'
-                          : isDisabled
-                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
-                          : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
-                      }`}
-                      style={{ 
+                    const isDisabled = !selectedPeriod && num > 1;
+                    return (
+                      <button
+                        key={num}
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => {
+                          if (num === 1) {
+                            navigate(currentView, 1);
+                          } else {
+                            navigate(currentView, num);
+                          }
+                        }}
+                        title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                        className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
+                          isActive
+                            ? 'text-white ring-4 shadow-sm scale-105'
+                            : isDisabled
+                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                            : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
+                        }`}
+                        style={{ 
                         backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
                         ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
                       }}
                     >
                       {num}
-                    </button>
-                  );
-                })}
+                  </button>
+                );
+              })}
               </div>
+            </div>
 
+            {/* KONTEN: ini saja yang scroll */}
+            <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
                 <div className="space-y-4 max-w-4xl mx-auto">
                   {currentPeriodList.map((period) => {
-                    const isSelected = selectedPeriod?.id === period.id;
+                  const isSelected = selectedPeriod?.id === period.id;
+                    const isClosed = period.status === 'DITUTUP';
                     return (
                       <div 
                         key={period.id}
                         onClick={() => {
+                          if (isClosed) return;
                           if (selectedPeriod?.id !== period.id) {
                             setSelectedPeriod(period);
                             resetUploadState();
                           }
                           navigate(currentView, 2);
                         }}
-                        className={`group bg-white rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61] ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
+                        className={`group rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 ${isClosed ? 'bg-gray-50 opacity-60 cursor-not-allowed border-gray-200' : 'bg-white cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61]'} ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
                       >
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${isClosed ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                              {!isClosed && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
+                              {isClosed && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
                               {period.status}
                             </span>
                             {isSelected && (
@@ -3196,7 +3206,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               </span>
                             )}
                           </div>
-                          <h3 className="text-lg font-black text-gray-900 group-hover:text-[#084C61] transition-colors">{period.title}</h3>
+                          <h3 className={`text-lg font-black transition-colors ${isClosed ? 'text-gray-500' : 'text-gray-900 group-hover:text-[#084C61]'}`}>{period.title}</h3>
                           <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
                             <span className="flex items-center gap-1.5">
                               <Calendar size={14} className="text-gray-400" />
@@ -3207,9 +3217,9 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           </div>
                         </div>
 
-                        <div className="px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform group-active:scale-95 bg-[#143E50]">
-                          <UploadCloud size={16} />
-                          <span>Pilih & Lanjut</span>
+                        <div className={`px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform ${isClosed ? 'bg-gray-400' : 'group-active:scale-95 bg-[#143E50]'}`}>
+                          {isClosed ? <X size={16} /> : <UploadCloud size={16} />}
+                          <span>{isClosed ? 'Ditutup' : 'Pilih & Lanjut'}</span>
                         </div>
                       </div>
                     );
@@ -3217,7 +3227,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </div>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
-                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
+                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
                       <>
                         <div>
                           <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload Bukti Dukung</h3>
@@ -3471,7 +3481,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </div>
               ) : activeStep === 5 && selectedPeriod ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
-                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[220px]">
+                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
                       <>
                         <div>
                           <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
@@ -3649,7 +3659,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm">
+                <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>
                   <h2 className="text-2xl font-black mb-3 text-gray-900">Tahap {activeStep} dalam Pengembangan</h2>
                   <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">
@@ -3661,12 +3671,13 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </button>
                     {(activeStep === 3 || activeStep === 4) && (
                       <button onClick={() => navigate(currentView, activeStep + 1)} className="px-6 py-2.5 rounded-xl text-white font-medium flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
-                        Lanjut ke Tahap {activeStep + 1} <ChevronRight size={16} />
-                      </button>
-                    )}
-                  </div>
+                      Lanjut ke Tahap {activeStep + 1} <ChevronRight size={16} />
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
+            )}
+              </div>
             </div>
           )}
         </div>
