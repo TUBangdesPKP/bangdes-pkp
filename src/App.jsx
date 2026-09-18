@@ -905,6 +905,20 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       }
       fullText = lines.join('\n');
     }
+  } else if (/\.(jpe?g|png)$/.test(fileName)) {
+    if (onProgress) onProgress('Membaca gambar Surat Tugas...');
+    if (!window.Tesseract) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+    const { data: { text } } = await window.Tesseract.recognize(file, 'eng');
+    fullText = text;
+    lines = text.split('\n').map(line => line.trim()).filter(Boolean);
   } else {
     throw new Error('Format dokumen tidak didukung.');
   }
@@ -1950,6 +1964,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [claimedSptList, setClaimedSptList] = useState([]);
   const [isClaimingSptId, setIsClaimingSptId] = useState(null);
   const [isClaimedListExpanded, setIsClaimedListExpanded] = useState(true);
+  const [arsipSubmitResult, setArsipSubmitResult] = useState(null);
+  const [isSubmittingArsip, setIsSubmittingArsip] = useState(false);
 
   useEffect(() => {
     const cached = localStorage.getItem('cached_pegawai_json');
@@ -1968,6 +1984,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const activeTab = getModuleKey(currentView);
+  const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
+  const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
   const PERIOD_EVENTS = getPeriodEvents();
 
   // Effect khusus untuk mengambil dan menyaring SPT otomatis pada Tahap 3
@@ -2076,10 +2094,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setIsManualUpload(false);
     setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
     setClaimedSptList([]);
+    setArsipSubmitResult(null);
+    setIsSubmittingArsip(false);
   };
 
   const handleClearFile = (idToClear = null) => {
-    if ((activeTab === 'spt' || activeTab === 'cuti') && idToClear) {
+    if (idToClear) {
       setArsipFiles(prev => prev.filter(f => f.id !== idToClear));
       return;
     }
@@ -2090,7 +2110,14 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const handleFileChange = async (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      if (activeTab === 'spt' || activeTab === 'cuti') {
+      if (activeTab === 'spt' || activeTab === 'cuti' || (isPeriodSpt && activeStep === 3)) {
+        if (isReadingArsip || isSubmittingArsip) return;
+        const selected = Array.from(e.target.files);
+        if (selected.some(file => !/\.(pdf|jpe?g|png)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) {
+          setArsipSubmitResult({ type: 'error', message: 'Pilih PDF, JPG, atau PNG maksimal 10 MB per file.' });
+          e.target.value = '';
+          return;
+        }
         const newFiles = Array.from(e.target.files).map(f => ({
           id: Math.random().toString(36).substring(7),
           file: f,
@@ -2098,8 +2125,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
           parsedData: null
         }));
         setArsipFiles(prev => [...prev, ...newFiles].slice(0, 10));
-        setSubmitResult(null);
-        setIsAlreadyUploaded(false);
+        setArsipSubmitResult(null);
         e.target.value = '';
         return;
       }
@@ -2144,6 +2170,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const handleBacaDokumenArsip = async () => {
+    if (isReadingArsip || isSubmittingArsip) return;
     const pendingFiles = arsipFiles.filter(f => f.status === 'pending');
     if (pendingFiles.length === 0) return;
 
@@ -2158,7 +2185,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setArsipFiles([...currentList]);
       
       try {
-        const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, activeTab); 
+        const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, documentModule); 
         currentList = currentList.map(f => f.id === fileObj.id ? { 
           ...f, 
           status: 'success', 
@@ -2172,6 +2199,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         } : f);
       } catch (err) {
         currentList = currentList.map(f => f.id === fileObj.id ? { ...f, status: 'error' } : f);
+        setArsipSubmitResult({ type: 'error', message: `${fileObj.file.name}: ${err.message || 'Dokumen tidak dapat dibaca. Gunakan upload manual.'}` });
       }
       setArsipFiles([...currentList]);
     }
@@ -2221,10 +2249,10 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       const newTujuan = editArsipForm.tujuan;
       let newNames = [...pd.arsipNames];
       
-      if (activeTab === 'spt') {
+      if (documentModule === 'spt') {
         if (isValidSptLocation(newTujuan)) newNames = newNames.map(p => ({ ...p, selected: true }));
         else newNames = newNames.map(p => ({ ...p, selected: false }));
-      } else if (activeTab === 'cuti') {
+      } else if (documentModule === 'cuti') {
         const validDays = hitungHariKerjaAktif(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang)) > 0;
         if (validDays && newTujuan !== 'Cuti / Alasan Lainnya') newNames = newNames.map(p => ({ ...p, selected: true }));
         else newNames = newNames.map(p => ({ ...p, selected: false }));
@@ -2331,11 +2359,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const handleUploadSubmitArsip = async (e) => {
     e.preventDefault();
+    if (isSubmittingArsip || isReadingArsip) return;
     const filesToUpload = arsipFiles.filter(f => f.status === 'success' && f.parsedData.arsipNames.some(p => p.selected));
     if (filesToUpload.length === 0) return;
 
-    setIsSubmitting(true);
-    setSubmitResult(null); 
+    setIsSubmittingArsip(true);
+    setArsipSubmitResult(null); 
     try {
       for (const fObj of filesToUpload) {
         const base64Raw = await fileToBase64(fObj.file);
@@ -2344,7 +2373,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         const arsipDataPayload = fObj.parsedData.arsipNames.filter(p => p.selected).map(pegawai => {
           const tglBerangkat = fObj.parsedData.arsipDateBerangkat || '-';
           const tglPulang = fObj.parsedData.arsipDatePulang || '-';
-          const jumlahHari = activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang)) : hitungHariDinas(tglBerangkat, tglPulang);
+          const jumlahHari = documentModule === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang)) : hitungHariDinas(tglBerangkat, tglPulang);
           
           let bulan = '-';
           let tahun = '-';
@@ -2369,11 +2398,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         });
 
         const payload = {
-          modul: activeTab,
+          modul: documentModule,
           nip: loggedInUser.NIP,
           nama: loggedInUser.Nama,
           periode: '',
-          bulanTahun: activeTab === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
+          bulanTahun: documentModule === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
           fileName: fObj.file.name,
           fileBase64: base64Data, 
           sheetData: [],
@@ -2402,15 +2431,15 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         if (json.status !== 'success') throw new Error(json.message);
       }
 
-      setSubmitResult({ type: 'success', message: `Semua Arsip ${activeTab === 'spt' ? 'SPT' : 'Cuti'} berhasil disimpan!` });
+      setArsipSubmitResult({ type: 'success', message: `Semua Arsip ${documentModule === 'spt' ? 'SPT' : 'Cuti'} berhasil disimpan!` });
       setTimeout(() => {
          setArsipFiles([]);
       }, 2000);
       
     } catch (err) {
-      setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
+      setArsipSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingArsip(false);
     }
   };
 
@@ -2518,12 +2547,12 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   };
 
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
-  const isManualUploadValid = manualEntries.every(e => e.file && e.startDate && e.endDate && e.tujuan && e.pegawai.length > 0);
+  const isManualUploadValid = manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0);
 
   const handleUploadManualSubmit = async () => {
-    if (!isManualUploadValid || isSubmitting) return;
-    setIsSubmitting(true);
-    setSubmitResult(null);
+    if (!isManualUploadValid || isSubmittingArsip) return;
+    setIsSubmittingArsip(true);
+    setArsipSubmitResult(null);
 
     try {
       for (const entry of manualEntries) {
@@ -2532,7 +2561,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         
         const tglBerangkat = formatYMDtoIndo(entry.startDate);
         const tglPulang = formatYMDtoIndo(entry.endDate);
-        const jumlahHari = activeTab === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) : hitungHariDinas(tglBerangkat, tglPulang);
+        const jumlahHari = documentModule === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) : hitungHariDinas(tglBerangkat, tglPulang);
         
         let bulan = '-';
         let tahun = '-';
@@ -2556,11 +2585,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         }));
 
         const payload = {
-          modul: activeTab,
+          modul: documentModule,
           nip: loggedInUser.NIP,
           nama: loggedInUser.Nama,
           periode: '',
-          bulanTahun: activeTab === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
+          bulanTahun: documentModule === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
           fileName: entry.file.name,
           fileBase64: base64Data,
           sheetData: [],
@@ -2589,17 +2618,17 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         if (json.status !== 'success') throw new Error(json.message);
       }
 
-      setSubmitResult({ type: 'success', message: `Semua dokumen manual berhasil disimpan!` });
+      setArsipSubmitResult({ type: 'success', message: `Semua dokumen manual berhasil disimpan!` });
       setTimeout(() => {
         setIsManualUpload(false);
         setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
-        setSubmitResult(null);
+        setArsipSubmitResult(null);
       }, 2000);
 
     } catch (err) {
-      setSubmitResult({ type: 'error', message: 'Gagal mengunggah dokumen manual: ' + err.message });
+      setArsipSubmitResult({ type: 'error', message: 'Gagal mengunggah dokumen manual: ' + err.message });
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingArsip(false);
     }
   };
 
@@ -2626,6 +2655,518 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
 
   const arsipSuccessfulFiles = arsipFiles.filter(f => f.status === 'success');
   const arsipTotalSelectedPegawai = arsipSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.arsipNames.filter(p => p.selected).length, 0);
+
+  const renderArsipUploadPanel = () => (
+                <div className="pt-4">
+                  {arsipSubmitResult && (
+                    <div role="status" className={`mb-4 p-4 rounded-xl text-xs font-semibold border ${arsipSubmitResult.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
+                      {arsipSubmitResult.message}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
+                    <div className="lg:col-span-5 xl:col-span-4 space-y-6 ">
+                      <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
+                        <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {documentModule === 'spt' ? 'SPT' : 'Cuti'} {isPeriodSpt ? '(bukti dukung periode terpilih)' : '(di luar periode pengumpulan)'}</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
+                      </p>
+                      <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs font-bold text-red-700 mb-4">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                        <span>KHUSUS {documentModule === 'spt' ? 'SPT' : 'CUTI'} SAJA! Dokumen selain Surat {documentModule === 'spt' ? 'Perintah Tugas' : 'Cuti'} akan ditolak.</span>
+                      </div>
+                      <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl text-xs text-[#084C61] leading-relaxed mb-6">
+                        <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen memuat kata "{documentModule === 'spt' ? 'Surat Tugas' : 'Cuti'}" dengan nama, NIP, tanggal, dan {documentModule === 'spt' ? 'tujuan' : 'keterangan'} yang jelas.
+                      </div>
+                      
+                      <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
+                        <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
+                          <UploadCloud size={24} />
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-gray-700 group-hover:text-[#0E5B73]">Klik atau drag & drop file</p>
+                          <p className="text-[10px] font-medium text-gray-400 mt-1">PDF (1 halaman), JPG, PNG (max 10MB)</p>
+                        </div>
+                        <input id="pdf-upload-input" type="file" accept=".pdf,.jpg,.jpeg,.png" multiple onChange={handleFileChange} className="hidden" />
+                      </label>
+
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({arsipFiles.length}/10):</h4>
+                          <div className="space-y-2">
+                            {arsipFiles.length === 0 ? (
+                               <div className="p-3 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-400 py-6">
+                                 Belum ada dokumen yang diunggah.
+                               </div>
+                            ) : (
+                               arsipFiles.map((fObj, idx) => (
+                                <div key={fObj.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs ${fObj.status === 'success' ? 'bg-[#EAF5FA] border-[#CDE5F1] text-[#1E5D77]' : 'bg-[#F8FAFC] border-gray-200 text-gray-700'}`}>
+                                  <div className="flex items-center gap-2 truncate pr-4">
+                                    <FileText size={16} className={fObj.status === 'success' ? "text-emerald-600 shrink-0" : "text-gray-400 shrink-0"} />
+                                    <span className="font-semibold truncate">{fObj.file.name}</span>
+                                    {fObj.status === 'reading' && <div className="w-3 h-3 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin shrink-0"></div>}
+                                    {fObj.status === 'success' && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button onClick={() => handlePreviewPdf(fObj.file)} className="text-[#084C61] hover:bg-gray-200 p-1.5 rounded-lg transition-colors cursor-pointer" title="Pratinjau PDF"><Eye size={14}/></button>
+                                    <button onClick={() => handleClearFile(fObj.id)} className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors cursor-pointer"><X size={14}/></button>
+                                  </div>
+                                </div>
+                               ))
+                            )}
+                          </div>
+                        </div>
+
+                        <button 
+                          onClick={handleBacaDokumenArsip}
+                          disabled={arsipFiles.filter(f => f.status === 'pending').length === 0 || isReadingArsip}
+                          className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? 'text-white hover:opacity-95 active:scale-[0.99] cursor-pointer' : 'text-gray-400 bg-gray-200 cursor-not-allowed'}`}
+                          style={(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                        >
+                          {isReadingArsip ? (
+                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Membaca {arsipReadingProgress.current}/{arsipReadingProgress.total}...</>
+                          ) : (arsipFiles.length > 0 && arsipFiles.filter(f => f.status === 'pending').length === 0) ? (
+                            <><CheckCircle2 size={16} /> Semua file sudah dibaca</>
+                          ) : (
+                            <><FileText size={16} /> Baca Dokumen ({arsipFiles.filter(f => f.status === 'pending').length} file)</>
+                          )}
+                        </button>
+
+                        <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between mt-6">
+                          <div className="flex items-start gap-3">
+                            <FileText size={18} className="text-[#084C61] mt-0.5" />
+                            <div>
+                              <p className="text-xs font-extrabold text-gray-900">Upload Manual {documentModule === 'spt' ? 'SPT' : 'Cuti'}</p>
+                              <p className="text-[10px] text-gray-500 font-medium">Gunakan form ini untuk dokumen yang tidak terbaca oleh sistem OCR</p>
+                            </div>
+                          </div>
+                          <button type="button" role="switch" aria-label="Upload Manual SPT atau Cuti" aria-checked={isManualUpload} className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setIsManualUpload(!isManualUpload)}>
+                            <div className={`w-10 h-5 rounded-full relative transition-colors ${isManualUpload ? 'bg-[#084C61]' : 'bg-gray-300'}`}>
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isManualUpload ? 'left-5' : 'left-1'}`}></div>
+                            </div>
+                          </button>
+                        </div>
+
+                        {isManualUpload && (
+                          <div className="mt-4 space-y-4">
+                            {manualEntries.map((entry, index) => (
+                              <div key={entry.id} className="p-4 bg-white border border-gray-200 rounded-xl relative shadow-sm">
+                                {manualEntries.length > 1 && (
+                                  <button onClick={() => setManualEntries(prev => prev.filter(e => e.id !== entry.id))} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors">
+                                    <X size={16} />
+                                  </button>
+                                )}
+                                <div className="text-[11px] font-extrabold text-gray-800 mb-3 flex items-center gap-2">
+                                  <FileText size={14} className="text-[#084C61]" /> {documentModule === 'spt' ? 'SPT' : 'Cuti'} Manual #{index + 1}
+                                </div>
+                                
+                                <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer text-center mb-4">
+                                  <UploadCloud size={20} className="text-gray-400" />
+                                  <span className="text-xs font-semibold text-gray-600">{entry.file ? entry.file.name : `Pilih file ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`}</span>
+                                  <input type="file" accept=".pdf, .jpg, .png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
+                                </label>
+
+                                <div className="grid grid-cols-2 gap-3 mb-3">
+                                  <div>
+                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Mulai</label>
+                                    <input type="date" value={entry.startDate} onChange={e => handleManualEntryChange(entry.id, 'startDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Selesai</label>
+                                    <input type="date" value={entry.endDate} onChange={e => handleManualEntryChange(entry.id, 'endDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
+                                  </div>
+                                </div>
+                                
+                                <div className="mb-3">
+                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">
+                                    {documentModule === 'spt' ? 'Tujuan / Lokasi' : 'Jenis Cuti'}
+                                  </label>
+                                  {documentModule === 'spt' ? (
+                                    <input 
+                                      type="text" 
+                                      placeholder="Masukkan tujuan dinas..."
+                                      value={entry.tujuan} 
+                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
+                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" 
+                                    />
+                                  ) : (
+                                    <select 
+                                      value={entry.tujuan} 
+                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
+                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700 cursor-pointer"
+                                    >
+                                      <option value="">Pilih Jenis Cuti...</option>
+                                      <option value="Cuti Tahunan">Cuti Tahunan</option>
+                                      <option value="Cuti Besar">Cuti Besar</option>
+                                      <option value="Cuti Sakit">Cuti Sakit</option>
+                                      <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+                                      <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
+                                      <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
+                                    </select>
+                                  )}
+                                </div>
+
+                                {entry.startDate && entry.endDate && (
+                                    <div className="flex justify-end mb-3">
+                                        <span className="text-[10px] font-bold text-[#0E5B73] bg-[#EAF5FA] px-2.5 py-1 rounded-md border border-[#CDE5F1]">
+                                          Total Hari {documentModule === 'spt' ? 'Dinas' : 'Cuti'}: {documentModule === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) + ' Hari Kerja' : hitungHariDinas(formatYMDtoIndo(entry.startDate), formatYMDtoIndo(entry.endDate)) + ' Hari'}
+                                        </span>
+                                    </div>
+                                )}
+
+                                <div className="relative">
+                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">Pegawai</label>
+                                  
+                                  <div className="mt-2 mb-3 space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar spt-employee-list">
+                                    {entry.pegawai.map((p, i) => {
+                                      const isEditingThisManualPegawai = editingPegawaiData && editingPegawaiData.entryId === entry.id && editingPegawaiData.idx === i;
+
+                                      return (
+                                        <div key={i} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors border border-transparent hover:border-gray-200 group">
+                                          {isEditingThisManualPegawai ? (
+                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
+                                              <Search size={16} className="text-gray-400 ml-3" />
+                                              <input 
+                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
+                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                              />
+                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                              
+                                              {inlineSearchQuery.trim().length > 1 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                                  {dbPegawai.filter(peg => peg.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || peg.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, iCat) => (
+                                                    <div key={iCat} onClick={() => {
+                                                      setManualEntries(prev => prev.map(e => {
+                                                        if (e.id === entry.id) {
+                                                          const newPegawai = [...e.pegawai];
+                                                          newPegawai[i] = { nama: peg.Nama, nip: peg.NIP };
+                                                          return { ...e, pegawai: newPegawai };
+                                                        }
+                                                        return e;
+                                                      }));
+                                                      setEditingPegawaiData(null);
+                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <>
+                                              <div className="flex-1 overflow-hidden pr-2">
+                                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                  <span className="font-extrabold text-sm text-gray-900 truncate">{p.nama}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
+                                                   <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500 font-mono">{p.nip}</div>
+                                              </div>
+                                              
+                                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+                                                <button onClick={() => { setEditingPegawaiData({ entryId: entry.id, idx: i }); setInlineSearchQuery(p.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"><Edit3 size={14} /></button>
+                                                <button onClick={() => handleRemovePegawaiManual(entry.id, p.nip)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"><Trash2 size={14} /></button>
+                                              </div>
+                                            </>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  <div className="relative flex items-center mt-2">
+                                    <Search size={14} className="absolute left-3 text-gray-400" />
+                                    <input type="text" placeholder="+ Tambah Pegawai (Ketik Nama/NIP)..." value={entry.searchQuery} onChange={e => handleManualEntryChange(entry.id, 'searchQuery', e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-dashed border-[#CDE5F1] rounded-xl text-xs outline-none focus:border-[#0E5B73] focus:border-solid text-gray-700 bg-[#F8FBFD] hover:bg-[#EAF5FA] transition-colors" />
+                                  </div>
+                                  {entry.searchQuery.trim().length > 1 && (
+                                    <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                      {dbPegawai.filter(p => p.Nama.toLowerCase().includes(entry.searchQuery.toLowerCase()) || p.NIP.includes(entry.searchQuery)).slice(0, 5).map((peg, i) => (
+                                        <div key={i} onClick={() => handleAddPegawaiManual(entry.id, peg)} className="px-4 py-2 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                          <div className="text-[11px] font-bold text-gray-800">{peg.Nama}</div>
+                                          <div className="text-[9px] text-gray-500">{peg.NIP}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+
+                            <button onClick={handleAddManualEntry} className="w-full py-2.5 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2">
+                              <Plus size={14} /> Tambah {documentModule === 'spt' ? 'SPT' : 'Cuti'} Manual Lainnya
+                            </button>
+
+                            <button 
+                              onClick={handleUploadManualSubmit}
+                              disabled={!isManualUploadValid || isSubmittingArsip}
+                              className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${!isManualUploadValid || isSubmittingArsip ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
+                              style={isManualUploadValid && !isSubmittingArsip ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
+                            >
+                              {isSubmittingArsip ? 'Memproses ke Server...' : `Upload ${manualEntries.length} Manual (${totalManualPegawai} pegawai)`}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
+                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
+                      {arsipSuccessfulFiles.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70 h-full">
+                          <FileText size={40} className="mb-4" />
+                          <h4 className="font-bold text-gray-700 text-sm mb-1">Hasil Pembacaan Dokumen</h4>
+                          <p className="text-xs">Upload file dan klik "Baca Dokumen" untuk melihat hasil</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-6">
+                          <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-base font-black text-gray-900">Rincian {documentModule === 'spt' ? 'SPT' : 'Cuti'}</h3>
+                            <span className="text-xs font-bold text-[#0E5B73]">{arsipTotalSelectedPegawai} pegawai dipilih</span>
+                          </div>
+
+                          <div className="space-y-6">
+                            {arsipSuccessfulFiles.map((fileObj) => {
+                              const pd = fileObj.parsedData;
+                              const isEditingThisArsip = editingArsipId === fileObj.id;
+                              const isAddingPegawaiHere = addingPegawaiId === fileObj.id;
+                              const isInvalidSptLocationState = documentModule === 'spt' && !isValidSptLocation(pd.arsipTujuan);
+
+                              return (
+                                <div key={fileObj.id} className="bg-white rounded-2xl border border-[#CDE5F1] shadow-sm overflow-hidden">
+                                  <div className="bg-[#F0F7F9] px-5 py-4 border-b border-[#CDE5F1] relative">
+                                    {isEditingThisArsip ? (
+                                      <div className="space-y-3">
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Mulai:</label>
+                                          <input type="date" value={formatIndoToYMD(editArsipForm.berangkat)} onChange={(e) => setEditArsipForm({...editArsipForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
+                                          <input type="date" value={formatIndoToYMD(editArsipForm.pulang)} onChange={(e) => setEditArsipForm({...editArsipForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                        </div>
+                                        {documentModule !== 'cuti' && (
+                                          <div className="flex items-center gap-3">
+                                            <label className="w-20 text-xs font-bold text-[#114053]">Tgl Surat:</label>
+                                            <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          </div>
+                                        )}
+                                        <div className="flex items-center gap-3">
+                                          <label className="w-20 text-xs font-bold text-[#114053]">{documentModule === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
+                                          {documentModule === 'spt' ? (
+                                            <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder="Cth: Kota Bandung, Kab. Lebak..." className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
+                                          ) : (
+                                            <select value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500 cursor-pointer">
+                                              <option value="Cuti / Alasan Lainnya">Pilih Jenis Cuti...</option>
+                                              <option value="Cuti Tahunan">Cuti Tahunan</option>
+                                              <option value="Cuti Besar">Cuti Besar</option>
+                                              <option value="Cuti Sakit">Cuti Sakit</option>
+                                              <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+                                              <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
+                                              <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
+                                            </select>
+                                          )}
+                                        </div>
+                                        <div className="flex justify-end pt-2 gap-2">
+                                          <button onClick={() => setEditingArsipId(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs shadow-sm transition-colors cursor-pointer">
+                                            Batal
+                                          </button>
+                                          <button onClick={() => handleSaveArsipDetails(fileObj.id)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
+                                            <Save size={14} /> Simpan
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex justify-between items-start gap-4">
+                                        <div className="space-y-1.5 pr-24">
+                                          {documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0 && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Data rentang cuti tidak valid (0 hari). Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
+                                          {documentModule === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya' && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Jenis Cuti belum sesuai. Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
+                                          {isInvalidSptLocationState && (
+                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                                                  <AlertCircle size={14} className="shrink-0" />
+                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Kota/Kabupaten tujuan tidak valid. Silakan klik "Ubah Data".</span>
+                                              </div>
+                                          )}
+                                          <div className="flex items-center gap-2">
+                                            <Calendar size={16} className="text-[#114053] shrink-0" />
+                                            <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
+                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({documentModule === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
+                                          </div>
+                                          {documentModule !== 'cuti' && (
+                                            <div className="flex items-center gap-2 pl-[22px]">
+                                              <FileText size={12} className="text-gray-400 shrink-0" />
+                                              <span className="text-[11px] text-gray-600 font-medium">Tgl Surat: {pd.arsipTanggalSurat}</span>
+                                            </div>
+                                          )}
+                                          <div className="flex items-center gap-2 pl-[22px]">
+                                            <MapPin size={12} className="text-gray-400 shrink-0" />
+                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{documentModule === 'spt' ? 'Tujuan' : 'Jenis Cuti'}: {pd.arsipTujuan || '-'}</span>
+                                          </div>
+                                        </div>
+                                        <button onClick={() => {
+                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-' });
+                                          setEditingArsipId(fileObj.id);
+                                        }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
+                                          <Edit3 size={14} /> Ubah Data
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar spt-employee-list">
+                                    {pd.arsipNames.map((pegawai, idx) => {
+                                      const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
+                                      const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
+                                      const isInvalidCutiType = documentModule === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
+                                      const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState;
+                                      
+                                      return (
+                                        <div key={idx} className={`flex items-center gap-3 p-3 rounded-xl transition-colors border group ${isErrorState ? 'bg-red-50/30 border-red-100 hover:border-red-200' : 'hover:bg-gray-50 border-transparent hover:border-gray-200'}`}>
+                                          <input 
+                                            type="checkbox" 
+                                            checked={pegawai.selected} 
+                                            disabled={isErrorState}
+                                            title={isErrorState ? "Ubah data agar valid untuk dapat mencentang" : ""}
+                                            onChange={(e) => {
+                                              updateArsipFileData(fileObj.id, oldData => {
+                                                const newNames = [...oldData.arsipNames];
+                                                newNames[idx].selected = e.target.checked;
+                                                return { ...oldData, arsipNames: newNames };
+                                              });
+                                              setArsipSubmitResult(null);
+                                            }}
+                                            className={`w-4 h-4 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 ${isErrorState ? 'cursor-not-allowed opacity-50' : 'text-teal-600 cursor-pointer'}`}
+                                          />
+                                          
+                                          {isEditingThisPegawai ? (
+                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
+                                              <Search size={16} className="text-gray-400 ml-3" />
+                                              <input 
+                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
+                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                              />
+                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                              
+                                              {inlineSearchQuery.trim().length > 1 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                                  {dbPegawai.filter(p => p.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || p.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, i) => (
+                                                    <div key={i} onClick={() => {
+                                                      updateArsipFileData(fileObj.id, oldData => {
+                                                        const newNames = [...oldData.arsipNames];
+                                                        newNames[idx] = { nama: peg.Nama, nip: peg.NIP, selected: newNames[idx].selected };
+                                                        return { ...oldData, arsipNames: newNames };
+                                                      });
+                                                      setEditingPegawaiData(null);
+                                                      setArsipSubmitResult(null);
+                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div className="flex-1 overflow-hidden pr-2">
+                                              <div className="flex items-center gap-2 flex-wrap">
+                                                <span className={`font-extrabold text-sm truncate ${isErrorState ? 'text-red-800 line-through' : 'text-gray-900'}`}>{pegawai.nama}</span>
+                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0 ${isErrorState ? 'text-red-700 bg-red-100' : 'text-emerald-700 bg-emerald-100'}`}><CheckCircle2 size={10}/> 100%</span>
+                                              </div>
+                                              <div className={`text-[10px] font-mono mt-0.5 ${isErrorState ? 'text-red-500' : 'text-gray-500'}`}>{pegawai.nip}</div>
+                                            </div>
+                                          )}
+
+                                          {!isEditingThisPegawai && (
+                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+                                              <button aria-label={`Edit pegawai ${pegawai.nama}`} onClick={() => { setEditingPegawaiData({ fileId: fileObj.id, idx }); setInlineSearchQuery(pegawai.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer"><Edit3 size={14} /></button>
+                                              <button type="button" aria-label={`Hapus pegawai ${pegawai.nama}`} title="Hapus dari daftar preview" onClick={() => {
+                                                updateArsipFileData(fileObj.id, oldData => {
+                                                  const newNames = oldData.arsipNames.filter((_, i) => i !== idx);
+                                                  return { ...oldData, arsipNames: newNames };
+                                                });
+                                                setEditingPegawaiData(null);
+                                                setArsipSubmitResult(null);
+                                              }} className="flex items-center gap-1 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"><Trash2 size={14} /><span className="text-xs font-medium">Hapus</span></button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                    
+                                    {isAddingPegawaiHere ? (
+                                      <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm mt-3 mb-2 mx-2">
+                                        <Search size={16} className="text-gray-400 ml-3" />
+                                        <input 
+                                          type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={arsipSearchQuery} onChange={(e) => setArsipSearchQuery(e.target.value)}
+                                          className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
+                                        />
+                                        <button onClick={() => { setAddingPegawaiId(null); setArsipSearchQuery(''); }} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
+                                        
+                                        {arsipSearchQuery.trim().length > 1 && (
+                                          <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
+                                            {dbPegawai.filter(p => p.Nama.toLowerCase().includes(arsipSearchQuery.toLowerCase()) || p.NIP.includes(arsipSearchQuery)).slice(0, 10).map((peg, idx) => (
+                                              <div key={idx} onClick={() => {
+                                                updateArsipFileData(fileObj.id, oldData => {
+                                                  if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
+                                                    const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
+                                                    const isInvalidCutiType = documentModule === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
+                                                    const currentErrorState = isZeroDays || isInvalidCutiType || (documentModule === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
+                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !currentErrorState }] };
+                                                  }
+                                                  return oldData;
+                                                });
+                                                setAddingPegawaiId(null); setArsipSearchQuery(''); setArsipSubmitResult(null);
+                                              }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
+                                                <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
+                                                <div className="text-[10px] text-gray-500">{peg.NIP}</div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <button 
+                                        onClick={() => setAddingPegawaiId(fileObj.id)}
+                                        className="w-full py-3 mt-2 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                      >
+                                        + Tambah Pegawai
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {arsipSuccessfulFiles.length > 0 && (
+                      <div className="space-y-3">
+                        <button 
+                          onClick={handleUploadSubmitArsip}
+                          disabled={isSubmittingArsip || arsipTotalSelectedPegawai === 0}
+                          className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmittingArsip || arsipTotalSelectedPegawai === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
+                          style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
+                        >
+                          {isSubmittingArsip ? 'Memproses ke Server...' : arsipSubmitResult?.type === 'success' ? `Upload Ulang Data (${arsipTotalSelectedPegawai} pegawai)` : `Upload Semua ${documentModule === 'spt' ? 'SPT' : 'Cuti'} (${arsipTotalSelectedPegawai} pegawai)`}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                </div>
+  );
 
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
@@ -2784,515 +3325,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               {arsipSubTab === 'terdata' ? (
                 <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
-                <div className="pt-4">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0">
-                    <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:sticky top-[120px]">
-                      <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                        <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Upload {activeTab === 'spt' ? 'SPT' : 'Cuti'} (di luar periode pengumpulan)</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed font-normal mb-4">
-                      </p>
-                      <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs font-bold text-red-700 mb-4">
-                        <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                        <span>KHUSUS {activeTab === 'spt' ? 'SPT' : 'CUTI'} SAJA! Dokumen selain Surat {activeTab === 'spt' ? 'Perintah Tugas' : 'Cuti'} akan ditolak.</span>
-                      </div>
-                      <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl text-xs text-[#084C61] leading-relaxed mb-6">
-                        <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen memuat kata "{activeTab === 'spt' ? 'Surat Tugas' : 'Cuti'}" dengan nama, NIP, tanggal, dan {activeTab === 'spt' ? 'tujuan' : 'keterangan'} yang jelas.
-                      </div>
-                      
-                      <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
-                        <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
-                          <UploadCloud size={24} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-gray-700 group-hover:text-[#0E5B73]">Klik atau drag & drop file</p>
-                          <p className="text-[10px] font-medium text-gray-400 mt-1">PDF (1 halaman), JPG, PNG (max 10MB)</p>
-                        </div>
-                        <input id="pdf-upload-input" type="file" accept=".pdf" multiple onChange={handleFileChange} className="hidden" />
-                      </label>
-
-                      <div className="space-y-4">
-                        <div>
-                          <h4 className="text-[11px] font-extrabold text-gray-900 mb-2">File terpilih ({arsipFiles.length}/10):</h4>
-                          <div className="space-y-2">
-                            {arsipFiles.length === 0 ? (
-                               <div className="p-3 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center text-xs text-gray-400 py-6">
-                                 Belum ada dokumen yang diunggah.
-                               </div>
-                            ) : (
-                               arsipFiles.map((fObj, idx) => (
-                                <div key={fObj.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs ${fObj.status === 'success' ? 'bg-[#EAF5FA] border-[#CDE5F1] text-[#1E5D77]' : 'bg-[#F8FAFC] border-gray-200 text-gray-700'}`}>
-                                  <div className="flex items-center gap-2 truncate pr-4">
-                                    <FileText size={16} className={fObj.status === 'success' ? "text-emerald-600 shrink-0" : "text-gray-400 shrink-0"} />
-                                    <span className="font-semibold truncate">{fObj.file.name}</span>
-                                    {fObj.status === 'reading' && <div className="w-3 h-3 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin shrink-0"></div>}
-                                    {fObj.status === 'success' && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
-                                  </div>
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button onClick={() => handlePreviewPdf(fObj.file)} className="text-[#084C61] hover:bg-gray-200 p-1.5 rounded-lg transition-colors cursor-pointer" title="Pratinjau PDF"><Eye size={14}/></button>
-                                    <button onClick={() => handleClearFile(fObj.id)} className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors cursor-pointer"><X size={14}/></button>
-                                  </div>
-                                </div>
-                               ))
-                            )}
-                          </div>
-                        </div>
-
-                        <button 
-                          onClick={handleBacaDokumenArsip}
-                          disabled={arsipFiles.filter(f => f.status === 'pending').length === 0 || isReadingArsip}
-                          className={`w-full py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? 'text-white hover:opacity-95 active:scale-[0.99] cursor-pointer' : 'text-gray-400 bg-gray-200 cursor-not-allowed'}`}
-                          style={(arsipFiles.filter(f => f.status === 'pending').length > 0 && !isReadingArsip) ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
-                        >
-                          {isReadingArsip ? (
-                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Membaca {arsipReadingProgress.current}/{arsipReadingProgress.total}...</>
-                          ) : (arsipFiles.length > 0 && arsipFiles.filter(f => f.status === 'pending').length === 0) ? (
-                            <><CheckCircle2 size={16} /> Semua file sudah dibaca</>
-                          ) : (
-                            <><FileText size={16} /> Baca Dokumen ({arsipFiles.filter(f => f.status === 'pending').length} file)</>
-                          )}
-                        </button>
-
-                        <div className="p-4 bg-[#F0F7F9] border border-[#CDE5F1] rounded-xl flex items-center justify-between mt-6">
-                          <div className="flex items-start gap-3">
-                            <FileText size={18} className="text-[#084C61] mt-0.5" />
-                            <div>
-                              <p className="text-xs font-extrabold text-gray-900">Upload Manual {activeTab === 'spt' ? 'SPT' : 'Cuti'}</p>
-                              <p className="text-[10px] text-gray-500 font-medium">Gunakan form ini untuk dokumen yang tidak terbaca oleh sistem OCR</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setIsManualUpload(!isManualUpload)}>
-                            <div className={`w-10 h-5 rounded-full relative transition-colors ${isManualUpload ? 'bg-[#084C61]' : 'bg-gray-300'}`}>
-                              <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isManualUpload ? 'left-5' : 'left-1'}`}></div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {isManualUpload && (
-                          <div className="mt-4 space-y-4">
-                            {manualEntries.map((entry, index) => (
-                              <div key={entry.id} className="p-4 bg-white border border-gray-200 rounded-xl relative shadow-sm">
-                                {manualEntries.length > 1 && (
-                                  <button onClick={() => setManualEntries(prev => prev.filter(e => e.id !== entry.id))} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors">
-                                    <X size={16} />
-                                  </button>
-                                )}
-                                <div className="text-[11px] font-extrabold text-gray-800 mb-3 flex items-center gap-2">
-                                  <FileText size={14} className="text-[#084C61]" /> {activeTab === 'spt' ? 'SPT' : 'Cuti'} Manual #{index + 1}
-                                </div>
-                                
-                                <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer text-center mb-4">
-                                  <UploadCloud size={20} className="text-gray-400" />
-                                  <span className="text-xs font-semibold text-gray-600">{entry.file ? entry.file.name : `Pilih file ${activeTab === 'spt' ? 'SPT' : 'Cuti'}`}</span>
-                                  <input type="file" accept=".pdf, .jpg, .png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
-                                </label>
-
-                                <div className="grid grid-cols-2 gap-3 mb-3">
-                                  <div>
-                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Mulai</label>
-                                    <input type="date" value={entry.startDate} onChange={e => handleManualEntryChange(entry.id, 'startDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[10px] text-gray-500 mb-1 font-medium">Tanggal Selesai</label>
-                                    <input type="date" value={entry.endDate} onChange={e => handleManualEntryChange(entry.id, 'endDate', e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" />
-                                  </div>
-                                </div>
-                                
-                                <div className="mb-3">
-                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">
-                                    {activeTab === 'spt' ? 'Tujuan / Lokasi' : 'Jenis Cuti'}
-                                  </label>
-                                  {activeTab === 'spt' ? (
-                                    <input 
-                                      type="text" 
-                                      placeholder="Masukkan tujuan dinas..."
-                                      value={entry.tujuan} 
-                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
-                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700" 
-                                    />
-                                  ) : (
-                                    <select 
-                                      value={entry.tujuan} 
-                                      onChange={e => handleManualEntryChange(entry.id, 'tujuan', e.target.value)} 
-                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#0E5B73] text-gray-700 cursor-pointer"
-                                    >
-                                      <option value="">Pilih Jenis Cuti...</option>
-                                      <option value="Cuti Tahunan">Cuti Tahunan</option>
-                                      <option value="Cuti Besar">Cuti Besar</option>
-                                      <option value="Cuti Sakit">Cuti Sakit</option>
-                                      <option value="Cuti Melahirkan">Cuti Melahirkan</option>
-                                      <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
-                                      <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
-                                    </select>
-                                  )}
-                                </div>
-
-                                {entry.startDate && entry.endDate && (
-                                    <div className="flex justify-end mb-3">
-                                        <span className="text-[10px] font-bold text-[#0E5B73] bg-[#EAF5FA] px-2.5 py-1 rounded-md border border-[#CDE5F1]">
-                                          Total Hari {activeTab === 'spt' ? 'Dinas' : 'Cuti'}: {activeTab === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) + ' Hari Kerja' : hitungHariDinas(formatYMDtoIndo(entry.startDate), formatYMDtoIndo(entry.endDate)) + ' Hari'}
-                                        </span>
-                                    </div>
-                                )}
-
-                                <div className="relative">
-                                  <label className="block text-[10px] text-gray-500 mb-1 font-medium">Pegawai</label>
-                                  
-                                  <div className="mt-2 mb-3 space-y-2">
-                                    {entry.pegawai.map((p, i) => {
-                                      const isEditingThisManualPegawai = editingPegawaiData && editingPegawaiData.entryId === entry.id && editingPegawaiData.idx === i;
-
-                                      return (
-                                        <div key={i} className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors border border-transparent hover:border-gray-200 group">
-                                          {isEditingThisManualPegawai ? (
-                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
-                                              <Search size={16} className="text-gray-400 ml-3" />
-                                              <input 
-                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
-                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
-                                              />
-                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
-                                              
-                                              {inlineSearchQuery.trim().length > 1 && (
-                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                                  {dbPegawai.filter(peg => peg.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || peg.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, iCat) => (
-                                                    <div key={iCat} onClick={() => {
-                                                      setManualEntries(prev => prev.map(e => {
-                                                        if (e.id === entry.id) {
-                                                          const newPegawai = [...e.pegawai];
-                                                          newPegawai[i] = { nama: peg.Nama, nip: peg.NIP };
-                                                          return { ...e, pegawai: newPegawai };
-                                                        }
-                                                        return e;
-                                                      }));
-                                                      setEditingPegawaiData(null);
-                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
-                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          ) : (
-                                            <>
-                                              <div className="flex-1 overflow-hidden pr-2">
-                                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                                  <span className="font-extrabold text-sm text-gray-900 truncate">{p.nama}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
-                                                   <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0"><CheckCircle2 size={10}/> 100%</span>
-                                                </div>
-                                                <div className="text-[10px] text-gray-500 font-mono">{p.nip}</div>
-                                              </div>
-                                              
-                                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                                <button onClick={() => { setEditingPegawaiData({ entryId: entry.id, idx: i }); setInlineSearchQuery(p.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"><Edit3 size={14} /></button>
-                                                <button onClick={() => handleRemovePegawaiManual(entry.id, p.nip)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"><Trash2 size={14} /></button>
-                                              </div>
-                                            </>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-
-                                  <div className="relative flex items-center mt-2">
-                                    <Search size={14} className="absolute left-3 text-gray-400" />
-                                    <input type="text" placeholder="+ Tambah Pegawai (Ketik Nama/NIP)..." value={entry.searchQuery} onChange={e => handleManualEntryChange(entry.id, 'searchQuery', e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-dashed border-[#CDE5F1] rounded-xl text-xs outline-none focus:border-[#0E5B73] focus:border-solid text-gray-700 bg-[#F8FBFD] hover:bg-[#EAF5FA] transition-colors" />
-                                  </div>
-                                  {entry.searchQuery.trim().length > 1 && (
-                                    <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                      {dbPegawai.filter(p => p.Nama.toLowerCase().includes(entry.searchQuery.toLowerCase()) || p.NIP.includes(entry.searchQuery)).slice(0, 5).map((peg, i) => (
-                                        <div key={i} onClick={() => handleAddPegawaiManual(entry.id, peg)} className="px-4 py-2 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                          <div className="text-[11px] font-bold text-gray-800">{peg.Nama}</div>
-                                          <div className="text-[9px] text-gray-500">{peg.NIP}</div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-
-                            <button onClick={handleAddManualEntry} className="w-full py-2.5 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2">
-                              <Plus size={14} /> Tambah {activeTab === 'spt' ? 'SPT' : 'Cuti'} Manual Lainnya
-                            </button>
-
-                            <button 
-                              onClick={handleUploadManualSubmit}
-                              disabled={!isManualUploadValid || isSubmitting}
-                              className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${!isManualUploadValid || isSubmitting ? 'opacity-50 cursor-not-allowed bg-gray-400' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
-                              style={isManualUploadValid && !isSubmitting ? { backgroundColor: PALETTE_PKP.midnightGreen } : {}}
-                            >
-                              {isSubmitting ? 'Memproses ke Server...' : `Upload ${manualEntries.length} Manual (${totalManualPegawai} pegawai)`}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
-                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 min-h-[400px]">
-                      {arsipSuccessfulFiles.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center text-center py-20 text-gray-400 opacity-70 h-full">
-                          <FileText size={40} className="mb-4" />
-                          <h4 className="font-bold text-gray-700 text-sm mb-1">Hasil Pembacaan Dokumen</h4>
-                          <p className="text-xs">Upload file dan klik "Baca Dokumen" untuk melihat hasil</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-6">
-                          <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-base font-black text-gray-900">Rincian {activeTab === 'spt' ? 'SPT' : 'Cuti'}</h3>
-                            <span className="text-xs font-bold text-[#0E5B73]">{arsipTotalSelectedPegawai} pegawai dipilih</span>
-                          </div>
-
-                          <div className="space-y-6">
-                            {arsipSuccessfulFiles.map((fileObj) => {
-                              const pd = fileObj.parsedData;
-                              const isEditingThisArsip = editingArsipId === fileObj.id;
-                              const isAddingPegawaiHere = addingPegawaiId === fileObj.id;
-                              const isInvalidSptLocationState = activeTab === 'spt' && !isValidSptLocation(pd.arsipTujuan);
-
-                              return (
-                                <div key={fileObj.id} className="bg-white rounded-2xl border border-[#CDE5F1] shadow-sm overflow-hidden">
-                                  <div className="bg-[#F0F7F9] px-5 py-4 border-b border-[#CDE5F1] relative">
-                                    {isEditingThisArsip ? (
-                                      <div className="space-y-3">
-                                        <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">Mulai:</label>
-                                          <input type="date" value={formatIndoToYMD(editArsipForm.berangkat)} onChange={(e) => setEditArsipForm({...editArsipForm, berangkat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">Selesai:</label>
-                                          <input type="date" value={formatIndoToYMD(editArsipForm.pulang)} onChange={(e) => setEditArsipForm({...editArsipForm, pulang: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                                        </div>
-                                        {activeTab !== 'cuti' && (
-                                          <div className="flex items-center gap-3">
-                                            <label className="w-20 text-xs font-bold text-[#114053]">Tgl Surat:</label>
-                                            <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                                          </div>
-                                        )}
-                                        <div className="flex items-center gap-3">
-                                          <label className="w-20 text-xs font-bold text-[#114053]">{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
-                                          {activeTab === 'spt' ? (
-                                            <input type="text" value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} placeholder="Cth: Kota Bandung, Kab. Lebak..." className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
-                                          ) : (
-                                            <select value={editArsipForm.tujuan} onChange={(e) => setEditArsipForm({...editArsipForm, tujuan: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500 cursor-pointer">
-                                              <option value="Cuti / Alasan Lainnya">Pilih Jenis Cuti...</option>
-                                              <option value="Cuti Tahunan">Cuti Tahunan</option>
-                                              <option value="Cuti Besar">Cuti Besar</option>
-                                              <option value="Cuti Sakit">Cuti Sakit</option>
-                                              <option value="Cuti Melahirkan">Cuti Melahirkan</option>
-                                              <option value="Cuti Karena Alasan Penting">Cuti Karena Alasan Penting</option>
-                                              <option value="Cuti diluar Tanggungan Negara">Cuti diluar Tanggungan Negara</option>
-                                            </select>
-                                          )}
-                                        </div>
-                                        <div className="flex justify-end pt-2 gap-2">
-                                          <button onClick={() => setEditingArsipId(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs shadow-sm transition-colors cursor-pointer">
-                                            Batal
-                                          </button>
-                                          <button onClick={() => handleSaveArsipDetails(fileObj.id)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer">
-                                            <Save size={14} /> Simpan
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div className="flex justify-between items-start gap-4">
-                                        <div className="space-y-1.5 pr-24">
-                                          {activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0 && (
-                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
-                                                  <AlertCircle size={14} className="shrink-0" />
-                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Data rentang cuti tidak valid (0 hari). Silakan klik "Ubah Data".</span>
-                                              </div>
-                                          )}
-                                          {activeTab === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya' && (
-                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
-                                                  <AlertCircle size={14} className="shrink-0" />
-                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Jenis Cuti belum sesuai. Silakan klik "Ubah Data".</span>
-                                              </div>
-                                          )}
-                                          {isInvalidSptLocationState && (
-                                              <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
-                                                  <AlertCircle size={14} className="shrink-0" />
-                                                  <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Kota/Kabupaten tujuan tidak valid. Silakan klik "Ubah Data".</span>
-                                              </div>
-                                          )}
-                                          <div className="flex items-center gap-2">
-                                            <Calendar size={16} className="text-[#114053] shrink-0" />
-                                            <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
-                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
-                                          </div>
-                                          {activeTab !== 'cuti' && (
-                                            <div className="flex items-center gap-2 pl-[22px]">
-                                              <FileText size={12} className="text-gray-400 shrink-0" />
-                                              <span className="text-[11px] text-gray-600 font-medium">Tgl Surat: {pd.arsipTanggalSurat}</span>
-                                            </div>
-                                          )}
-                                          <div className="flex items-center gap-2 pl-[22px]">
-                                            <MapPin size={12} className="text-gray-400 shrink-0" />
-                                            <span className="text-[11px] text-gray-600 font-medium truncate max-w-[200px] sm:max-w-[320px]" title={pd.arsipTujuan}>{activeTab === 'spt' ? 'Tujuan' : 'Jenis Cuti'}: {pd.arsipTujuan || '-'}</span>
-                                          </div>
-                                        </div>
-                                        <button onClick={() => {
-                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-' });
-                                          setEditingArsipId(fileObj.id);
-                                        }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
-                                          <Edit3 size={14} /> Ubah Data
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar">
-                                    {pd.arsipNames.map((pegawai, idx) => {
-                                      const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
-                                      const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
-                                      const isInvalidCutiType = activeTab === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                      const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState;
-                                      
-                                      return (
-                                        <div key={idx} className={`flex items-center gap-3 p-3 rounded-xl transition-colors border group ${isErrorState ? 'bg-red-50/30 border-red-100 hover:border-red-200' : 'hover:bg-gray-50 border-transparent hover:border-gray-200'}`}>
-                                          <input 
-                                            type="checkbox" 
-                                            checked={pegawai.selected} 
-                                            disabled={isErrorState}
-                                            title={isErrorState ? "Ubah data agar valid untuk dapat mencentang" : ""}
-                                            onChange={(e) => {
-                                              updateArsipFileData(fileObj.id, oldData => {
-                                                const newNames = [...oldData.arsipNames];
-                                                newNames[idx].selected = e.target.checked;
-                                                return { ...oldData, arsipNames: newNames };
-                                              });
-                                              setSubmitResult(null);
-                                            }}
-                                            className={`w-4 h-4 rounded border-gray-300 focus:ring-teal-500 mt-0.5 shrink-0 ${isErrorState ? 'cursor-not-allowed opacity-50' : 'text-teal-600 cursor-pointer'}`}
-                                          />
-                                          
-                                          {isEditingThisPegawai ? (
-                                            <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm flex-1">
-                                              <Search size={16} className="text-gray-400 ml-3" />
-                                              <input 
-                                                type="text" autoFocus value={inlineSearchQuery} onChange={(e) => setInlineSearchQuery(e.target.value)}
-                                                className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
-                                              />
-                                              <button onClick={() => setEditingPegawaiData(null)} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
-                                              
-                                              {inlineSearchQuery.trim().length > 1 && (
-                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                                  {dbPegawai.filter(p => p.Nama.toLowerCase().includes(inlineSearchQuery.toLowerCase()) || p.NIP.includes(inlineSearchQuery)).slice(0, 5).map((peg, i) => (
-                                                    <div key={i} onClick={() => {
-                                                      updateArsipFileData(fileObj.id, oldData => {
-                                                        const newNames = [...oldData.arsipNames];
-                                                        newNames[idx] = { nama: peg.Nama, nip: peg.NIP, selected: newNames[idx].selected };
-                                                        return { ...oldData, arsipNames: newNames };
-                                                      });
-                                                      setEditingPegawaiData(null);
-                                                      setSubmitResult(null);
-                                                    }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                                      <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
-                                                      <div className="text-[10px] text-gray-500">{peg.NIP}</div>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          ) : (
-                                            <div className="flex-1 overflow-hidden pr-2">
-                                              <div className="flex items-center gap-2 flex-wrap">
-                                                <span className={`font-extrabold text-sm truncate ${isErrorState ? 'text-red-800 line-through' : 'text-gray-900'}`}>{pegawai.nama}</span>
-                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0 ${isErrorState ? 'text-red-700 bg-red-100' : 'text-emerald-700 bg-emerald-100'}`}><CheckCircle2 size={10}/> 100%</span>
-                                              </div>
-                                              <div className={`text-[10px] font-mono mt-0.5 ${isErrorState ? 'text-red-500' : 'text-gray-500'}`}>{pegawai.nip}</div>
-                                            </div>
-                                          )}
-
-                                          {!isEditingThisPegawai && (
-                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                              <button onClick={() => { setEditingPegawaiData({ fileId: fileObj.id, idx }); setInlineSearchQuery(pegawai.nama); }} className="p-2 text-gray-400 hover:text-[#084C61] hover:bg-gray-100 rounded-lg cursor-pointer"><Edit3 size={14} /></button>
-                                              <button onClick={() => {
-                                                updateArsipFileData(fileObj.id, oldData => {
-                                                  const newNames = oldData.arsipNames.filter((_, i) => i !== idx);
-                                                  return { ...oldData, arsipNames: newNames };
-                                                });
-                                                setSubmitResult(null);
-                                              }} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"><Trash2 size={14} /></button>
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                    
-                                    {isAddingPegawaiHere ? (
-                                      <div className="relative border-2 border-teal-500 rounded-xl flex items-center bg-white shadow-sm mt-3 mb-2 mx-2">
-                                        <Search size={16} className="text-gray-400 ml-3" />
-                                        <input 
-                                          type="text" autoFocus placeholder="Cari pegawai untuk ditambahkan..." value={arsipSearchQuery} onChange={(e) => setArsipSearchQuery(e.target.value)}
-                                          className="w-full px-3 py-2.5 text-sm font-semibold text-gray-800 outline-none bg-transparent"
-                                        />
-                                        <button onClick={() => { setAddingPegawaiId(null); setArsipSearchQuery(''); }} className="p-2.5 text-gray-400 hover:bg-gray-100 rounded-r-xl cursor-pointer"><X size={16}/></button>
-                                        
-                                        {arsipSearchQuery.trim().length > 1 && (
-                                          <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50 custom-scrollbar">
-                                            {dbPegawai.filter(p => p.Nama.toLowerCase().includes(arsipSearchQuery.toLowerCase()) || p.NIP.includes(arsipSearchQuery)).slice(0, 10).map((peg, idx) => (
-                                              <div key={idx} onClick={() => {
-                                                updateArsipFileData(fileObj.id, oldData => {
-                                                  if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
-                                                    const isZeroDays = activeTab === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
-                                                    const isInvalidCutiType = activeTab === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                                    const currentErrorState = isZeroDays || isInvalidCutiType || (activeTab === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
-                                                    return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !currentErrorState }] };
-                                                  }
-                                                  return oldData;
-                                                });
-                                                setAddingPegawaiId(null); setArsipSearchQuery(''); setSubmitResult(null);
-                                              }} className="px-4 py-3 hover:bg-teal-50 cursor-pointer border-b border-gray-50 last:border-0">
-                                                <div className="text-sm font-bold text-gray-800">{peg.Nama}</div>
-                                                <div className="text-[10px] text-gray-500">{peg.NIP}</div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <button 
-                                        onClick={() => setAddingPegawaiId(fileObj.id)}
-                                        className="w-full py-3 mt-2 rounded-xl border border-dashed border-[#CDE5F1] text-[#084C61] bg-[#F8FBFD] hover:bg-[#EAF5FA] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                                      >
-                                        + Tambah Pegawai
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {arsipSuccessfulFiles.length > 0 && (
-                      <div className="space-y-3">
-                        {submitResult && (
-                          <div className={`p-4 rounded-xl text-xs flex items-center gap-2 ${submitResult.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-                            {submitResult.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" /> : <AlertCircle size={16} className="text-red-600 shrink-0" />}
-                            <span className="font-semibold">{submitResult.message}</span>
-                          </div>
-                        )}
-                        <button 
-                          onClick={handleUploadSubmitArsip}
-                          disabled={isSubmitting || arsipTotalSelectedPegawai === 0}
-                          className={`w-full py-4 mt-2 rounded-2xl text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${isSubmitting || arsipTotalSelectedPegawai === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.99] cursor-pointer'}`}
-                          style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                        >
-                          {isSubmitting ? 'Memproses ke Server...' : submitResult?.type === 'success' ? `Upload Ulang Data (${arsipTotalSelectedPegawai} pegawai)` : `Upload Semua ${activeTab === 'spt' ? 'SPT' : 'Cuti'} (${arsipTotalSelectedPegawai} pegawai)`}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                </div>
+                renderArsipUploadPanel()
               )}
             </div>
 
@@ -3715,7 +3748,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                   </div>
                 </div>
               ) : activeStep === 3 && selectedPeriod ? (
-                <div className="max-w-4xl mx-auto space-y-6">
+                <div className="max-w-7xl mx-auto space-y-6">
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
                     <div className="mt-1 text-gray-400"><FolderOpen size={24} /></div>
                     <div>
@@ -3860,6 +3893,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                       )}
                     </div>
                   )}
+
+                  {renderArsipUploadPanel()}
 
                   <div className="flex justify-center gap-3 pt-6 border-t border-gray-100">
                     <button onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
@@ -4080,6 +4115,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .spt-employee-list { scrollbar-gutter: stable; }
       `}} />
     </div>
   );
