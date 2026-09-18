@@ -1,4 +1,3 @@
-import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
