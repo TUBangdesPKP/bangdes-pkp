@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, sendClaimRequest } from './archive-claims.js';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
   FileBarChart, ArrowLeft, Search, Briefcase, CheckCircle2, AlertCircle, 
@@ -127,7 +128,7 @@ const fetchPegawaiData = async (forceRefresh = false) => {
   return { data: [], source: 'empty' };
 };
 
-const fetchLiveSptData = async () => {
+const fetchLiveSptData = async ({ throwOnError = false } = {}) => {
   try {
     const rawCsvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1964926388&single=true&output=csv";
     const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
@@ -169,6 +170,7 @@ const fetchLiveSptData = async () => {
 
   } catch (err) {
     console.error("Gagal menarik data SPT CSV:", err);
+    if (throwOnError) throw err;
     return [];
   }
 };
@@ -212,7 +214,7 @@ const standardizeDate = (dateStr) => {
   return dateStr;
 };
 
-const fetchLiveCutiData = async () => {
+const fetchLiveCutiData = async ({ throwOnError = false } = {}) => {
   try {
     const rawCsvUrl = "https://docs.google.com/spreadsheets/d/1bIQbiWAQ67TYFmvb3WZkvjJaN1moP1fQlmegsFZJWfI/export?format=csv&gid=185022342";
     
@@ -273,12 +275,13 @@ const fetchLiveCutiData = async () => {
         jumlahHari: jmlHari,
         bulan: item['Bulan'] || '-',
         tahun: item['Tahun'] || '-',
-        linkAkses: item['Link Arsip'] || '#'
+        linkAkses: item['Link Arsip'] || item['Link Dokumen'] || '#'
       };
     });
 
   } catch (err) {
     console.error("Gagal menarik data Cuti CSV:", err);
+    if (throwOnError) throw err;
     return [];
   }
 };
@@ -1903,42 +1906,21 @@ const ArsipRekapitulasiList = ({ modul }) => {
   );
 };
 
-const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
-  const [selectedPeriod, setSelectedPeriod] = useState(null);
-  
-  const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
-    try {
-      const saved = localStorage.getItem('pkp_period_status');
-      return saved ? JSON.parse(saved) : {};
-    } catch(e) { return {}; }
-  });
-  
-  const togglePeriodStatus = (periodId, currentStatus, e) => {
-    e.stopPropagation();
-    const newStatus = currentStatus === 'DIBUKA' ? 'DITUTUP' : 'DIBUKA';
-    const newOverrides = { ...periodStatusOverrides, [periodId]: newStatus };
-    setPeriodStatusOverrides(newOverrides);
-    localStorage.setItem('pkp_period_status', JSON.stringify(newOverrides));
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = error => reject(error);
+    });
   };
 
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [isParsing, setIsParsing] = useState(false);
-  const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
-  const [parsedData, setParsedData] = useState(null);
-  
+
+// Shared archive upload UI. Each hook instance owns its files, OCR results and manual entries.
+const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf, onUploaded }) => {
   const [arsipFiles, setArsipFiles] = useState([]);
   const [isReadingArsip, setIsReadingArsip] = useState(false);
   const [arsipReadingProgress, setArsipReadingProgress] = useState({ current: 0, total: 0 });
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitResult, setSubmitResult] = useState(null);
-  const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
-  const [pendingTargetView, setPendingTargetView] = useState(null);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
-  
-  const [arsipSubTab, setArsipSubTab] = useState('terdata');
-  const [dbPegawai, setDbPegawai] = useState([]);
 
   const [editingArsipId, setEditingArsipId] = useState(null);
   const [editArsipForm, setEditArsipForm] = useState({ berangkat: '', pulang: '', tanggalSurat: '', tujuan: '' });
@@ -1948,227 +1930,55 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
   const [editingPegawaiData, setEditingPegawaiData] = useState(null);
   const [inlineSearchQuery, setInlineSearchQuery] = useState('');
 
-  const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
-  const [previewPdfName, setPreviewPdfName] = useState("");
-
   const [isManualUpload, setIsManualUpload] = useState(false);
   const [manualEntries, setManualEntries] = useState([
     { id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }
   ]);
 
-  // State untuk Tahap 3: Daftar Klaim SPT
-  const [sptKlaimList, setSptKlaimList] = useState([]);
-  const [isSptKlaimLoading, setIsSptKlaimLoading] = useState(false);
-  const [isSptListExpanded, setIsSptListExpanded] = useState(true);
-  
-  const [claimedSptList, setClaimedSptList] = useState([]);
-  const [isClaimingSptId, setIsClaimingSptId] = useState(null);
-  const [isClaimedListExpanded, setIsClaimedListExpanded] = useState(true);
   const [arsipSubmitResult, setArsipSubmitResult] = useState(null);
   const [isSubmittingArsip, setIsSubmittingArsip] = useState(false);
 
-  useEffect(() => {
-    const cached = localStorage.getItem('cached_pegawai_json');
-    if (cached) { try { setDbPegawai(JSON.parse(cached)); } catch(e){} }
-  }, []);
 
-  const getModuleKey = (view) => {
-    switch(view) {
-      case 'absensi-uang-makan': return 'uang-makan';
-      case 'absensi-tunjangan-kinerja': return 'tukin';
-      case 'arsip-surat-tugas': return 'spt';
-      case 'arsip-surat-cuti': return 'cuti';
-      case 'rekap': return 'rekap';
-      default: return 'rekap';
-    }
-  };
-
-  const activeTab = getModuleKey(currentView);
-  const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
-  const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
-  const PERIOD_EVENTS = getPeriodEvents();
-
-  // Effect khusus untuk mengambil dan menyaring SPT otomatis pada Tahap 3
-  useEffect(() => {
-    if (activeStep === 3 && (activeTab === 'uang-makan' || activeTab === 'tukin')) {
-      const fetchSptForClaim = async () => {
-        setIsSptKlaimLoading(true);
-        try {
-          const data = await fetchLiveSptData();
-          
-          // Gunakan NIP/Nama dari file presensi (Tahap 2) jika ada, jika tidak gunakan profil login
-          const targetNip = parsedData?.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser?.NIP;
-          const targetNama = parsedData?.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser?.Nama;
-
-          // Parse rentang tanggal periode submission yang sedang dipilih
-          let periodStartObj = null;
-          let periodEndObj = null;
-          if (selectedPeriod?.periodeEvent) {
-             const parts = selectedPeriod.periodeEvent.match(/(\d{2})-(\d{2})-(\d{4})\s*s\/d\s*(\d{2})-(\d{2})-(\d{4})/);
-             if (parts) {
-               periodStartObj = new Date(parseInt(parts[3]), parseInt(parts[2])-1, parseInt(parts[1]));
-               periodEndObj = new Date(parseInt(parts[6]), parseInt(parts[5])-1, parseInt(parts[4]));
-               periodStartObj.setHours(0,0,0,0);
-               periodEndObj.setHours(23,59,59,999);
-             }
-          }
-
-          const filtered = data.filter(item => {
-            let isUserMatch = false;
-            if (targetNip && item.nip && item.nip.includes(targetNip)) isUserMatch = true;
-            else if (targetNama && item.nama && item.nama.toLowerCase().includes(targetNama.toLowerCase())) isUserMatch = true;
-            
-            if (!isUserMatch) return false;
-
-            // Filter SPT berdasarkan rentang tanggal yang overlap dengan periode submission
-            if (periodStartObj && periodEndObj) {
-               const sptStart = parseIndoDate(item.tanggalBerangkat);
-               const sptEnd = parseIndoDate(item.tanggalPulang !== '-' ? item.tanggalPulang : item.tanggalBerangkat);
-               
-               if (sptStart.getTime() === new Date(0).getTime()) return false; // Abaikan jika tanggal tidak valid
-               
-               // Cek irisan tanggal (overlap): start SPT <= end Periode DAN end SPT >= start Periode
-               if (sptStart <= periodEndObj && sptEnd >= periodStartObj) {
-                  return true;
-               }
-               return false;
-            }
-
-            return true;
-          });
-
-          // Hilangkan duplikasi jika url arsipnya sama
-          const uniqueFiltered = Array.from(new Map(filtered.map(item => [item.linkAkses, item])).values());
-          setSptKlaimList(uniqueFiltered);
-        } catch (e) {
-          console.error("Gagal memuat SPT untuk klaim", e);
-        } finally {
-          setIsSptKlaimLoading(false);
-        }
-      };
-      fetchSptForClaim();
-    }
-  }, [activeStep, activeTab, parsedData, loggedInUser, selectedPeriod]);
-
-  useEffect(() => {
-    if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
-      navigate(currentView, 1);
-    }
-  }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
-
-  const handleTabClick = (targetView) => {
-    if ((selectedFile || arsipFiles.length > 0) && !submitResult) {
-      setPendingTargetView({ view: targetView, step: 1 });
-      setShowConfirmModal(true);
-    } else {
-      setSelectedPeriod(null);
-      resetUploadState();
-      navigate(targetView, 1);
-    }
-  };
-
-  const confirmSwitchModule = (proceed) => {
-    if (proceed) {
-      if (pendingTargetView) {
-        setSelectedPeriod(null);
-        resetUploadState();
-        navigate(pendingTargetView.view, pendingTargetView.step || 1);
-      }
-    }
-    setShowConfirmModal(false);
-    setPendingTargetView(null);
-  };
-
-  const resetUploadState = () => {
-    setSelectedFile(null);
-    setParsedData(null);
+  const reset = () => {
     setArsipFiles([]);
-    setSubmitResult(null);
-    setIsParsing(false);
-    setParseStatus('Mengekstrak dan memverifikasi data...');
-    setIsSubmitting(false);
-    setIsAlreadyUploaded(false); 
+    setIsReadingArsip(false);
+    setArsipSubmitResult(null);
+    setIsSubmittingArsip(false);
     setEditingArsipId(null);
     setAddingPegawaiId(null);
     setEditingPegawaiData(null);
+    setArsipSearchQuery('');
+    setInlineSearchQuery('');
     setIsManualUpload(false);
     setManualEntries([{ id: '1', file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
-    setClaimedSptList([]);
-    setArsipSubmitResult(null);
-    setIsSubmittingArsip(false);
   };
-
-  const handleClearFile = (idToClear = null) => {
-    if (idToClear) {
-      setArsipFiles(prev => prev.filter(f => f.id !== idToClear));
+  const handleClearFile = (id) => {
+    if (isReadingArsip || isSubmittingArsip) return;
+    setArsipFiles(prev => prev.filter(f => f.id !== id));
+    setArsipSubmitResult(null);
+    setEditingPegawaiData(null);
+  };
+  const handleFileChange = (e) => {
+    if (!e.target.files?.length) return;
+    if (isReadingArsip || isSubmittingArsip) return;
+    const selected = Array.from(e.target.files);
+    if (selected.some(file => !/\.(pdf|jpe?g|png)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) {
+      setArsipSubmitResult({ type: 'error', message: 'Pilih PDF, JPG, atau PNG maksimal 10 MB per file.' });
+      e.target.value = '';
       return;
     }
-    const fileInput = document.getElementById('pdf-upload-input');
-    if (fileInput) fileInput.value = '';
-    resetUploadState();
+    const newFiles = Array.from(e.target.files).map(f => ({
+      id: Math.random().toString(36).substring(7),
+      file: f,
+      status: 'pending',
+      parsedData: null
+    }));
+    setArsipFiles(prev => [...prev, ...newFiles].slice(0, 10));
+    setArsipSubmitResult(null);
+    e.target.value = '';
+    return;
+
   };
-
-  const handleFileChange = async (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      if (activeTab === 'spt' || activeTab === 'cuti' || (isPeriodSpt && activeStep === 3)) {
-        if (isReadingArsip || isSubmittingArsip) return;
-        const selected = Array.from(e.target.files);
-        if (selected.some(file => !/\.(pdf|jpe?g|png)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) {
-          setArsipSubmitResult({ type: 'error', message: 'Pilih PDF, JPG, atau PNG maksimal 10 MB per file.' });
-          e.target.value = '';
-          return;
-        }
-        const newFiles = Array.from(e.target.files).map(f => ({
-          id: Math.random().toString(36).substring(7),
-          file: f,
-          status: 'pending',
-          parsedData: null
-        }));
-        setArsipFiles(prev => [...prev, ...newFiles].slice(0, 10));
-        setArsipSubmitResult(null);
-        e.target.value = '';
-        return;
-      }
-
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      setSubmitResult(null);
-      setIsParsing(true);
-      setParseStatus('Mengekstrak teks dokumen...');
-      setIsAlreadyUploaded(false);
-
-      const checkExisting = async (nip, modul, periodeEvent) => {
-        const cacheKey = `uploaded_${nip}_${modul}_${periodeEvent}`;
-        if (localStorage.getItem(cacheKey)) return true;
-        try {
-          const url = `${APPS_SCRIPT_URL}?action=checkExisting&nip=${nip}&modul=${modul}&periodeEvent=${encodeURIComponent(periodeEvent)}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const json = await res.json();
-            if (json.exists) { localStorage.setItem(cacheKey, 'true'); return true; }
-          }
-        } catch (err) {}
-        return false;
-      };
-
-      try {
-        const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, setParseStatus); 
-        setParsedData(result);
-        
-        if (result && result.isValid) {
-          const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
-          const expectedPeriodeEvent = selectedPeriod ? selectedPeriod.periodeEvent : result.periode;
-          const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
-          setIsAlreadyUploaded(exists);
-        }
-      } catch (err) {
-        setParsedData({ isValid: false, isDateMismatch: false, errorMessage: "Gagal membaca struktur dokumen." });
-      } finally {
-        setIsParsing(false);
-      }
-    }
-  };
-
   const handleBacaDokumenArsip = async () => {
     if (isReadingArsip || isSubmittingArsip) return;
     const pendingFiles = arsipFiles.filter(f => f.status === 'pending');
@@ -2206,37 +2016,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     setIsReadingArsip(false);
   };
 
-  const fileToBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = error => reject(error);
-    });
-  };
-
-  const handlePreviewPdf = async (file) => {
-    try {
-      const dataUrl = await fileToBase64(file);
-      setPreviewPdfName(file.name);
-      setPreviewPdfUrl(dataUrl);
-    } catch (e) {
-      console.error("Gagal memuat pratinjau PDF", e);
-    }
-  };
-
-  const handleCellChange = (index, field, value) => {
-    setParsedData(prev => {
-      if (!prev || !prev.rows) return prev;
-      const newRows = [...prev.rows];
-      const updatedRow = { ...newRows[index], [field]: value };
-      if (field === 'tanggal') updatedRow._dateObj = parseIndoDate(value);
-      newRows[index] = updatedRow;
-      const totalMasuk = newRows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
-      return { ...prev, rows: newRows, totalHariMasuk: totalMasuk };
-    });
-  };
-
   const updateArsipFileData = (fileId, updater) => {
     setArsipFiles(prev => prev.map(f => {
       if (f.id !== fileId) return f;
@@ -2268,93 +2047,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       };
     });
     setEditingArsipId(null);
-  };
-
-  const handleUploadSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedFile || !parsedData || !parsedData.isValid) return;
-
-    setIsSubmitting(true);
-    try {
-      const base64Url = await fileToBase64(selectedFile);
-      const base64Data = base64Url.split(',')[1];
-      
-      let sheetData = [];
-      if (parsedData.rows && parsedData.rows.length > 0) {
-        sheetData = parsedData.rows.map((row, index) => {
-          const y = row._dateObj.getFullYear();
-          const m = String(row._dateObj.getMonth() + 1).padStart(2, '0');
-          const d = String(row._dateObj.getDate()).padStart(2, '0');
-          const formattedDate = `${y}-${m}-${d}`; 
-
-          const rowData = new Array(22).fill(""); 
-          rowData[0] = index + 1;
-          rowData[1] = row.hari;
-          rowData[2] = formattedDate;
-          rowData[3] = row.datang;
-          rowData[4] = row.pulang;
-          rowData[21] = row.keterangan;
-          return rowData;
-        });
-      }
-
-      const nipForPayload = parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
-      const bulanTahunForPayload = selectedPeriod ? selectedPeriod.title : (parsedData.periodeFolder || 'Periode_Unknown');
-
-      const payload = {
-        modul: activeTab,
-        nip: nipForPayload,
-        nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
-        periode: parsedData.periode || selectedPeriod?.periodeEvent || '',
-        bulanTahun: bulanTahunForPayload, 
-        fileName: selectedFile.name,
-        fileBase64: base64Data,
-        sheetData: sheetData,
-        sptData: [],
-        ringkasan: {
-          totalHariKalender: parsedData.expectedDays || 0,
-          totalHariMasuk: parsedData.totalHariMasuk || 0,
-          totalJamKerja: '-',
-          totalTelat: '0',
-          totalPSW: '0'
-        }
-      };
-
-      const res = await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      
-      const responseText = await res.text();
-      let json;
-      try {
-        json = JSON.parse(responseText);
-      } catch (e) {
-        console.error("Non-JSON Response dari Google:", responseText);
-        let errMsg = responseText.includes('<html') 
-          ? 'Google Apps Script mengembalikan halaman HTML. Pastikan Anda telah melakukan Deploy "New Version" dan mengatur Akses ke "Anyone".' 
-          : responseText.substring(0, 100);
-        throw new Error('Server mengembalikan data yang tidak valid: ' + errMsg);
-      }
-
-      if (json.status === 'success') {
-        const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
-        localStorage.setItem(cacheKey, 'true');
-        setSubmitResult({ 
-          type: 'success', 
-          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
-          url: json.folderUrl 
-        });
-        setIsAlreadyUploaded(true);
-      } else {
-        throw new Error(json.message || 'Gagal menyimpan data');
-      }
-    } catch (err) {
-      setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   const handleUploadSubmitArsip = async (e) => {
@@ -2431,6 +2123,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         if (json.status !== 'success') throw new Error(json.message);
       }
 
+      onUploaded?.();
       setArsipSubmitResult({ type: 'success', message: `Semua Arsip ${documentModule === 'spt' ? 'SPT' : 'Cuti'} berhasil disimpan!` });
       setTimeout(() => {
          setArsipFiles([]);
@@ -2477,77 +2170,8 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
     }));
   };
 
-  const handleKlaimSpt = async (sptItem) => {
-    const safeNama = (loggedInUser.Nama || 'Pegawai').replace(/\s+/g, '_');
-    const formatDate = (dateStr) => {
-       if (!dateStr || dateStr === '-') return '';
-       const parts = dateStr.split(' ');
-       if (parts.length >= 3) {
-           return `${parts[0]}${parts[1].substring(0,3)}${parts[2]}`;
-       }
-       return dateStr.replace(/\s+/g, '');
-    };
-    const safeBerangkat = formatDate(sptItem.tanggalBerangkat);
-    const safePulang = formatDate(sptItem.tanggalPulang) || safeBerangkat;
-    const safeTujuan = (sptItem.tujuan || 'Dinas').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20);
-    const randomSuffix = Math.random().toString(36).substring(2, 10);
-    const fileName = `SPT_${safeNama}_${safeBerangkat}-${safePulang}_${safeTujuan}_klaim_${randomSuffix}.pdf`;
-
-    setIsClaimingSptId(sptItem.linkAkses);
-
-    try {
-      const nipForPayload = parsedData?.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
-      const bulanTahunForPayload = selectedPeriod ? selectedPeriod.title : (parsedData?.periodeFolder || 'Periode_Unknown');
-
-      const payload = {
-        action: 'klaim_spt',
-        modul: activeTab,
-        nip: nipForPayload,
-        nama: parsedData?.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
-        periode: selectedPeriod?.periodeEvent || '',
-        bulanTahun: bulanTahunForPayload,
-        sourceUrl: sptItem.linkAkses,
-        fileName: fileName
-      };
-
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      
-    } catch (error) {
-      console.error("Gagal klaim SPT:", error);
-    } finally {
-      setClaimedSptList(prev => [...prev, {
-         ...sptItem,
-         fileName: fileName,
-         klaimId: randomSuffix
-      }]);
-      setIsClaimingSptId(null);
-    }
-  };
-
-  const handleHapusKlaimSpt = async (klaimId, fileName) => {
-    setClaimedSptList(prev => prev.filter(item => item.klaimId !== klaimId));
-    try {
-        const payload = {
-            action: 'hapus_klaim_spt',
-            fileName: fileName,
-            bulanTahun: selectedPeriod ? selectedPeriod.title : (parsedData?.periodeFolder || 'Periode_Unknown')
-        };
-        await fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-    } catch (e) {
-        console.error("Gagal menghapus klaim:", e);
-    }
-  };
-
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
-  const isManualUploadValid = manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0);
+  const isManualUploadValid = manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0 && (documentModule !== 'cuti' || hitungHariKerjaAktif(e.startDate, e.endDate) > 0));
 
   const handleUploadManualSubmit = async () => {
     if (!isManualUploadValid || isSubmittingArsip) return;
@@ -2618,6 +2242,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
         if (json.status !== 'success') throw new Error(json.message);
       }
 
+      onUploaded?.();
       setArsipSubmitResult({ type: 'success', message: `Semua dokumen manual berhasil disimpan!` });
       setTimeout(() => {
         setIsManualUpload(false);
@@ -2631,27 +2256,6 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
       setIsSubmittingArsip(false);
     }
   };
-
-  const PERIOD_EVENTS_DATA = PERIOD_EVENTS[activeTab] || [];
-  const currentPeriodList = useMemo(() => {
-    const mappedList = PERIOD_EVENTS_DATA.map(p => ({
-      ...p,
-      status: periodStatusOverrides[p.id] !== undefined ? periodStatusOverrides[p.id] : p.status
-    }));
-
-    return mappedList.sort((a, b) => {
-      // 1. Urutkan berdasarkan Status (DIBUKA di atas DITUTUP)
-      if (a.status === 'DIBUKA' && b.status === 'DITUTUP') return -1;
-      if (a.status === 'DITUTUP' && b.status === 'DIBUKA') return 1;
-      
-      // 2. Urutkan berdasarkan urutan Bulan (Ascending: Jan -> Des)
-      const monthA = parseInt(a.id.split('-').pop(), 10);
-      const monthB = parseInt(b.id.split('-').pop(), 10);
-      return monthA - monthB;
-    });
-  }, [PERIOD_EVENTS_DATA, periodStatusOverrides]);
-
-  const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
   const arsipSuccessfulFiles = arsipFiles.filter(f => f.status === 'success');
   const arsipTotalSelectedPegawai = arsipSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.arsipNames.filter(p => p.selected).length, 0);
@@ -2685,7 +2289,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                           <p className="text-sm font-bold text-gray-700 group-hover:text-[#0E5B73]">Klik atau drag & drop file</p>
                           <p className="text-[10px] font-medium text-gray-400 mt-1">PDF (1 halaman), JPG, PNG (max 10MB)</p>
                         </div>
-                        <input id="pdf-upload-input" type="file" accept=".pdf,.jpg,.jpeg,.png" multiple onChange={handleFileChange} className="hidden" />
+                        <input id={`arsip-upload-${documentModule}`} aria-label={`Pilih dokumen ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple onChange={handleFileChange} className="hidden" />
                       </label>
 
                       <div className="space-y-4">
@@ -2738,7 +2342,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                               <p className="text-[10px] text-gray-500 font-medium">Gunakan form ini untuk dokumen yang tidak terbaca oleh sistem OCR</p>
                             </div>
                           </div>
-                          <button type="button" role="switch" aria-label="Upload Manual SPT atau Cuti" aria-checked={isManualUpload} className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setIsManualUpload(!isManualUpload)}>
+                          <button type="button" role="switch" aria-label={`Upload Manual ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`} aria-checked={isManualUpload} className="flex items-center gap-2 cursor-pointer shrink-0" onClick={() => setIsManualUpload(!isManualUpload)}>
                             <div className={`w-10 h-5 rounded-full relative transition-colors ${isManualUpload ? 'bg-[#084C61]' : 'bg-gray-300'}`}>
                               <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isManualUpload ? 'left-5' : 'left-1'}`}></div>
                             </div>
@@ -2761,7 +2365,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                                 <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer text-center mb-4">
                                   <UploadCloud size={20} className="text-gray-400" />
                                   <span className="text-xs font-semibold text-gray-600">{entry.file ? entry.file.name : `Pilih file ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`}</span>
-                                  <input type="file" accept=".pdf, .jpg, .png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
+                                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
                                 </label>
 
                                 <div className="grid grid-cols-2 gap-3 mb-3">
@@ -3168,6 +2772,526 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                 </div>
   );
 
+
+  return {
+    render: renderArsipUploadPanel,
+    reset,
+    hasDraft: arsipFiles.length > 0 || manualEntries.some(entry => entry.file || entry.pegawai.length > 0),
+  };
+};
+
+const hasArchiveLink = value => /^https?:\/\//i.test(String(value || ''));
+
+const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, selectedPeriod, archiveRevision }) => {
+  const label = documentModule === 'spt' ? 'SPT' : 'Cuti';
+  // State untuk Tahap 3: Daftar Klaim SPT
+  const [sptKlaimList, setSptKlaimList] = useState([]);
+  const [isSptKlaimLoading, setIsSptKlaimLoading] = useState(false);
+  const [isSptListExpanded, setIsSptListExpanded] = useState(true);
+  
+  const [claimedSptList, setClaimedSptList] = useState([]);
+  const [isClaimingSptId, setIsClaimingSptId] = useState(null);
+  const [isClaimedListExpanded, setIsClaimedListExpanded] = useState(true);
+
+  const [claimError, setClaimError] = useState('');
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const identityNip = identity.nip;
+  const identityName = identity.nama;
+  const period = selectedPeriod?.periodeEvent;
+  const periodTitle = selectedPeriod?.title;
+  const enabled = activeTab === 'uang-makan' || activeTab === 'tukin';
+  const contextKey = JSON.stringify([activeTab, identityNip, identityName, period, periodTitle]);
+  const currentContext = useRef(contextKey);
+  currentContext.current = contextKey;
+  const reset = () => { setClaimedSptList([]); setSptKlaimList([]); setClaimError(''); setIsClaimingSptId(null); };
+  useEffect(() => { reset(); }, [activeTab, identityNip, identityName, period, periodTitle]);
+  useEffect(() => {
+    if (!enabled || activeStep !== 3 || !period) return;
+    let cancelled = false;
+    setIsSptKlaimLoading(true);
+    setClaimError('');
+    setSptKlaimList([]);
+    (documentModule === 'spt' ? fetchLiveSptData : fetchLiveCutiData)({ throwOnError: true })
+      .then(items => {
+        if (!cancelled) setSptKlaimList(filterArchiveForClaim(items, { nip: identityNip, nama: identityName }, period));
+      })
+      .catch(() => { if (!cancelled) setClaimError('Gagal memuat rekap ' + label + '. Silakan coba lagi.'); })
+      .finally(() => { if (!cancelled) setIsSptKlaimLoading(false); });
+    return () => { cancelled = true; };
+  }, [enabled, activeStep, documentModule, identityNip, identityName, period, archiveRevision, refreshVersion]);
+
+  const handleKlaimSpt = async (item) => {
+    if (!selectedPeriod || isClaimingSptId || !hasArchiveLink(item.linkAkses) || claimedSptList.some(c => c.linkAkses === item.linkAkses)) return;
+    const id = crypto.randomUUID();
+    const payload = createClaimPayload({ item, documentModule, activeTab, identity, selectedPeriod, id });
+    setIsClaimingSptId(item.linkAkses);
+    setClaimError('');
+    try {
+      await sendClaimRequest(APPS_SCRIPT_URL, payload);
+      if (currentContext.current !== contextKey) return;
+      setClaimedSptList(prev => [...prev, { ...item, fileName: payload.fileName, klaimId: id }]);
+    } catch (error) {
+      if (currentContext.current === contextKey) setClaimError('Gagal klaim ' + label + ': ' + error.message);
+    } finally { if (currentContext.current === contextKey) setIsClaimingSptId(null); }
+  };
+
+  const handleHapusKlaimSpt = async (klaimId, fileName) => {
+    if (isClaimingSptId) return;
+    setIsClaimingSptId(klaimId);
+    setClaimError('');
+    try {
+      await sendClaimRequest(APPS_SCRIPT_URL, {
+        action: 'hapus_klaim_spt', jenisDokumen: documentModule, fileName,
+        modul: activeTab, nip: identity.nip, periode: period, bulanTahun: periodTitle,
+      });
+      if (currentContext.current !== contextKey) return;
+      setClaimedSptList(prev => prev.filter(item => item.klaimId !== klaimId));
+    } catch (error) {
+      if (currentContext.current === contextKey) setClaimError('Gagal menghapus klaim ' + label + ': ' + error.message);
+    } finally { if (currentContext.current === contextKey) setIsClaimingSptId(null); }
+  };
+
+  const render = () => (
+    <section aria-label={'Rekapitulasi ' + label} className="space-y-4">
+      {claimError && <div role="alert" className="p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-xs">
+        {claimError}
+        <button type="button" onClick={() => setRefreshVersion(v => v + 1)} className="ml-3 font-bold underline">Muat ulang rekap</button>
+      </div>}
+                  <div className="bg-white border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm">
+                    <div 
+                      className="bg-[#F0F7F9] px-5 py-4 flex justify-between items-center cursor-pointer hover:bg-[#EAF5FA] transition-colors"
+                      onClick={() => setIsSptListExpanded(!isSptListExpanded)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <CheckCircle2 size={18} className="text-[#084C61]" />
+                        <h3 className="text-sm font-extrabold text-[#084C61]">{documentModule === 'spt' ? 'Dinas Luar dari Rekapitulasi SPT' : 'Cuti dari Rekapitulasi Cuti'}</h3>
+                        <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
+                          {isSptKlaimLoading ? '...' : `${sptKlaimList.length} item`}
+                        </span>
+                      </div>
+                      {isSptListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
+                    </div>
+
+                    {isSptListExpanded && (
+                      <div className="p-4 bg-white border-t border-[#CDE5F1] space-y-3">
+                        {isSptKlaimLoading ? (
+                          <div className="text-center py-10 text-gray-400">
+                            <div className="w-6 h-6 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                            <p className="text-xs font-medium">Mencari data {label} Anda pada sistem arsip...</p>
+                          </div>
+                        ) : sptKlaimList.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <FileText size={32} className="mx-auto mb-2 opacity-50" />
+                            <p className="text-xs font-medium">Tidak ada riwayat {label} yang tercatat untuk NIP/Nama pegawai di periode ini.</p>
+                          </div>
+                        ) : (
+                          sptKlaimList.map((item, idx) => {
+                            const d1 = item.tanggalBerangkat !== '-' ? item.tanggalBerangkat : '';
+                            const d2 = item.tanggalPulang !== '-' ? item.tanggalPulang : '';
+                            let dateRange = d1;
+                            if (d2 && d1 !== d2) dateRange += ` - ${d2}`;
+
+                            let uploadDateStr = 'baru-baru ini';
+                            if (item.timestamp) {
+                               const tsDate = new Date(item.timestamp);
+                               if (!isNaN(tsDate.getTime())) {
+                                   uploadDateStr = `${tsDate.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][tsDate.getMonth()]} ${tsDate.getFullYear()}`;
+                               }
+                            }
+
+                            return (
+                              <div key={idx} className="border border-gray-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                                <div>
+                                  <h4 className="text-sm font-extrabold text-gray-900 mb-1">
+                                    {item.tujuan} {dateRange ? `(${dateRange})` : ''}
+                                  </h4>
+                                  <p className="text-[11px] text-gray-500">
+                                    diupload oleh <strong className="text-gray-700">{item.nama}</strong> pada {uploadDateStr}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <a 
+                                    aria-disabled={!hasArchiveLink(item.linkAkses)}
+                                    href={hasArchiveLink(item.linkAkses) ? item.linkAkses : undefined} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="px-3 py-1.5 text-[11px] font-bold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-1.5 transition-colors"
+                                  >
+                                    <Eye size={14} /> View
+                                  </a>
+                                  <button 
+                                    onClick={() => handleKlaimSpt(item)}
+                                    disabled={!hasArchiveLink(item.linkAkses) || !!isClaimingSptId || claimedSptList.some(c => c.linkAkses === item.linkAkses)}
+                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg flex items-center gap-1.5 transition-colors ${
+                                      claimedSptList.some(c => c.linkAkses === item.linkAkses) 
+                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                                        : 'text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 cursor-pointer'
+                                    }`}
+                                  >
+                                    {isClaimingSptId === item.linkAkses ? (
+                                      <><div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div> Proses...</>
+                                    ) : claimedSptList.some(c => c.linkAkses === item.linkAkses) ? (
+                                      <><CheckCircle2 size={14} /> Diklaim</>
+                                    ) : (
+                                      <><UploadCloud size={14} /> Klaim untuk event ini</>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Section: File yang Sudah Diupload */}
+                  {claimedSptList.length > 0 && (
+                    <div className="bg-[#F0F7F9] border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm mt-6 animate-in slide-in-from-top-4 duration-300">
+                      <div 
+                        className="px-5 py-4 flex justify-between items-center cursor-pointer transition-colors hover:bg-[#EAF5FA]"
+                        onClick={() => setIsClaimedListExpanded(!isClaimedListExpanded)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <CheckCircle2 size={18} className="text-[#084C61]" />
+                          <h3 className="text-sm font-extrabold text-[#084C61]">{label} yang Sudah Diklaim</h3>
+                          <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
+                            {claimedSptList.length} file
+                          </span>
+                        </div>
+                        {isClaimedListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
+                      </div>
+                      
+                      {isClaimedListExpanded && (
+                        <div className="px-5 pb-5">
+                          <div className="text-[11px] font-bold text-gray-500 mb-3">{label} ({claimedSptList.length} file)</div>
+                          <div className="space-y-2">
+                            {claimedSptList.map(item => (
+                              <div key={item.klaimId} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-gray-200 rounded-lg p-3 gap-3 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                                <span className="text-xs font-medium text-gray-700 truncate">{item.fileName}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <a 
+                                    href={item.linkAkses} 
+                                    target="_blank" 
+                                    rel="noreferrer"
+                                    className="px-3 py-1.5 text-[11px] font-bold text-[#084C61] bg-[#F0F7F9] border border-[#CDE5F1] rounded-md hover:bg-[#EAF5FA] flex items-center gap-1.5 transition-colors shadow-sm"
+                                  >
+                                    <Eye size={14} /> Lihat
+                                  </a>
+                                  <button 
+                                    disabled={!!isClaimingSptId}
+                                    onClick={() => handleHapusKlaimSpt(item.klaimId, item.fileName)}
+                                    className="px-3 py-1.5 text-[11px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md hover:bg-red-100 flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                                  >
+                                    <Trash2 size={14} /> Hapus
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+
+    </section>
+  );
+  return { render, reset };
+};
+
+export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
+  const [selectedPeriod, setSelectedPeriod] = useState(null);
+  
+  const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pkp_period_status');
+      return saved ? JSON.parse(saved) : {};
+    } catch(e) { return {}; }
+  });
+  
+  const togglePeriodStatus = (periodId, currentStatus, e) => {
+    e.stopPropagation();
+    const newStatus = currentStatus === 'DIBUKA' ? 'DITUTUP' : 'DIBUKA';
+    const newOverrides = { ...periodStatusOverrides, [periodId]: newStatus };
+    setPeriodStatusOverrides(newOverrides);
+    localStorage.setItem('pkp_period_status', JSON.stringify(newOverrides));
+  };
+
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
+  const [parsedData, setParsedData] = useState(null);
+  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState(null);
+  const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
+  const [pendingTargetView, setPendingTargetView] = useState(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  
+  const [arsipSubTab, setArsipSubTab] = useState('terdata');
+  const [dbPegawai, setDbPegawai] = useState([]);
+
+  const [previewPdfUrl, setPreviewPdfUrl] = useState(null);
+  const [previewPdfName, setPreviewPdfName] = useState("");
+
+  useEffect(() => {
+    const cached = localStorage.getItem('cached_pegawai_json');
+    if (cached) { try { setDbPegawai(JSON.parse(cached)); } catch(e){} }
+  }, []);
+
+  const getModuleKey = (view) => {
+    switch(view) {
+      case 'absensi-uang-makan': return 'uang-makan';
+      case 'absensi-tunjangan-kinerja': return 'tukin';
+      case 'arsip-surat-tugas': return 'spt';
+      case 'arsip-surat-cuti': return 'cuti';
+      case 'rekap': return 'rekap';
+      default: return 'rekap';
+    }
+  };
+
+  const activeTab = getModuleKey(currentView);
+  const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
+  const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
+  const PERIOD_EVENTS = getPeriodEvents();
+
+  useEffect(() => {
+    if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
+      navigate(currentView, 1);
+    }
+  }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
+
+  const handleTabClick = (targetView) => {
+    if ((selectedFile || sptUpload.hasDraft || cutiUpload.hasDraft) && !submitResult) {
+      setPendingTargetView({ view: targetView, step: 1 });
+      setShowConfirmModal(true);
+    } else {
+      setSelectedPeriod(null);
+      resetUploadState();
+      navigate(targetView, 1);
+    }
+  };
+
+  const confirmSwitchModule = (proceed) => {
+    if (proceed) {
+      if (pendingTargetView) {
+        setSelectedPeriod(null);
+        resetUploadState();
+        navigate(pendingTargetView.view, pendingTargetView.step || 1);
+      }
+    }
+    setShowConfirmModal(false);
+    setPendingTargetView(null);
+  };
+
+  const resetUploadState = () => {
+    sptUpload.reset();
+    cutiUpload.reset();
+    setSelectedFile(null);
+    setParsedData(null);
+    setSubmitResult(null);
+    setIsParsing(false);
+    setParseStatus('Mengekstrak dan memverifikasi data...');
+    setIsSubmitting(false);
+    setIsAlreadyUploaded(false); 
+    sptClaims.reset();
+    cutiClaims.reset();
+  };
+
+  const handleClearFile = () => {
+    const fileInput = document.getElementById('pdf-upload-input');
+    if (fileInput) fileInput.value = '';
+    resetUploadState();
+  };
+
+  const handleFileChange = async (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+
+      const file = e.target.files[0];
+      setSelectedFile(file);
+      setSubmitResult(null);
+      setIsParsing(true);
+      setParseStatus('Mengekstrak teks dokumen...');
+      setIsAlreadyUploaded(false);
+
+      const checkExisting = async (nip, modul, periodeEvent) => {
+        const cacheKey = `uploaded_${nip}_${modul}_${periodeEvent}`;
+        if (localStorage.getItem(cacheKey)) return true;
+        try {
+          const url = `${APPS_SCRIPT_URL}?action=checkExisting&nip=${nip}&modul=${modul}&periodeEvent=${encodeURIComponent(periodeEvent)}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.exists) { localStorage.setItem(cacheKey, 'true'); return true; }
+          }
+        } catch (err) {}
+        return false;
+      };
+
+      try {
+        const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, setParseStatus); 
+        setParsedData(result);
+        
+        if (result && result.isValid) {
+          const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
+          const expectedPeriodeEvent = selectedPeriod ? selectedPeriod.periodeEvent : result.periode;
+          const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
+          setIsAlreadyUploaded(exists);
+        }
+      } catch (err) {
+        setParsedData({ isValid: false, isDateMismatch: false, errorMessage: "Gagal membaca struktur dokumen." });
+      } finally {
+        setIsParsing(false);
+      }
+    }
+  };
+
+  const handlePreviewPdf = async (file) => {
+    try {
+      const dataUrl = await fileToBase64(file);
+      setPreviewPdfName(file.name);
+      setPreviewPdfUrl(dataUrl);
+    } catch (e) {
+      console.error("Gagal memuat pratinjau PDF", e);
+    }
+  };
+
+
+  const [archiveRevision, setArchiveRevision] = useState(0);
+  const uploadOptions = {
+    isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf,
+    onUploaded: () => setArchiveRevision(revision => revision + 1),
+  };
+  const sptUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'spt' });
+  const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
+
+  const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
+  const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision };
+  const sptClaims = useArchiveClaims({ ...claimOptions, documentModule: 'spt' });
+  const cutiClaims = useArchiveClaims({ ...claimOptions, documentModule: 'cuti' });
+
+  const handleCellChange = (index, field, value) => {
+    setParsedData(prev => {
+      if (!prev || !prev.rows) return prev;
+      const newRows = [...prev.rows];
+      const updatedRow = { ...newRows[index], [field]: value };
+      if (field === 'tanggal') updatedRow._dateObj = parseIndoDate(value);
+      newRows[index] = updatedRow;
+      const totalMasuk = newRows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
+      return { ...prev, rows: newRows, totalHariMasuk: totalMasuk };
+    });
+  };
+
+  const handleUploadSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedFile || !parsedData || !parsedData.isValid) return;
+
+    setIsSubmitting(true);
+    try {
+      const base64Url = await fileToBase64(selectedFile);
+      const base64Data = base64Url.split(',')[1];
+      
+      let sheetData = [];
+      if (parsedData.rows && parsedData.rows.length > 0) {
+        sheetData = parsedData.rows.map((row, index) => {
+          const y = row._dateObj.getFullYear();
+          const m = String(row._dateObj.getMonth() + 1).padStart(2, '0');
+          const d = String(row._dateObj.getDate()).padStart(2, '0');
+          const formattedDate = `${y}-${m}-${d}`; 
+
+          const rowData = new Array(22).fill(""); 
+          rowData[0] = index + 1;
+          rowData[1] = row.hari;
+          rowData[2] = formattedDate;
+          rowData[3] = row.datang;
+          rowData[4] = row.pulang;
+          rowData[21] = row.keterangan;
+          return rowData;
+        });
+      }
+
+      const nipForPayload = parsedData.nip && parsedData.nip !== '-' ? parsedData.nip : loggedInUser.NIP;
+      const bulanTahunForPayload = selectedPeriod ? selectedPeriod.title : (parsedData.periodeFolder || 'Periode_Unknown');
+
+      const payload = {
+        modul: activeTab,
+        nip: nipForPayload,
+        nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
+        periode: parsedData.periode || selectedPeriod?.periodeEvent || '',
+        bulanTahun: bulanTahunForPayload, 
+        fileName: selectedFile.name,
+        fileBase64: base64Data,
+        sheetData: sheetData,
+        sptData: [],
+        ringkasan: {
+          totalHariKalender: parsedData.expectedDays || 0,
+          totalHariMasuk: parsedData.totalHariMasuk || 0,
+          totalJamKerja: '-',
+          totalTelat: '0',
+          totalPSW: '0'
+        }
+      };
+
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      
+      const responseText = await res.text();
+      let json;
+      try {
+        json = JSON.parse(responseText);
+      } catch (e) {
+        console.error("Non-JSON Response dari Google:", responseText);
+        let errMsg = responseText.includes('<html') 
+          ? 'Google Apps Script mengembalikan halaman HTML. Pastikan Anda telah melakukan Deploy "New Version" dan mengatur Akses ke "Anyone".' 
+          : responseText.substring(0, 100);
+        throw new Error('Server mengembalikan data yang tidak valid: ' + errMsg);
+      }
+
+      if (json.status === 'success') {
+        const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
+        localStorage.setItem(cacheKey, 'true');
+        setSubmitResult({ 
+          type: 'success', 
+          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
+          url: json.folderUrl 
+        });
+        setIsAlreadyUploaded(true);
+      } else {
+        throw new Error(json.message || 'Gagal menyimpan data');
+      }
+    } catch (err) {
+      setSubmitResult({ type: 'error', message: 'Gagal mengunggah ke server: ' + err.message });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const PERIOD_EVENTS_DATA = PERIOD_EVENTS[activeTab] || [];
+  const currentPeriodList = useMemo(() => {
+    const mappedList = PERIOD_EVENTS_DATA.map(p => ({
+      ...p,
+      status: periodStatusOverrides[p.id] !== undefined ? periodStatusOverrides[p.id] : p.status
+    }));
+
+    return mappedList.sort((a, b) => {
+      // 1. Urutkan berdasarkan Status (DIBUKA di atas DITUTUP)
+      if (a.status === 'DIBUKA' && b.status === 'DITUTUP') return -1;
+      if (a.status === 'DITUTUP' && b.status === 'DIBUKA') return 1;
+      
+      // 2. Urutkan berdasarkan urutan Bulan (Ascending: Jan -> Des)
+      const monthA = parseInt(a.id.split('-').pop(), 10);
+      const monthB = parseInt(b.id.split('-').pop(), 10);
+      return monthA - monthB;
+    });
+  }, [PERIOD_EVENTS_DATA, periodStatusOverrides]);
+
+  const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
+
   return (
     <div className="h-screen bg-[#112233] flex flex-col md:flex-row text-gray-100 font-sans relative overflow-hidden">
       
@@ -3325,7 +3449,7 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
               {arsipSubTab === 'terdata' ? (
                 <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
-                renderArsipUploadPanel()
+                (documentModule === 'cuti' ? cutiUpload : sptUpload).render()
               )}
             </div>
 
@@ -3759,142 +3883,11 @@ const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentVie
                     </div>
                   </div>
 
-                  <div className="bg-white border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm">
-                    <div 
-                      className="bg-[#F0F7F9] px-5 py-4 flex justify-between items-center cursor-pointer hover:bg-[#EAF5FA] transition-colors"
-                      onClick={() => setIsSptListExpanded(!isSptListExpanded)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <CheckCircle2 size={18} className="text-[#084C61]" />
-                        <h3 className="text-sm font-extrabold text-[#084C61]">Dinas Luar dari Rekapitulasi SPT</h3>
-                        <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
-                          {isSptKlaimLoading ? '...' : `${sptKlaimList.length} item`}
-                        </span>
-                      </div>
-                      {isSptListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
-                    </div>
+                  {sptClaims.render()}
+                  {cutiClaims.render()}
 
-                    {isSptListExpanded && (
-                      <div className="p-4 bg-white border-t border-[#CDE5F1] space-y-3">
-                        {isSptKlaimLoading ? (
-                          <div className="text-center py-10 text-gray-400">
-                            <div className="w-6 h-6 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                            <p className="text-xs font-medium">Mencari data SPT Anda pada sistem arsip...</p>
-                          </div>
-                        ) : sptKlaimList.length === 0 ? (
-                          <div className="text-center py-10 text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                            <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                            <p className="text-xs font-medium">Tidak ada riwayat SPT yang tercatat untuk NIP/Nama Anda di periode ini.</p>
-                          </div>
-                        ) : (
-                          sptKlaimList.map((item, idx) => {
-                            const d1 = item.tanggalBerangkat !== '-' ? item.tanggalBerangkat : '';
-                            const d2 = item.tanggalPulang !== '-' ? item.tanggalPulang : '';
-                            let dateRange = d1;
-                            if (d2 && d1 !== d2) dateRange += ` - ${d2}`;
-
-                            let uploadDateStr = 'baru-baru ini';
-                            if (item.timestamp) {
-                               const tsDate = new Date(item.timestamp);
-                               if (!isNaN(tsDate.getTime())) {
-                                   uploadDateStr = `${tsDate.getDate()} ${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][tsDate.getMonth()]} ${tsDate.getFullYear()}`;
-                               }
-                            }
-
-                            return (
-                              <div key={idx} className="border border-gray-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#CDE5F1] transition-colors shadow-2xs">
-                                <div>
-                                  <h4 className="text-sm font-extrabold text-gray-900 mb-1">
-                                    {item.tujuan} {dateRange ? `(${dateRange})` : ''}
-                                  </h4>
-                                  <p className="text-[11px] text-gray-500">
-                                    diupload oleh <strong className="text-gray-700">{item.nama}</strong> pada {uploadDateStr}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <a 
-                                    href={item.linkAkses} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="px-3 py-1.5 text-[11px] font-bold text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-1.5 transition-colors"
-                                  >
-                                    <Eye size={14} /> View
-                                  </a>
-                                  <button 
-                                    onClick={() => handleKlaimSpt(item)}
-                                    disabled={isClaimingSptId === item.linkAkses || claimedSptList.some(c => c.linkAkses === item.linkAkses)}
-                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg flex items-center gap-1.5 transition-colors ${
-                                      claimedSptList.some(c => c.linkAkses === item.linkAkses) 
-                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                                        : 'text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 cursor-pointer'
-                                    }`}
-                                  >
-                                    {isClaimingSptId === item.linkAkses ? (
-                                      <><div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div> Proses...</>
-                                    ) : claimedSptList.some(c => c.linkAkses === item.linkAkses) ? (
-                                      <><CheckCircle2 size={14} /> Diklaim</>
-                                    ) : (
-                                      <><UploadCloud size={14} /> Klaim untuk event ini</>
-                                    )}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Section: File yang Sudah Diupload */}
-                  {claimedSptList.length > 0 && (
-                    <div className="bg-[#F0F7F9] border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm mt-6 animate-in slide-in-from-top-4 duration-300">
-                      <div 
-                        className="px-5 py-4 flex justify-between items-center cursor-pointer transition-colors hover:bg-[#EAF5FA]"
-                        onClick={() => setIsClaimedListExpanded(!isClaimedListExpanded)}
-                      >
-                        <div className="flex items-center gap-3">
-                          <CheckCircle2 size={18} className="text-[#084C61]" />
-                          <h3 className="text-sm font-extrabold text-[#084C61]">File yang Sudah Diupload</h3>
-                          <span className="px-2.5 py-0.5 bg-[#084C61] text-white text-[10px] font-bold rounded-full">
-                            {claimedSptList.length} file
-                          </span>
-                        </div>
-                        {isClaimedListExpanded ? <ChevronUp size={18} className="text-[#084C61]" /> : <ChevronDown size={18} className="text-[#084C61]" />}
-                      </div>
-                      
-                      {isClaimedListExpanded && (
-                        <div className="px-5 pb-5">
-                          <div className="text-[11px] font-bold text-gray-500 mb-3">SPT ({claimedSptList.length} file)</div>
-                          <div className="space-y-2">
-                            {claimedSptList.map(item => (
-                              <div key={item.klaimId} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-gray-200 rounded-lg p-3 gap-3 hover:border-[#CDE5F1] transition-colors shadow-2xs">
-                                <span className="text-xs font-medium text-gray-700 truncate">{item.fileName}</span>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <a 
-                                    href={item.linkAkses} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="px-3 py-1.5 text-[11px] font-bold text-[#084C61] bg-[#F0F7F9] border border-[#CDE5F1] rounded-md hover:bg-[#EAF5FA] flex items-center gap-1.5 transition-colors shadow-sm"
-                                  >
-                                    <Eye size={14} /> Lihat
-                                  </a>
-                                  <button 
-                                    onClick={() => handleHapusKlaimSpt(item.klaimId, item.fileName)}
-                                    className="px-3 py-1.5 text-[11px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-md hover:bg-red-100 flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-                                  >
-                                    <Trash2 size={14} /> Hapus
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {renderArsipUploadPanel()}
+                  {sptUpload.render()}
+                  {cutiUpload.render()}
 
                   <div className="flex justify-center gap-3 pt-6 border-t border-gray-100">
                     <button onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
