@@ -1,6 +1,6 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
-import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload } from './archive-claims.js';
+import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
@@ -2780,6 +2780,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
   return {
     render: renderArsipUploadPanel,
+    busy: isSubmittingArsip,
     reset,
     hasDraft: arsipFiles.length > 0 || manualEntries.some(entry => entry.file || entry.pegawai.length > 0),
   };
@@ -3096,12 +3097,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
   const [archiveRevision, setArchiveRevision] = useState(0);
   const [finalRecap, setFinalRecap] = useState(null);
+  const [isProcessingEvidence, setIsProcessingEvidence] = useState(false);
+  const [processError, setProcessError] = useState('');
   const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
-  useEffect(() => { if (activeStep < 4) setFinalRecap(null); }, [activeStep]);
+  const submissionKey = JSON.stringify(submission);
+  const currentSubmission = useRef(submissionKey);
+  currentSubmission.current = submissionKey;
+  useEffect(() => { setProcessError(''); }, [submissionKey]);
   const documents = useSubmissionDocuments({
-    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && activeStep === 3,
+    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && activeStep >= 3,
     revision: archiveRevision,
     onPreview: file => {
       setPreviewPdfName(file.fileName);
@@ -3118,6 +3124,22 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   };
   const sptUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'spt' });
   const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
+  const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy;
+  const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence;
+  useEffect(() => { if (!documents.processed) setFinalRecap(null); }, [documents.processed]);
+  const processEvidence = async () => {
+    if (!documents.ready || documents.loading || evidenceBusy || isProcessingEvidence) return;
+    setIsProcessingEvidence(true); setProcessError('');
+    try {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'proses_bukti' });
+      if (!result.spreadsheetId || !result.revision || !Array.isArray(result.rows)) throw new Error('Perbarui Code.gs: proses bukti belum didukung backend.');
+      if (currentSubmission.current !== submissionKey) return;
+      documents.markProcessed(true);
+      navigate(currentView, 4);
+    } catch (err) {
+      if (currentSubmission.current === submissionKey) { documents.markProcessed(false); setProcessError(err.message); }
+    } finally { setIsProcessingEvidence(false); }
+  };
 
   const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision, documents };
   const sptClaims = useArchiveClaims({ ...claimOptions, documentModule: 'spt' });
@@ -3141,9 +3163,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
     setIsSubmitting(true);
     try {
-      const base64Url = await fileToBase64(selectedFile);
-      const base64Data = base64Url.split(',')[1];
-      
       let sheetData = [];
       if (parsedData.rows && parsedData.rows.length > 0) {
         sheetData = parsedData.rows.map((row, index) => {
@@ -3172,8 +3191,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
         nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
         periode: selectedPeriod?.periodeEvent || parsedData.periode || '',
         bulanTahun: bulanTahunForPayload, 
-        fileName: selectedFile.name,
-        fileBase64: base64Data,
         sheetData: sheetData,
         sptData: [],
         ringkasan: {
@@ -3208,10 +3225,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
         localStorage.setItem(cacheKey, 'true');
         setSubmitResult({ 
           type: 'success', 
-          message: isAlreadyUploaded ? 'Dokumen & Kertas Kerja lama berhasil diganti!' : 'Berkas dan Kertas Kerja berhasil diproses ke Google Drive!', 
+          message: 'Spreadsheet rekap berhasil disimpan. File referensi tidak diunggah ke Google Drive.',
           url: json.folderUrl 
         });
         setIsAlreadyUploaded(true);
+        documents.markProcessed(false);
         setArchiveRevision(revision => revision + 1);
       } else {
         throw new Error(json.message || 'Gagal menyimpan data');
@@ -3456,7 +3474,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
               <div className="flex items-center justify-center gap-3">
                 {[1, 2, 3, 4, 5].map((num) => {
                   const isActive = activeStep === num;
-                    const isDisabled = !selectedPeriod && num > 1;
+                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (num >= 4 && !canOpenFinal) || (num === 5 && !finalRecap);
                     return (
                       <button
                         key={num}
@@ -3469,7 +3487,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                             navigate(currentView, num);
                           }
                         }}
-                        title={isDisabled ? 'Pilih periode di Tahap 1 terlebih dahulu' : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : num >= 4 ? 'Klik Lanjut Proses di tab 3; tab 5 memerlukan konfirmasi preview' : 'Tunggu proses selesai') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
                         className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
                           isActive
                             ? 'text-white ring-4 shadow-sm scale-105'
@@ -3582,6 +3600,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                              <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
                              <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
                              <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
+                             <li>• File hanya dibaca sebagai referensi. Yang disimpan ke Drive adalah <strong>spreadsheet rekap hasil bacaan</strong>.</li>
                           </ul>
                         </div>
 
@@ -3824,7 +3843,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                   </div>
                 </div>
               ) : activeStep === 3 && selectedPeriod ? (
-                <div className="max-w-7xl mx-auto space-y-6">
+                <fieldset disabled={isProcessingEvidence} className="max-w-7xl mx-auto space-y-6 min-w-0">
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
                     <div className="mt-1 text-gray-400"><FolderOpen size={24} /></div>
                     <div>
@@ -3838,25 +3857,25 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                   {sptClaims.render()}
                   {cutiClaims.render()}
                   {documents.render()}
-
-                  {sptUpload.render()}
-                  {cutiUpload.render()}
-
+                  {processError && <p role="alert" className="p-4 rounded-xl bg-red-50 text-red-700 text-sm">{processError}</p>}
                   <div className="flex justify-center gap-3 pt-6 border-t border-gray-100">
-                    <button onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors">
+                    <button disabled={isProcessingEvidence || evidenceBusy} onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors disabled:opacity-40">
                       <ArrowLeft size={16} /> Kembali
                     </button>
-                    <button onClick={() => navigate(currentView, 4)} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
-                      Lanjut ke Tahap 4 <ChevronRight size={16} />
+                    <button disabled={!documents.ready || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+                      {isProcessingEvidence ? 'Memperbarui rekap...' : 'Lanjut Proses'} <ChevronRight size={16} />
                     </button>
                   </div>
-                </div>
+                  {sptUpload.render()}
+                  {cutiUpload.render()}
+                </fieldset>
               ) : activeStep === 4 && selectedPeriod ? (
+                !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses di tab 3 untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab 3</button></div> :
                 <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
                   onBack={() => navigate(currentView, 3)}
                   onSaved={result => { setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
-                <FinalRecapSaved result={finalRecap} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, 4)} />
+                <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} />
               ) : (
                 <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>

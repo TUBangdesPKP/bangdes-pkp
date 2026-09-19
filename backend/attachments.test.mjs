@@ -193,16 +193,17 @@ test('direct upload retains archive and rekap after event copy is deleted; retry
   assert.ok(f.master.getSheetByName('REKAP_CUTI').rows.some(row => row[9] === source.getUrl()));
 });
 
-test('re-upload of tab 2 replaces only old presensi and spreadsheet, never attached evidence', () => {
+test('tab 2 creates only a recap, replaces old recap and preserves legacy original/evidence', () => {
   const f = fixture();
   const copy = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}).document;
-  const result = f.call({fileName:'Presensi baru.pdf',fileBase64:'dGVzdA==',sheetData:f.working.rows.slice(5,-1),ringkasan:{}});
+  const result = f.call({sheetData:f.working.rows.slice(5,-1),ringkasan:{}});
   assert.equal(result.status, 'success', result.message);
   assert.equal(result.folderId, f.destination.id);
   assert.equal(f.files.get(copy.fileId).trashed, false);
   assert.equal(f.untouched.trashed, false);
   assert.equal(f.spt.trashed, false);
-  assert.equal(f.presensi.trashed, true);
+  assert.equal(f.presensi.trashed, false);
+  assert.equal([...f.files.values()].filter(file => file.id.startsWith('upload_document_')).length, 0);
   assert.equal(f.spreadsheet.trashed, true);
   assert.equal(f.call({action:'list_pendukung'}).documents.length, 1);
 });
@@ -232,20 +233,24 @@ test('reclaim reuses deleted registry row and writes horizontal dates, isolated 
   assert.equal(registry.rows.length, 3);
 });
 
-test('preview is read-only, maps SPT/Cuti, protects weekends and baseline Libur', () => {
+test('process applies SPT to same recap; subsequent preview is read-only, protects times and holidays', () => {
   const f = fixture();
   f.master.getSheetByName('REKAP_SPT').rows[1][4] = '4 Juli 2026';
   f.master.getSheetByName('REKAP_SPT').rows[1][5] = '9 Juli 2026';
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   const before = JSON.stringify(f.working.rows);
-  const preview = f.call({action:'preview_rekap_final'});
+  const preview = f.call({action:'proses_bukti'});
   assert.equal(preview.status, 'success', preview.message);
   assert.equal(preview.rows[0].keterangan, 'Libur');
   assert.equal(preview.rows[1].keterangan, 'Libur');
   assert.equal(preview.rows[2].keterangan, 'Dinas');
   assert.equal(preview.rows[5].keterangan, 'Libur');
-  assert.equal(JSON.stringify(f.working.rows), before);
-  assert.equal(f.recapBook.getSheetByName('_PRESENSI_TAB2'), null);
+  assert.equal(f.working.rows[7][21], 'Dinas');
+  assert.deepEqual(f.working.rows.slice(5,11).map(row => row.slice(0,21)), JSON.parse(before).slice(5,11).map(row => row.slice(0,21)));
+  const processed = JSON.stringify(f.working.rows);
+  assert.equal(f.call({action:'preview_rekap_final'}).status, 'success');
+  assert.equal(JSON.stringify(f.working.rows), processed);
+  assert.ok(f.recapBook.getSheetByName('_PRESENSI_TAB2'));
   assert.ok(preview.rows.every(row => row.datang === '08:10' && row.pulang === '17:00'));
 });
 
@@ -253,8 +258,8 @@ test('unresolved conflicts and missing confirmation cannot overwrite recap', () 
   const f = fixture();
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   f.call({action:'klaim_cuti',sourceUrl:f.cuti.getUrl()});
+  const preview = f.call({action:'proses_bukti'});
   const before = JSON.stringify(f.working.rows);
-  const preview = f.call({action:'preview_rekap_final'});
   assert.equal(preview.rows.filter(row => row.konflik).length, 3);
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision}).status, 'error');
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).status, 'error');
@@ -274,11 +279,11 @@ test('unresolved conflicts and missing confirmation cannot overwrite recap', () 
 test('deleted claims are removed from re-preview after final save, original data survives', () => {
   const f = fixture();
   const claim = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
-  let preview = f.call({action:'preview_rekap_final'});
+  let preview = f.call({action:'proses_bukti'});
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).status, 'success');
   assert.equal(f.recapBook.getSheetByName('_PRESENSI_TAB2').rows[7][21], 'WFO');
   f.call({action:'hapus_pendukung',fileId:claim.document.fileId});
-  preview = f.call({action:'preview_rekap_final'});
+  preview = f.call({action:'proses_bukti'});
   assert.equal(preview.status, 'success', preview.message);
   assert.equal(preview.rows[2].keterangan, 'WFO');
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).status, 'success');
@@ -287,10 +292,10 @@ test('deleted claims are removed from re-preview after final save, original data
 
 test('rejects stale preview after claim mutation, external change, or different submission', () => {
   const f = fixture();
-  let preview = f.call({action:'preview_rekap_final'});
+  let preview = f.call({action:'proses_bukti'});
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
-  assert.match(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).message, /berubah/);
-  preview = f.call({action:'preview_rekap_final'});
+  assert.match(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).message, /perubahan|berubah/);
+  preview = f.call({action:'proses_bukti'});
   f.working.rows[7][21] = 'WFH';
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).status, 'error');
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,modul:'tukin'}).status, 'error');
@@ -300,7 +305,7 @@ test('legacy claims resolve dates from archive; unavailable copies cannot silent
   const f = fixture();
   const claim = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   f.master.getSheetByName('DOKUMEN_PENDUKUNG').rows[1].length = 14;
-  const preview = f.call({action:'preview_rekap_final'});
+  const preview = f.call({action:'proses_bukti'});
   assert.equal(preview.status, 'success', preview.message);
   assert.equal(preview.rows[2].keterangan, 'Dinas');
   f.files.get(claim.document.fileId).trashed = true;
@@ -316,11 +321,61 @@ test('baseline Libur is excluded from effective Cuti; forged holiday edits fail'
   }
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   f.call({action:'klaim_cuti',sourceUrl:f.cuti.getUrl()});
-  const preview = f.call({action:'preview_rekap_final'});
+  const preview = f.call({action:'proses_bukti'});
   assert.equal(preview.rows[5].konflik, false);
   assert.equal(preview.rows[5].keterangan, 'Libur');
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,resolutions:{'2026-07-09':'Cuti'}}).status, 'error');
   assert.equal(f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true}).status, 'success');
+});
+
+test('tab 4 stays open without changes, locks after claim/delete, and reprocess restores baseline', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f = fixture(), call = payload => f.call({modul,...payload});
+    assert.equal(call({action:'list_pendukung'}).processed, false);
+    assert.equal(call({action:'preview_rekap_final'}).status, 'error');
+    assert.equal(call({action:'proses_bukti'}).status, 'success');
+    assert.equal(call({action:'list_pendukung'}).processed, true);
+    assert.equal(call({action:'preview_rekap_final'}).status, 'success');
+    const claim = call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+    assert.equal(call({action:'list_pendukung'}).processed, false);
+    assert.equal(call({action:'preview_rekap_final'}).status, 'error');
+    assert.equal(call({action:'proses_bukti'}).rows[2].keterangan, 'Dinas');
+    assert.equal(call({action:'list_pendukung'}).processed, true);
+    call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}); // A duplicate is not a change.
+    assert.equal(call({action:'list_pendukung'}).processed, true);
+    assert.equal(call({action:'hapus_pendukung',fileId:claim.document.fileId}).status, 'success');
+    assert.equal(call({action:'list_pendukung'}).processed, false);
+    assert.equal(call({action:'preview_rekap_final'}).status, 'error');
+    assert.equal(call({action:'proses_bukti'}).rows[2].keterangan, 'WFO');
+    assert.equal(f.working.rows[7][21], 'WFO');
+  }
+});
+
+test('re-entering and reprocessing unchanged conflict decisions preserves the selection', () => {
+  const f = fixture();
+  f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+  f.call({action:'klaim_cuti',sourceUrl:f.cuti.getUrl()});
+  const preview = f.call({action:'proses_bukti'});
+  assert.equal(preview.rows[2].keterangan, 'WFO'); // Conflict not decided automatically.
+  const resolutions = {'2026-07-06':'Cuti','2026-07-07':'Dinas','2026-07-08':'Cuti'};
+  assert.equal(f.call({action:'simpan_rekap_final',confirmed:true,revision:preview.revision,resolutions}).status, 'success');
+  for (const action of ['preview_rekap_final','proses_bukti']) {
+    const result = f.call({action});
+    assert.equal(result.rows[2].keterangan, 'Cuti');
+    assert.equal(result.rows[2].penyelesaian, 'Cuti');
+    assert.equal(f.call({action:'list_pendukung'}).processed, true);
+  }
+});
+
+test('new direct upload invalidates gate; invalid tab 2 data cannot change Drive', () => {
+  const f = fixture();
+  f.call({action:'proses_bukti'});
+  assert.equal(f.call({action:'upload_pendukung',jenisDokumen:'cuti',requestId:'direct-test',fileName:'Cuti.png',fileBase64:'dGVzdA==',sptData:[{nip:f.scope.nip,nama:f.scope.nama,tanggalBerangkat:'6 Juli 2026',tanggalPulang:'8 Juli 2026',tujuan:'Cuti Tahunan',jumlahHariDinas:3}]}).status, 'success');
+  assert.equal(f.call({action:'list_pendukung'}).processed, false);
+  assert.equal(f.call({action:'proses_bukti'}).rows[2].keterangan, 'Cuti');
+  const count = f.files.size;
+  assert.equal(f.call({sheetData:[]}).status, 'error');
+  assert.equal(f.files.size, count);
 });
 
 test('date columns store integer serials: 25 August stays 25 August, no hours', () => {
@@ -380,7 +435,7 @@ test('preview recomputes original dates rather than using shifted legacy date co
   const f = fixture();
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   f.master.getSheetByName('DOKUMEN_PENDUKUNG').rows[1].splice(14,3,'2026-07-05','2026-07-06','2026-07-07');
-  const preview = f.call({action:'preview_rekap_final'});
+  const preview = f.call({action:'proses_bukti'});
   assert.equal(preview.status, 'success', preview.message);
   assert.equal(preview.rows.find(row=>row.tanggal==='2026-07-08').keterangan,'Dinas');
 });

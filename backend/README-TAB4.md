@@ -11,14 +11,17 @@
 
 ## Alur
 
-- Tab 2 tetap menyimpan file asli dan spreadsheet rekap. Backend juga menyimpan snapshot hasil bacaan yang telah dikonfirmasi pada sheet tersembunyi `_PRESENSI_TAB2` di spreadsheet rekap yang sama.
+- Tab 2 hanya membuat spreadsheet rekap dari hasil bacaan dan template. File PDF/XLSX referensi tidak dikirim frontend dan tidak dibuat di folder pegawai oleh backend. File referensi lama yang sudah terunggah tidak dihapus otomatis. Backend menyimpan snapshot hasil bacaan pada sheet tersembunyi `_PRESENSI_TAB2` di spreadsheet rekap yang sama.
 - Tab 3 tetap menggunakan salinan SPT/Cuti di folder pengumpulan pegawai. Klaim ulang sumber yang sama menggunakan kembali baris deleted pada DOKUMEN_PENDUKUNG dan mengganti FileId salinannya. Dokumen lain, modul lain, dan periode lain tidak ditimpa. Duplikat lama tidak otomatis dihapus.
-- Tab 4 memuat data awal dari server dan dokumen active untuk NIP/modul/periode/folder yang sama. Hanya keterangan diubah: SPT menjadi Dinas; semua Cuti menjadi Cuti. Tanggal Sabtu/Minggu atau keterangan awal Libur tetap Libur. Hari libur nasional mengandalkan keterangan Libur dari tab 2; tidak ada kalender baru yang ditebak.
-- SPT dan Cuti bersamaan pada hari kerja memerlukan pilihan pengguna Dinas atau Cuti. Pada hari libur tetap ada notifikasi tetapi keterangan terkunci Libur.
-- Setelah checkbox persetujuan dicentang, tombol Lanjutkan Perhitungan Uang Makan/Tunjangan Kinerja menulis ulang kolom V mulai baris 6 pada spreadsheet rekap yang sama, beserta warna baris A:V. ID spreadsheet, file Excel asli, jam datang/pulang, kolom lain, formula di luar V, border, dan conditional formatting tidak diganti.
+- Di tab 3, tombol Kembali dan **Lanjut Proses** berada tepat di bawah daftar Dokumen Bukti Dukung yang sudah diupload, sebelum panel upload SPT/Cuti.
+- **Lanjut Proses** memanggil `proses_bukti`: backend membaca snapshot tab 2 dan dokumen active untuk NIP/modul/periode/folder yang sama, lalu memperbarui keterangan dan warna pada spreadsheet rekap yang sama sebelum membuka tab 4. SPT menjadi Dinas; semua Cuti menjadi Cuti. Sabtu/Minggu atau keterangan awal Libur tetap Libur. Jam datang/pulang tidak diubah.
+- Tab 4 terkunci sebelum Lanjut Proses berhasil. Kembali ke tab 3 tanpa perubahan tidak menguncinya. Klaim, upload bukti, atau hapus bukti yang berhasil mengunci ulang tab 4 sampai Lanjut Proses diklik kembali. Backend juga memeriksa revisi; akses langsung ke API preview tidak melewati pemeriksaan ini. Simpan ulang tab 2 juga memerlukan proses ulang.
+- Tab 4 menampilkan **Preview Bukti Tunjangan Kinerja** atau **Preview Bukti Uang Makan**, dengan tabel scroll lima kolom: Tanggal, Hari, Datang, Pulang, Ket; identitas pegawai dan total hari. Keterangan biasa hanya ditampilkan; dropdown penyesuaian tersedia untuk konflik SPT/Cuti.
+- SPT dan Cuti bersamaan pada hari kerja memerlukan pilihan pengguna Dinas atau Cuti di tab 4. Saat Lanjut Proses, tanggal konflik mempertahankan keterangan awal dan diberi warna kuning, bukan diputuskan otomatis. Pilihan yang sudah dikonfirmasi tetap tersimpan jika tidak ada perubahan klaim.
+- Setelah checkbox persetujuan dicentang, tombol Lanjutkan Perhitungan Uang Makan/Tunjangan Kinerja mengonfirmasi hasil akhir, termasuk keputusan konflik, pada kolom V mulai baris 6 dan warna baris A:V. ID spreadsheet, jam datang/pulang, kolom lain, formula di luar V, border, dan conditional formatting tidak diganti.
 - Backend menghitung ulang dan membandingkan revisi sebelum menyimpan. Jika klaim/presensi berubah setelah preview, pengguna harus memuat ulang dan memeriksa lagi.
 - Setelah penyimpanan berhasil, tab 5 menampilkan ringkasan jumlah Dinas/Cuti/Libur dan tautan spreadsheet final. Jumlah ini bukan nominal pembayaran. Rumus tarif, potongan dan nominal uang makan/tukin tidak ditambahkan dalam perubahan ini.
-- Kembali ke tab 4 setelah klaim dihapus akan menghitung ulang dari snapshot tab 2, bukan dari keterangan final yang sudah ditimpa.
+- Setelah klaim dihapus, klik Lanjut Proses kembali. Perhitungan ulang memakai snapshot tab 2, sehingga keterangan yang sebelumnya Dinas/Cuti dapat kembali ke keterangan aslinya.
 
 ## Kolom horizontal tanggal
 
@@ -47,9 +50,20 @@ Referensi representasi tanggal tanpa jam: [Google Sheets date serial numbers](ht
 
 ## Rekap lama tanpa snapshot
 
-Preview pertama membaca isi spreadsheet rekap yang ada tanpa mengubahnya. Saat konfirmasi final pertama, backend membuat snapshot sebelum menimpa keterangan. Jika rekap lama sudah pernah diedit manual dan Anda membutuhkan data asli sebelumnya, unggah/simpan ulang file asli melalui tab 2 dahulu.
+Saat Lanjut Proses pertama, backend membuat snapshot dari isi rekap lama sebelum menimpa keterangannya. Jika rekap lama sudah pernah diedit manual dan Anda membutuhkan data asli sebelumnya, pilih/simpan ulang file referensi melalui tab 2 dahulu.
 
 Jangan mengedit/menghapus `_PRESENSI_TAB2` secara manual. Ini acuan penghitungan ulang. Dokumen yang masih tercatat active tetapi salinannya tidak tersedia akan memblokir preview dengan pesan kesalahan, bukan diam-diam diabaikan.
+
+## Uji setelah deploy versi ini
+
+1. Simpan backup. Perbarui dan deploy Code.gs terlebih dahulu, kemudian build/push frontend termasuk App.jsx, submission-documents.jsx, final-recap.jsx dan file dependensi yang sudah ada.
+2. Pilih satu pegawai/periode uji. Pilih file presensi di tab 2, periksa bacaannya, lalu Proses & Simpan Bukti. Pastikan folder berisi spreadsheet rekap, tanpa salinan baru PDF/XLSX referensi.
+3. Di tab 3 klaim SPT/Cuti. Pastikan tab 4 belum aktif. Klik Lanjut Proses di bawah daftar bukti.
+4. Pastikan ID spreadsheet tidak berubah, keterangan pada tanggal klaim menjadi Dinas/Cuti, tanggal Libur dan jam datang/pulang tetap. Preview tab 4 harus sama dengan spreadsheet; konflik diberi peringatan.
+5. Kembali ke tab 3 tanpa perubahan: tab 4 tetap bisa dibuka. Hapus salah satu salinan bukti: tab 4 terkunci kembali. Klik Lanjut Proses lagi dan periksa keterangan kembali ke acuan tab 2 pada tanggal yang tidak lagi punya bukti.
+6. Jika ada konflik, tentukan Dinas atau Cuti, centang persetujuan, lalu Lanjutkan Perhitungan. Ulangi pemeriksaan pada modul lainnya.
+
+Penanda proses dan keputusan konflik disimpan otomatis di B1/B2 sheet internal `_PRESENSI_TAB2`; tidak perlu menambah kolom pada sheet Kepegawaian untuk fitur penguncian ini. Tes lokal tanpa backend produksi: `tests/submission-flow.html` (alur tab) dan `tests/final-ui.html` (konflik).
 
 ## Verifikasi dan batasan
 
