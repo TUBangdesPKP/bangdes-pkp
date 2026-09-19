@@ -11,6 +11,16 @@
 
 ## Alur
 
+### Pemeriksaan Dokumen Telah Tersedia pada tab 2
+
+- Frontend tidak lagi membaca/menulis penanda `uploaded_*` di localStorage. Penanda lama boleh dibiarkan; tidak digunakan untuk menentukan status.
+- Setiap pemilihan file yang berhasil dibaca memeriksa data terbaru melalui POST `check_status`. Backend mencocokkan modul, NIP, dan periode pada REKAP_TUKIN/REKAP_UANG_MAKAN, lalu memeriksa spreadsheet hasil (kolom J) masih aktif dan berada pada folder tercatat (kolom I).
+- Hanya kecocokan yang terverifikasi memunculkan notifikasi kuning. Baris sudah dihapus, spreadsheet sudah di-Trash/tidak tersedia, atau lokasi file tidak cocok: notifikasi tidak muncul. Menghapus PDF/XLSX referensi lama saja tidak menghilangkan status selama spreadsheet hasil dan baris rekap masih valid.
+- Tombol **Periksa ulang status rekap** tersedia setelah preview terbaca untuk memeriksa perubahan yang dilakukan melalui Sheets/Drive tanpa memilih ulang file. Kegagalan koneksi/backend ditampilkan sebagai error dan penyimpanan diblokir sampai pemeriksaan berhasil.
+- Jika spreadsheet hasil dihapus tetapi foldernya masih valid, penyimpanan tab 2 membuat rekap pengganti di folder tersebut dan memperbarui baris yang sama. Dokumen SPT/Cuti lain tidak dihapus.
+- Perubahan ini memerlukan frontend dan **deployment baru Code.gs**. Backend lama ditolak dengan pesan pembaruan, agar frontend tidak mempercayai pemeriksaan lama yang hanya melihat baris sheet.
+- Uji: `node --test backend/attachments.test.mjs tests/existing-status.test.mjs`, lalu `npm run build`.
+
 - Tab 2 hanya membuat spreadsheet rekap dari hasil bacaan dan template. File PDF/XLSX referensi tidak dikirim frontend dan tidak dibuat di folder pegawai oleh backend. File referensi lama yang sudah terunggah tidak dihapus otomatis. Backend menyimpan snapshot hasil bacaan pada sheet tersembunyi `_PRESENSI_TAB2` di spreadsheet rekap yang sama.
 - Tab 3 tetap menggunakan salinan SPT/Cuti di folder pengumpulan pegawai. Klaim ulang sumber yang sama menggunakan kembali baris deleted pada DOKUMEN_PENDUKUNG dan mengganti FileId salinannya. Dokumen lain, modul lain, dan periode lain tidak ditimpa. Duplikat lama tidak otomatis dihapus.
 - Di tab 3, tombol Kembali dan **Lanjut Proses** berada tepat di bawah daftar Dokumen Bukti Dukung yang sudah diupload, sebelum panel upload SPT/Cuti.

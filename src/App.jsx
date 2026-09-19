@@ -1,6 +1,6 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
-import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, sendClaimRequest } from './archive-claims.js';
+import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, sendClaimRequest, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
@@ -2962,6 +2962,14 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
   const [isAlreadyUploaded, setIsAlreadyUploaded] = useState(false);
+  const [existingCheckError, setExistingCheckError] = useState('');
+  const [isCheckingExisting, setIsCheckingExisting] = useState(false);
+  const referenceRequest = useRef(0);
+  useEffect(() => {
+    referenceRequest.current++;
+    setIsAlreadyUploaded(false); setExistingCheckError(''); setIsCheckingExisting(false);
+  }, [currentView, selectedPeriod?.periodeEvent]);
+  useEffect(() => () => { referenceRequest.current++; }, []);
   const [pendingTargetView, setPendingTargetView] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -3023,6 +3031,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   };
 
   const resetUploadState = () => {
+    referenceRequest.current++;
+    setExistingCheckError(''); setIsCheckingExisting(false);
     sptUpload.reset();
     cutiUpload.reset();
     setSelectedFile(null);
@@ -3046,42 +3056,42 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
     if (e.target.files && e.target.files.length > 0) {
 
       const file = e.target.files[0];
+      const requestId = ++referenceRequest.current;
+      setExistingCheckError(''); setIsCheckingExisting(false);
       setSelectedFile(file);
       setSubmitResult(null);
       setIsParsing(true);
       setParseStatus('Mengekstrak teks dokumen...');
       setIsAlreadyUploaded(false);
 
-      const checkExisting = async (nip, modul, periodeEvent) => {
-        const cacheKey = `uploaded_${nip}_${modul}_${periodeEvent}`;
-        if (localStorage.getItem(cacheKey)) return true;
-        try {
-          const url = `${APPS_SCRIPT_URL}?action=checkExisting&nip=${nip}&modul=${modul}&periodeEvent=${encodeURIComponent(periodeEvent)}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const json = await res.json();
-            if (json.exists) { localStorage.setItem(cacheKey, 'true'); return true; }
-          }
-        } catch (err) {}
-        return false;
-      };
-
       try {
-        const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, setParseStatus); 
+        const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, value => { if (referenceRequest.current === requestId) setParseStatus(value); });
+        if (referenceRequest.current !== requestId) return;
         setParsedData(result);
         
         if (result && result.isValid) {
-          const expectedNip = result.nip !== '-' ? result.nip : loggedInUser.NIP;
-          const expectedPeriodeEvent = selectedPeriod ? selectedPeriod.periodeEvent : result.periode;
-          const exists = await checkExisting(expectedNip, activeTab, expectedPeriodeEvent);
-          setIsAlreadyUploaded(exists);
+          await refreshExistingStatus(result, requestId);
         }
       } catch (err) {
-        setParsedData({ isValid: false, isDateMismatch: false, errorMessage: "Gagal membaca struktur dokumen." });
+        if (referenceRequest.current === requestId) setParsedData({ isValid: false, isDateMismatch: false, errorMessage: "Gagal membaca struktur dokumen." });
       } finally {
-        setIsParsing(false);
+        if (referenceRequest.current === requestId) setIsParsing(false);
       }
     }
+  };
+
+  const refreshExistingStatus = async (data = parsedData, requestId = referenceRequest.current) => {
+    if (!data?.isValid) return;
+    setIsCheckingExisting(true); setIsAlreadyUploaded(false); setExistingCheckError(''); setSubmitResult(null);
+    try {
+      const exists = await checkExistingSubmission(APPS_SCRIPT_URL, {
+        modul: activeTab, nip: data.nip && data.nip !== '-' ? data.nip : loggedInUser.NIP,
+        nama: data.nama, periode: selectedPeriod?.periodeEvent || data.periode,
+      });
+      if (referenceRequest.current === requestId) setIsAlreadyUploaded(exists);
+    } catch (err) {
+      if (referenceRequest.current === requestId) setExistingCheckError('Status rekap terbaru belum dapat diperiksa. ' + err.message);
+    } finally { if (referenceRequest.current === requestId) setIsCheckingExisting(false); }
   };
 
   const handlePreviewPdf = async (file) => {
@@ -3159,7 +3169,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedFile || !parsedData || !parsedData.isValid) return;
+    if (!selectedFile || !parsedData || !parsedData.isValid || isParsing || isCheckingExisting || existingCheckError) return;
 
     setIsSubmitting(true);
     try {
@@ -3221,8 +3231,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
       }
 
       if (json.status === 'success') {
-        const cacheKey = `uploaded_${nipForPayload}_${activeTab}_${bulanTahunForPayload}`;
-        localStorage.setItem(cacheKey, 'true');
         setSubmitResult({ 
           type: 'success', 
           message: 'Spreadsheet rekap berhasil disimpan. File referensi tidak diunggah ke Google Drive.',
@@ -3652,10 +3660,15 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                             <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
                             <div>
                               <p className="font-black mb-0.5">Dokumen Telah Tersedia</p>
-                              <p className="leading-relaxed">Sistem mendeteksi Anda sudah pernah memproses data periode ini sebelumnya. Klik <strong>Ganti Dokumen</strong> jika Anda ingin menimpa kertas kerja yang lama.</p>
+                              <p className="leading-relaxed">Rekap dengan NIP dan periode yang sama ditemukan pada data terbaru, dan spreadsheet hasilnya masih tersedia di folder pengumpulan. Klik <strong>Ganti Dokumen</strong> untuk mengganti rekap tersebut.</p>
                             </div>
                           </div>
                         )}
+
+                        {!isParsing && parsedData?.isValid && <div className="text-xs space-y-2">
+                          {existingCheckError && <p role="alert" className="p-3 rounded-xl border border-red-200 bg-red-50 text-red-700">{existingCheckError}</p>}
+                          <button type="button" disabled={isCheckingExisting || isSubmitting} onClick={() => refreshExistingStatus()} className="text-teal-700 underline disabled:opacity-40">{isCheckingExisting ? 'Memeriksa data terbaru...' : 'Periksa ulang status rekap'}</button>
+                        </div>}
 
                         {!isParsing && parsedData && !parsedData.isValid && (
                           <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
@@ -3685,7 +3698,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                         {!isParsing && (
                           <button 
                             onClick={handleUploadSubmit}
-                            disabled={!parsedData || !parsedData.isValid || isSubmitting || (!selectedFile && !submitResult)}
+                            disabled={!parsedData || !parsedData.isValid || isSubmitting || isCheckingExisting || !!existingCheckError || (!selectedFile && !submitResult)}
                             className={`w-full py-3.5 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 ${
                               parsedData && parsedData.isValid && !isSubmitting && selectedFile
                                 ? 'hover:opacity-95 active:scale-[0.99] cursor-pointer' 
@@ -3698,7 +3711,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                           </button>
                         )}
 
-                        {!isParsing && parsedData && parsedData.isValid && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
+                        {!isParsing && !isCheckingExisting && !existingCheckError && parsedData && parsedData.isValid && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
                           <button 
                             onClick={() => navigate(currentView, 3)}
                             className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"

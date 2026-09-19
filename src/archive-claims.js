@@ -87,3 +87,12 @@ export async function sendClaimRequest(endpoint, payload, fetchRequest = fetch) 
   if (data.status !== 'success') throw new Error(data.message || 'Server belum mengonfirmasi klaim.');
   return data;
 }
+
+export async function checkExistingSubmission(endpoint, context, fetchRequest = fetch) {
+  // Always POST to the backend; localStorage history cannot establish current existence.
+  const data = await sendClaimRequest(endpoint, { ...context, action: 'check_status' }, fetchRequest);
+  if (data.checkedLive !== true || typeof data.exists !== 'boolean') {
+    throw new Error('Perbarui dan deploy Code.gs terbaru agar status rekap dapat diperiksa langsung.');
+  }
+  return data.exists;
+}

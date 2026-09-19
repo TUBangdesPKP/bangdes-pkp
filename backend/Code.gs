@@ -168,29 +168,8 @@ function normStr(val) {
 function doGet(e) {
   try {
     if (e.parameter && e.parameter.action === 'checkExisting') {
-      var nip = e.parameter.nip || "";
-      var modul = e.parameter.modul || "";
-      var periodeEvent = e.parameter.periodeEvent || ""; 
-      
-      var exists = false;
-      var checkSheetName = modul === "uang-makan" ? "REKAP_UANG_MAKAN" : (modul === "tukin" ? "REKAP_TUKIN" : "");
-      
-      if (checkSheetName) {
-        var checkSheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName(checkSheetName);
-        if (checkSheet) {
-          var values = checkSheet.getDataRange().getValues();
-          for (var i = 1; i < values.length; i++) {
-            var rowNip = nip_(values[i][1]);
-            var rowPeriode = values[i][3] ? values[i][3].toString().trim() : "";
-            
-            if (rowNip === nip.trim() && rowPeriode === periodeEvent.trim()) {
-               exists = true;
-               break;
-            }
-          }
-        }
-      }
-      return ContentService.createTextOutput(JSON.stringify({ exists: exists, status: "success" })).setMimeType(ContentService.MimeType.JSON);
+      return json_(existingSubmission_({ modul: e.parameter.modul, nip: e.parameter.nip,
+        nama: e.parameter.nama, periode: e.parameter.periodeEvent }));
     }
 
     const sheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName("Data_Pegawai");
@@ -224,21 +203,7 @@ function legacyDoPost_(e) {
     var payload = JSON.parse(e.postData.contents);
     
     if (payload.action === 'check_status') {
-      var checkSheetName = payload.modul === "uang-makan" ? "REKAP_UANG_MAKAN" : "REKAP_TUKIN";
-      var checkSheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName(checkSheetName);
-      var isUploaded = false;
-      
-      if (checkSheet) {
-        var values = checkSheet.getDataRange().getValues();
-        for (var i = 1; i < values.length; i++) {
-          if (values[i][1].toString().trim() === payload.nip.toString().trim() && 
-              values[i][3].toString().trim() === payload.periode.toString().trim()) {
-            isUploaded = true;
-            break;
-          }
-        }
-      }
-      return ContentService.createTextOutput(JSON.stringify({ isUploaded: isUploaded })).setMimeType(ContentService.MimeType.JSON);
+      return json_(existingSubmission_(payload));
     }
 
     var modul = payload.modul;
@@ -645,9 +610,36 @@ function recordedFolder_(record) {
   if (spreadsheet.isTrashed() || !hasOnlyParent_(spreadsheet, folder.getId())) throw new Error('Lokasi file rekap tab 2 tidak sesuai. Periksa folder rekap.');
   return folder;
 }
+// Read current master rows and the generated recap, never the original reference file.
+function existingSubmission_(payload) {
+  var record = submissionRecord_(payload), exists = false;
+  if (record && record.folderId && record.spreadsheetId) {
+    try {
+      var folder = DriveApp.getFolderById(record.folderId);
+      var file = DriveApp.getFileById(record.spreadsheetId);
+      exists = !folder.isTrashed() && folderUnder_(folder, ROOT_FOLDER_ID) &&
+        !file.isTrashed() && hasOnlyParent_(file, folder.getId()) &&
+        file.getMimeType() === 'application/vnd.google-apps.spreadsheet';
+    } catch (error) {
+      // Missing or inaccessible IDs are not verified existing documents. Quota/service
+      // failures must surface as errors, not silently look like an absent recap.
+      if (!/No (?:file|folder)|not found|could not be found|could be found|does not exist|access denied|permission|tidak ditemukan/i.test(error.message)) throw error;
+      Logger.log('Rekap tidak tersedia atau tidak dapat diverifikasi: ' + error.message);
+    }
+  }
+  return { status: 'success', exists: exists, isUploaded: exists, checkedLive: true };
+}
 function resolvePresensiFolder_(payload) {
   var previous = submissionRecord_(payload);
-  if (previous) return recordedFolder_(previous);
+  // A manually removed recap must not prevent saving a replacement in its valid folder.
+  if (previous && previous.folderId) {
+    var previousFolder = null;
+    try { previousFolder = DriveApp.getFolderById(previous.folderId); } catch (error) { Logger.log('Folder lama tidak tersedia: ' + error.message); }
+    if (previousFolder && !previousFolder.isTrashed()) {
+      if (!folderUnder_(previousFolder, ROOT_FOLDER_ID)) throw new Error('Folder rekap berada di luar folder pengumpulan.');
+      return previousFolder;
+    }
+  }
   var modul = payload.modul;
   var month = modul === 'tukin' ? getBulanTukinPlusSatu(payload.periode) : null;
   month = month || getFormattedBulan(payload.bulanTahun || payload.periode);

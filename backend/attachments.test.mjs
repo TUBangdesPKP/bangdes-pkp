@@ -119,6 +119,60 @@ function fixture() {
   return { context, master, files, folders, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
 }
 
+test('live existence checks require exact module/NIP/period, current row and generated Drive recap', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f = fixture(), check = extra => f.call({action:'check_status',modul,...extra});
+    assert.equal(check().exists, true);
+    assert.equal(check().checkedLive, true);
+    assert.equal(check({nip:'999999'}).exists, false);
+    assert.equal(check({periode:'01-08-2026 s/d 31-08-2026'}).exists, false);
+    f.presensi.trashed = true; // Original PDF is not the generated recap.
+    assert.equal(check().exists, true);
+    f.spreadsheet.trashed = true;
+    assert.equal(check().exists, false);
+    f.spreadsheet.trashed = false;
+    assert.equal(check().exists, true);
+    f.master.getSheetByName(modul === 'tukin' ? 'REKAP_TUKIN' : 'REKAP_UANG_MAKAN').rows.splice(1,1);
+    assert.equal(check().exists, false); // No browser/server history may override this.
+    const get = JSON.parse(f.context.doGet({parameter:{action:'checkExisting',modul,nip:f.scope.nip,periodeEvent:f.scope.periode}}).getContent());
+    assert.equal(get.exists, false);
+  }
+});
+
+test('deleted/moved/wrong-type Drive recaps never count as existing', () => {
+  const f = fixture(), check = () => f.call({action:'check_status'});
+  f.spreadsheet.parent = f.otherDestination;
+  assert.equal(check().exists, false);
+  f.spreadsheet.parent = f.destination;
+  f.spreadsheet.mime = 'application/pdf';
+  assert.equal(check().exists, false);
+  f.files.delete(f.spreadsheet.id);
+  assert.equal(check().exists, false);
+});
+
+test('Drive service errors are surfaced, never reported as a missing recap', () => {
+  const f = fixture();
+  f.spreadsheet.getMimeType = () => { throw Error('Service invoked too many times'); };
+  const result = f.call({action:'check_status'});
+  assert.equal(result.status,'error');
+  assert.match(result.message,/Service invoked/);
+});
+
+test('saving after manual recap removal repairs master row without duplicating it or deleting evidence', () => {
+  for (const permanent of [false,true]) {
+    const f = fixture();
+    const evidence = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}).document;
+    if (permanent) f.files.delete(f.spreadsheet.id); else f.spreadsheet.trashed = true;
+    assert.equal(f.call({action:'check_status'}).exists, false);
+    const result = f.call({sheetData:f.working.rows.slice(5,-1),ringkasan:{}});
+    assert.equal(result.status,'success',result.message);
+    assert.equal(result.folderId,f.destination.id);
+    assert.equal(f.master.getSheetByName('REKAP_UANG_MAKAN').rows.length,2);
+    assert.equal(f.files.get(evidence.fileId).trashed,false);
+    assert.equal(f.call({action:'check_status'}).exists,true);
+  }
+});
+
 test('SPT and Cuti claims copy to exact tab 2 folder, preserve source, deduplicate and persist list', () => {
   const f = fixture();
   for (const [type, file] of [['spt', f.spt], ['cuti', f.cuti]]) {
