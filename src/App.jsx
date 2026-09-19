@@ -1,4 +1,5 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
+import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -3094,8 +3095,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
 
   const [archiveRevision, setArchiveRevision] = useState(0);
+  const [finalRecap, setFinalRecap] = useState(null);
   const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
+  useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
+  useEffect(() => { if (activeStep < 4) setFinalRecap(null); }, [activeStep]);
   const documents = useSubmissionDocuments({
     endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && activeStep === 3,
     revision: archiveRevision,
@@ -3847,185 +3851,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                     </button>
                   </div>
                 </div>
+              ) : activeStep === 4 && selectedPeriod ? (
+                <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
+                  onBack={() => navigate(currentView, 3)}
+                  onSaved={result => { setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
-                  <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
-                      <>
-                        <div>
-                          <h3 className="text-base font-extrabold text-gray-900 mb-1.5">Konfirmasi & Pengajuan</h3>
-                          <p className="text-xs text-gray-600 leading-relaxed font-normal">Langkah terakhir untuk menyelesaikan pengajuan {selectedPeriod.tipe} Anda. Periksa kembali data di sebelah kanan.</p>
-                        </div>
-                        
-                        {isAlreadyUploaded ? (
-                          <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-2 shadow-sm">
-                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-black mb-0.5">Dokumen Tersimpan</p>
-                              <p className="leading-relaxed">Berkas telah tersimpan di Google Drive. Silakan klik tombol di bawah untuk menyelesaikan proses pengajuan.</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">
-                            <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-black mb-0.5">Belum Disimpan</p>
-                              <p className="leading-relaxed">Anda belum memproses/menyimpan berkas ini di Tahap 2. Apakah Anda yakin ingin mengajukan data ini?</p>
-                            </div>
-                          </div>
-                        )}
-
-                        <button 
-                          onClick={() => setShowSuccessModal(true)}
-                          className="w-full py-3.5 mt-3 rounded-2xl text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] cursor-pointer"
-                          style={{ backgroundColor: PALETTE_PKP.midnightGreen }}
-                        >
-                          <FileCheck size={16} />
-                          Kirim Pengajuan
-                        </button>
-
-                        <button 
-                          onClick={() => navigate(currentView, 4)}
-                          className="w-full py-3.5 mt-3 rounded-2xl text-gray-700 bg-gray-50 border border-gray-200 hover:bg-gray-100 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <ArrowLeft size={16} />
-                          Kembali ke Tahap 4
-                        </button>
-                      </>
-                  </div>
-
-                  <div className="lg:col-span-8 space-y-4">
-                    {parsedData && parsedData.isValid && activeTab !== 'spt' ? (
-                      <div className="p-4 rounded-2xl bg-[#D7F7E6] border border-[#A5ECC5] text-[#0A5A36] flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-                        <div className="flex items-center gap-2 font-black text-sm">
-                          <CheckCircle2 size={18} className="text-[#0A5A36]" />
-                          <span>✓ Rentang Tanggal Sesuai</span>
-                        </div>
-                        <div className="text-xs font-extrabold text-[#0D6B41] bg-white/70 px-3 py-1 rounded-xl border border-[#A5ECC5]/50 self-start sm:self-auto">
-                          Periode Event: {selectedPeriod.periodeEvent}
-                        </div>
-                      </div>
-                    ) : parsedData && parsedData.isDateMismatch && activeTab !== 'spt' ? (
-                      <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-                        <div className="flex items-center gap-2 font-black text-sm">
-                          <AlertCircle size={18} className="text-red-600" />
-                          <span>⚠️ Periode File Tidak Sesuai</span>
-                        </div>
-                        <div className="text-xs font-extrabold text-red-700 bg-white/70 px-3 py-1 rounded-xl border border-red-200">
-                          File: {parsedData.periode} | Event: {selectedPeriod.periodeEvent}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="bg-white rounded-3xl border border-gray-200 shadow-xs p-6">
-                      <div className="mb-4 pb-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-black text-gray-900 flex items-center gap-1.5">
-                            Preview Data Presensi
-                          </h3>
-                          <p className="text-[11px] text-gray-500 font-medium">Verifikasi identitas dan rentang tanggal dari file dokumen.</p>
-                        </div>
-                        <div className="text-left sm:text-right text-[11px] bg-[#F8FAFC] px-4 py-2.5 rounded-2xl border border-gray-200 space-y-0.5 min-w-[200px]">
-                          <p className="font-extrabold text-gray-900 text-xs">{parsedData ? parsedData.nama : 'Belum Ada Berkas'}</p>
-                          <p className="text-[10px] text-gray-500 font-semibold">NIP: {parsedData ? parsedData.nip : '-'}</p>
-                          <p className="text-[10px] text-teal-700 font-extrabold">Periode: {parsedData ? parsedData.periode : (selectedPeriod?.periodeEvent || '-')}</p>
-                        </div>
-                      </div>
-                      
-                      <div className="overflow-auto max-h-[450px] border border-gray-200 rounded-2xl bg-white shadow-2xs relative">
-                        <table className="w-full text-left text-[11px] text-gray-700 border-collapse min-w-[700px]">
-                          <thead className="sticky top-0 bg-[#F8FAFC] border-b border-gray-200 text-[10px] font-black uppercase text-gray-500 tracking-wider z-10 shadow-sm">
-                            <tr>
-                              <th className="py-3 px-3.5 whitespace-nowrap">TANGGAL</th>
-                              <th className="py-3 px-3 whitespace-nowrap">HARI</th>
-                              <th className="py-3 px-3 whitespace-nowrap">DATANG</th>
-                              <th className="py-3 px-3 whitespace-nowrap">PULANG</th>
-                              <th className="py-3 px-3 text-center whitespace-nowrap">KET</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                            {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
-                              parsedData.rows.map((row, idx) => {
-                                const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
-                                const isLocked = false; 
-                                
-                                const getRowBgClass = () => {
-                                  if (isLocked) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
-                                  switch (row.keterangan) {
-                                    case 'Cuti': return 'bg-[#affdfd] text-[#006666]';
-                                    case 'Dinas': return 'bg-[#c9efbc] text-emerald-900';
-                                    case 'Libur': return 'bg-[#F4CCCC] text-red-900';
-                                    case 'WFO': case 'WFA': case 'WFH': return 'bg-white text-gray-900';
-                                    default: return isLiburData ? 'bg-[#F4CCCC] text-red-900' : 'bg-white text-gray-900';
-                                  }
-                                };
-
-                                const rowBgClass = getRowBgClass();
-                                return (
-                                  <tr key={idx} className={`${rowBgClass} transition-colors`}>
-                                    <td className="py-2 px-3.5 whitespace-nowrap">
-                                      <input type="text" value={row.tanggal} onChange={(e) => handleCellChange(idx, 'tanggal', e.target.value)} disabled={true} className="w-full bg-transparent border-b border-transparent font-bold text-inherit px-1 py-1 outline-none cursor-not-allowed" />
-                                    </td>
-                                    <td className="py-2 px-3 whitespace-nowrap">
-                                      <input type="text" value={row.hari} onChange={(e) => handleCellChange(idx, 'hari', e.target.value)} disabled={true} className="w-full max-w-[80px] bg-transparent border-b border-transparent text-inherit px-1 py-1 outline-none cursor-not-allowed" />
-                                    </td>
-                                    <td className="py-2 px-3 whitespace-nowrap">
-                                      <input type="text" value={row.datang} onChange={(e) => handleCellChange(idx, 'datang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.datang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
-                                    </td>
-                                    <td className="py-2 px-3 whitespace-nowrap">
-                                      <input type="text" value={row.pulang} onChange={(e) => handleCellChange(idx, 'pulang', e.target.value)} disabled={true} className={`w-full max-w-[70px] bg-transparent border-b border-transparent font-semibold text-inherit px-1 py-1 outline-none cursor-not-allowed ${row.pulang !== '-' && !isLiburData ? 'text-gray-900' : ''}`} />
-                                    </td>
-                                    <td className="py-2 px-3 text-center whitespace-nowrap">
-                                      {isLocked ? (
-                                        <span className={`inline-block px-2.5 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide border ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-200' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-300' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>{row.keterangan}</span>
-                                      ) : (
-                                        <select
-                                          value={row.keterangan} onChange={(e) => handleCellChange(idx, 'keterangan', e.target.value)}
-                                          className={`px-2 py-1 rounded-md font-bold text-[10px] uppercase tracking-wide outline-none cursor-pointer border shadow-sm transition-shadow ${row.keterangan === 'WFO' || row.keterangan === 'WFH' ? 'bg-white text-gray-800 border-gray-300 focus:border-gray-500' : row.keterangan === 'WFA' ? 'bg-[#fff2cc] text-gray-800 border-[#e6d8a6] focus:border-[#d9c78c]' : row.keterangan === 'Cuti' ? 'bg-[#affdfd] text-[#004d4d] border-[#8ce6e6] focus:border-[#008080]' : row.keterangan === 'Dinas' ? 'bg-[#c9efbc] text-emerald-900 border-[#a8d699] focus:border-[#8bbf7a]' : row.keterangan === 'Libur' ? 'bg-[#EAA] text-red-900 border-red-400 focus:border-red-600' : 'bg-amber-50 text-amber-800 border-amber-300 focus:border-amber-500'}`}
-                                        >
-                                          <option value="WFO" className="bg-white text-gray-800">WFO</option>
-                                          <option value="WFA" className="bg-[#fff2cc] text-gray-800">WFA</option>
-                                          <option value="WFH" className="bg-white text-gray-800">WFH</option>
-                                          <option value="Dinas" className="bg-[#c9efbc] text-emerald-900">Dinas</option>
-                                          <option value="Cuti" className="bg-[#affdfd] text-[#004d4d]">Cuti</option>
-                                          <option value="Libur" className="bg-[#F4CCCC] text-red-900">Libur</option>
-                                          <option value="DL" className="bg-white text-gray-800">DL</option>
-                                          <option value="TB" className="bg-white text-gray-800">TB</option>
-                                          <option value="-" className="bg-white text-gray-800">-</option>
-                                        </select>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            ) : (
-                              <tr>
-                                <td colSpan="5" className="text-center py-24 text-gray-400 bg-gray-50/50">
-                                  <div className="flex flex-col items-center justify-center space-y-3 opacity-60">
-                                    <FileText size={32} />
-                                    <div>
-                                      <p className="font-bold text-gray-500 mb-1">Belum Ada Berkas Pratinjau</p>
-                                      <p className="text-xs">Silakan unggah dokumen presensi Anda<br/>melalui panel di sebelah kiri.</p>
-                                    </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                      
-                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
-                        {activeTab !== 'spt' && (
-                           <>
-                             <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
-                             <span className="text-gray-500">Hari Masuk (WFO/WFA): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
-                           </>
-                        )}
-                        <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <FinalRecapSaved result={finalRecap} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, 4)} />
               ) : (
                 <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>

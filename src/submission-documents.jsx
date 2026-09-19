@@ -11,6 +11,8 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
+  const [processed, setProcessed] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(true);
   const [removing, setRemoving] = useState(null);
@@ -18,7 +20,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
-    setFiles([]); setReady(false); setError(''); setRemoving(null); setConfirmDelete(null);
+    setFiles([]); setReady(false); setProcessed(false); setError(''); setRemoving(null); setConfirmDelete(null);
   }, [key]);
 
   useEffect(() => {
@@ -33,8 +35,9 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
         if (!Array.isArray(result.documents)) throw new Error('Perbarui backend Apps Script: respons daftar dokumen belum didukung.');
         setFiles(result.documents);
         setReady(!result.requiresTab2);
+        setProcessed(result.processed === true);
       })
-      .catch(err => { if (!cancelled && currentKey.current === key && requestVersion.current === version) { setError(err.message); setReady(false); } })
+      .catch(err => { if (!cancelled && currentKey.current === key && requestVersion.current === version) { setError(err.message); setReady(false); setProcessed(false); } })
       .finally(() => { if (!cancelled && currentKey.current === key && requestVersion.current === version) setLoading(false); });
     return () => { cancelled = true; };
   }, [endpoint, key, enabled, revision, refreshVersion]);
@@ -46,13 +49,17 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     setLoading(false);
     setFiles(previous => [...previous.filter(file => file.fileId !== result.document.fileId), result.document]);
     setReady(true);
+    setProcessed(false);
     setError('');
   }, [key]);
 
   const claim = async payload => {
     if (!ready) throw new Error('Simpan tab 2 dan muat daftar dokumen terlebih dahulu.');
-    const result = await sendClaimRequest(endpoint, payload);
-    acceptResult(result);
+    setClaiming(true);
+    try {
+      const result = await sendClaimRequest(endpoint, payload);
+      acceptResult(result);
+    } finally { setClaiming(false); }
   };
 
   const remove = async file => {
@@ -67,6 +74,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       setLoading(false);
       setFiles(previous => previous.filter(item => item.fileId !== file.fileId));
       setConfirmDelete(null);
+      setProcessed(false);
     } catch (err) { if (currentKey.current === key) setError(err.message); }
     finally { if (currentKey.current === key) setRemoving(null); }
   };
@@ -114,5 +122,11 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       </div>}
     </section>
   );
-  return { files, ready, loading, acceptResult, claim, isClaimed, render };
+  const markProcessed = value => {
+    if (currentKey.current !== key) return;
+    requestVersion.current++;
+    setLoading(false);
+    setProcessed(value);
+  };
+  return { files, ready, loading, processed, markProcessed, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
 }
