@@ -55,12 +55,25 @@ export function createClaimPayload({ item, documentModule, activeTab, identity, 
   const safe = value => String(value || '').replace(/[^a-zA-Z0-9]/g, '_');
   const fileName = `${documentModule.toUpperCase()}_${safe(identity.nama || identity.nip)}_${safe(item.tanggalBerangkat)}-${safe(item.tanggalPulang)}_${safe(item.tujuan).slice(0, 30)}_klaim_${id}.pdf`;
   return {
-    // Existing Apps Script contract copies sourceUrl into the event folder.
-    // Keep its action name for compatibility; document type is explicit metadata.
-    action: 'klaim_spt', jenisDokumen: documentModule, modul: activeTab,
+    action: 'klaim_dokumen', requestId: id, jenisDokumen: documentModule, modul: activeTab,
     nip: identity.nip, nama: identity.nama, periode: selectedPeriod.periodeEvent,
     bulanTahun: selectedPeriod.title, sourceUrl: item.linkAkses, fileName,
   };
+}
+
+export function submissionContext(activeTab, identity, selectedPeriod) {
+  return { modul: activeTab, nip: identity.nip, nama: identity.nama,
+    periode: selectedPeriod?.periodeEvent || '', bulanTahun: selectedPeriod?.title || '' };
+}
+
+export function eventUploadPayload(archivePayload, context, requestId) {
+  return { ...archivePayload, ...context, action: 'upload_pendukung',
+    jenisDokumen: archivePayload.modul, requestId };
+}
+
+export function driveFileId(value) {
+  const match = String(value || '').match(/\/(?:d|folders)\/([\w-]+)/) || String(value || '').match(/[?&]id=([\w-]+)/);
+  return match ? match[1] : '';
 }
 
 export async function sendClaimRequest(endpoint, payload, fetchRequest = fetch) {
