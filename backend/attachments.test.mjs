@@ -119,6 +119,14 @@ function fixture() {
   return { context, master, files, folders, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
 }
 
+test('health probe returns deployment version without reading employee data or changing files', () => {
+  const f=fixture(), count=f.files.size;
+  const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
+  assert.equal(response.status,'success');
+  assert.equal(response.backendVersion,'2026-09-19-process-recovery');
+  assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
+});
+
 test('live existence checks require exact module/NIP/period, current row and generated Drive recap', () => {
   for (const modul of ['uang-makan','tukin']) {
     const f = fixture(), check = extra => f.call({action:'check_status',modul,...extra});
@@ -431,6 +439,22 @@ test('new direct upload invalidates gate; invalid tab 2 data cannot change Drive
   const count = f.files.size;
   assert.equal(f.call({sheetData:[]}).status, 'error');
   assert.equal(f.files.size, count);
+});
+
+test('processing scans full claim state once and repeating unchanged process preserves data', () => {
+  const f = fixture();
+  f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+  const original=f.context.finalState_;
+  let scans=0;
+  f.context.finalState_=payload=>{scans++;return original(payload);};
+  const first=f.call({action:'proses_bukti',requestId:'diagnostic-test'});
+  assert.equal(first.status,'success',first.message); assert.equal(scans,1);
+  const before=JSON.stringify(f.working.rows);
+  const second=f.call({action:'proses_bukti',requestId:'diagnostic-test'});
+  assert.equal(second.status,'success',second.message); assert.equal(scans,2);
+  assert.equal(second.revision,first.revision);
+  assert.equal(JSON.stringify(f.working.rows),before);
+  assert.equal(f.call({action:'preview_rekap_final'}).revision,first.revision);
 });
 
 test('date columns store integer serials: 25 August stays 25 August, no hours', () => {

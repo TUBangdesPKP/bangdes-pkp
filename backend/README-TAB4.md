@@ -9,6 +9,26 @@
 5. Deploy frontend setelah backend. File baru `src/final-recap.jsx` wajib disertakan. Import CSS pada src/main.jsx tetap dipertahankan.
 6. Build: `npm run build`. Test backend mock: `node --test backend/attachments.test.mjs`.
 
+### Jika Lanjut Proses mengalami HTTP 404
+
+Pemeriksaan read-only pada 19 September 2026 menemukan URL /exec mengalihkan respons ke script.googleusercontent.com yang menampilkan Halaman Tidak Ditemukan. Permintaan status baru juga menunjukkan gejala yang sama. Ini mengonfirmasi kegagalan jalur respons pada saat pemeriksaan, bukan membuktikan data klaim salah atau semua proses backend gagal. Penyebab internal Google/deployment belum dapat dipastikan tanpa log Executions. Jangan menghapus klaim/rekap untuk mengatasi 404.
+
+- Frontend mengikuti redirect secara eksplisit dan tidak menggunakan cache respons. Jika proses kehilangan respons (404, gangguan jaringan, timeout, respons bukan JSON), frontend mencoba maksimal dua pembacaan preview yang read-only. Jika backend telah selesai, hasilnya langsung membuka tab 4. Tidak ada pengulangan otomatis operasi upload, klaim, hapus, atau penulisan proses.
+- Batas tunggu permintaan utama 45 detik dan pembacaan pemulihan masing-masing 30 detik. Timeout browser tidak membatalkan eksekusi Apps Script. Bila belum ada konfirmasi, UI menunjukkan kode pemeriksaan dan meminta pengguna mencoba lagi setelah beberapa saat, bukan menganggap proses berhasil.
+- Backend proses kini memvalidasi sumber klaim satu kali, lalu membaca kembali nilai rekap yang ditulis, tanpa dua pemindaian penuh tambahan. Pengulangan klik setelah proses berhasil mengembalikan hasil yang sudah ada selama revisi belum berubah. Validasi pada penyimpanan final tetap aktif.
+- Apps Script Execution log memuat `proses_bukti_start`, `proses_bukti_success` (durasi), atau `proses_bukti_error` beserta requestId. Log tambahan ini tidak memuat NIP/nama/isi dokumen.
+
+Langkah penerapan dan diagnosis:
+
+1. Ganti seluruh Code.gs, simpan, lalu pilih Deploy → Manage deployments → Edit (pensil) → New version → Deploy pada Web App yang digunakan aplikasi.
+2. Dari Apps Script salin URL Web App berakhiran /exec; cocokkan dengan APPS_SCRIPT_URL di src/App.jsx. Jangan menggunakan URL hasil redirect script.googleusercontent.com atau URL /dev.
+3. Buka URL /exec tersebut dengan tambahan `?action=health`. Versi ini harus mengembalikan JSON `status: success`, `backendVersion: 2026-09-19-process-recovery`, tanpa data pegawai. Jika tetap Halaman Tidak Ditemukan, jangan menganggap perbaikan frontend sudah menyelesaikan deployment. Periksa status deployment/akses akun pemilik dan log Executions. Bila perlu buat deployment Web App pengganti dengan pengaturan akses yang sama, lalu ganti APPS_SCRIPT_URL memakai URL /exec baru sebelum build/push frontend.
+4. Deploy frontend, lalu uji satu submisi. Jika masih gagal, simpan kode pemeriksaan yang muncul dan buka Apps Script → Executions untuk melihat apakah proses selesai atau gagal. Status Success di sana dengan kegagalan HTTP di browser menunjukkan respons belum sampai, bukan izin untuk mengulang upload berkali-kali.
+
+Uji lokal: `node --test backend/attachments.test.mjs tests/existing-status.test.mjs tests/process-recovery.test.mjs`. Simulasi browser respons hilang: `/tests/submission-flow.html?lostResponse=1` pada server dev lokal; tidak mengakses backend produksi.
+
+Referensi Google: [Content Service redirects](https://developers.google.com/apps-script/guides/content#redirects) dan [Web Apps deployment](https://developers.google.com/apps-script/guides/web#deploy_a_script_as_a_web_app).
+
 ## Alur
 
 ### Navigasi cepat tab 2–3–4

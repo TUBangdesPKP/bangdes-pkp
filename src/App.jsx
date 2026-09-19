@@ -1,6 +1,6 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
-import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, sendClaimRequest, checkExistingSubmission } from './archive-claims.js';
+import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
@@ -3115,6 +3115,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   const [finalRecap, setFinalRecap] = useState(null);
   const previewSession = useRef({ key: '', data: null, review: null });
   const [isProcessingEvidence, setIsProcessingEvidence] = useState(false);
+  const [processStatus, setProcessStatus] = useState('Memperbarui rekap...');
   const [processError, setProcessError] = useState('');
   const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
@@ -3156,9 +3157,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   }, [documents.refreshVersion]);
   const processEvidence = async () => {
     if (!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence) return;
-    setIsProcessingEvidence(true); setProcessError('');
+    setIsProcessingEvidence(true); setProcessError(''); setProcessStatus('Memperbarui rekap...');
     try {
-      const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'proses_bukti' });
+      const result = await processSubmissionEvidence(APPS_SCRIPT_URL, submission, {
+        onRecovery: () => { if (currentSubmission.current === submissionKey) setProcessStatus('Memeriksa hasil proses...'); },
+      });
       if (!result.spreadsheetId || !result.revision || !Array.isArray(result.rows)) throw new Error('Perbarui Code.gs: proses bukti belum didukung backend.');
       if (currentSubmission.current !== submissionKey) return;
       previewSession.current = { key: submissionKey, data: result, review: null };
@@ -3896,7 +3899,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                       <ArrowLeft size={16} /> Kembali
                     </button>
                     <button title={documents.processed ? 'Tidak ada perubahan. Buka preview melalui tab 4.' : 'Terapkan bukti ke rekap'} disabled={!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
-                      {isProcessingEvidence ? 'Memperbarui rekap...' : 'Lanjut Proses'} <ChevronRight size={16} />
+                      {isProcessingEvidence ? processStatus : 'Lanjut Proses'} <ChevronRight size={16} />
                     </button>
                   </div>
                   {documents.processed && <p className="text-center text-xs text-teal-700">Tidak ada perubahan bukti. Klik tab 4 untuk membuka preview terakhir.</p>}

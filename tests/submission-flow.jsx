@@ -14,7 +14,11 @@ window.fetch = async (_url, options) => {
   const p = JSON.parse(options.body);
   if (p.action === 'list_pendukung') return Response.json({status:'success',documents:files,processed,requiresTab2:false});
   if (p.action === 'hapus_pendukung') { files = []; processed = false; return Response.json({status:'success',fileId:p.fileId}); }
-  if (p.action === 'proses_bukti') processed = true;
+  if (p.action === 'proses_bukti') {
+    processed = true;
+    // Simulate a committed write whose redirected response is lost once.
+    if (new URLSearchParams(window.location.search).has('lostResponse') && counts.proses_bukti === 1) return new Response('Not found', {status:404});
+  }
   if (['proses_bukti','preview_rekap_final','simpan_rekap_final'].includes(p.action)) {
     if (!processed) return Response.json({status:'error',message:'Klik Lanjut Proses'});
     return Response.json({status:'success',...p,spreadsheetId:'mock-sheet',spreadsheetUrl:'#mock-sheet',revision:'mock-revision',

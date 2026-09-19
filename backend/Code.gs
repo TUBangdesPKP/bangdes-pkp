@@ -167,6 +167,9 @@ function normStr(val) {
 // ==========================================
 function doGet(e) {
   try {
+    if (e.parameter && e.parameter.action === 'health') {
+      return json_({ status: 'success', service: 'kepegawaian', backendVersion: '2026-09-19-process-recovery' });
+    }
     if (e.parameter && e.parameter.action === 'checkExisting') {
       return json_(existingSubmission_({ modul: e.parameter.modul, nip: e.parameter.nip,
         nama: e.parameter.nama, periode: e.parameter.periodeEvent }));
@@ -834,7 +837,14 @@ function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
     lock.waitLock(30000);
-    if (payload.action === 'proses_bukti') return json_(processEvidence_(payload));
+    if (payload.action === 'proses_bukti') {
+      var trace = text_(payload.requestId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      var started = Date.now();
+      Logger.log(JSON.stringify({ event: 'proses_bukti_start', requestId: trace }));
+      var processedResult = processEvidence_(payload);
+      Logger.log(JSON.stringify({ event: 'proses_bukti_success', requestId: trace, elapsedMs: Date.now() - started }));
+      return json_(processedResult);
+    }
     if (payload.action === 'preview_rekap_final') return json_(previewFinal_(payload));
     if (payload.action === 'simpan_rekap_final') return json_(saveFinal_(payload));
     if (payload.action === 'list_pendukung') return json_(listAttachments_(payload));
@@ -848,7 +858,10 @@ function doPost(e) {
       else if (!payload.fileBase64 || !payload.fileName) throw new Error('Berkas upload diperlukan.');
     }
     return legacyDoPost_(e);
-  } catch (error) { return json_({ status: 'error', message: error.message }); }
+  } catch (error) {
+    if (payload && payload.action === 'proses_bukti') Logger.log(JSON.stringify({ event: 'proses_bukti_error', requestId: trace || '' }));
+    return json_({ status: 'error', message: error.message });
+  }
   finally { if (lock.hasLock()) lock.releaseLock(); }
 }
 
@@ -1001,14 +1014,17 @@ function finalState_(payload) {
 function previewFinal_(payload) {
   var state = finalState_(payload);
   if (!processedState_(state)) throw new Error('Klaim belum diproses atau sudah berubah. Klik Lanjut Proses pada tab 3.');
+  return previewFromState_(state);
+}
+function previewFromState_(state) {
   var decisions = JSON.parse(text_(state.saved.baseline.getRange(2, 2).getValue()) || '{}');
-  state.rows = state.rows.map(function(row, i) { return Object.assign({}, row, {
+  var previewRows = state.rows.map(function(row, i) { return Object.assign({}, row, {
     keterangan: text_(state.saved.current[i][21]) || '-',
     penyelesaian: row.konflik && !row.libur ? decisions[row.tanggal] || '' : ''
   }); });
   return { status: 'success', spreadsheetId: state.record.spreadsheetId, revision: state.revision,
     nama: state.record.nama, nip: state.record.nip, periode: state.record.periode,
-    spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/' + state.record.spreadsheetId + '/edit', rows: state.rows };
+    spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/' + state.record.spreadsheetId + '/edit', rows: previewRows };
 }
 function saveFinal_(payload) {
   if (payload.confirmed !== true) throw new Error('Konfirmasi pemeriksaan preview diperlukan.');
@@ -1036,7 +1052,7 @@ function saveFinal_(payload) {
   state.saved.working.getRange(6, 22, result.length, 1).setValues(values);
   state.saved.working.getRange(6, 1, result.length, 22).setBackgrounds(colors);
   SpreadsheetApp.flush();
-  var revision = markProcessed_(payload, decisions);
+  var revision = markProcessed_(payload, decisions, state);
   return { status: 'success', spreadsheetId: state.record.spreadsheetId, revision: revision,
     spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/' + state.record.spreadsheetId + '/edit', rows: result,
     message: 'Rekap tab 2 telah diperbarui. Lanjutkan perhitungan.' };
@@ -1059,8 +1075,15 @@ function invalidateProcessed_(record) {
 function processedState_(state) {
   return !!state.saved.baseline && text_(state.saved.baseline.getRange(1, 2).getValue()) === state.revision;
 }
-function markProcessed_(payload, decisions) {
-  var fresh = finalState_(payload);
+function markProcessed_(payload, decisions, validatedState) {
+  // doPost holds the script lock. Reuse its validated archive/Drive snapshot instead
+  // of scanning all archives again; read back only the recap values just written.
+  var fresh = validatedState || finalState_(payload);
+  if (validatedState) {
+    fresh.saved.current = fresh.saved.working.getRange(6, 1, fresh.rows.length, 22).getDisplayValues();
+    fresh.saved.baseline = fresh.saved.book.getSheetByName(BASELINE_SHEET);
+    fresh.revision = digest_({ record: fresh.record, rows: fresh.rows, documents: fresh.documents, current: fresh.saved.current });
+  }
   fresh.saved.baseline.getRange(2, 2).setValue(JSON.stringify(decisions || {}));
   fresh.saved.baseline.getRange(1, 2).setValue(fresh.revision);
   return fresh.revision;
@@ -1068,7 +1091,7 @@ function markProcessed_(payload, decisions) {
 function processEvidence_(payload) {
   var state = finalState_(payload);
   // Re-entering an unchanged submission preserves the previous conflict decisions.
-  if (processedState_(state)) return previewFinal_(payload);
+  if (processedState_(state)) return previewFromState_(state);
   if (!state.saved.baseline) saveTab2Baseline_(state.saved.book, state.saved.working, state.saved.current);
   var rows = state.rows.map(function(row) {
     return Object.assign({}, row, { keterangan: row.konflik && !row.libur ? row.keteranganAwal : row.keterangan });
@@ -1079,8 +1102,8 @@ function processEvidence_(payload) {
     return Array(22).fill(color);
   }));
   SpreadsheetApp.flush();
-  markProcessed_(payload, {});
-  return previewFinal_(payload);
+  markProcessed_(payload, {}, state);
+  return previewFromState_(state);
 }
 
 // Optional, run manually in Apps Script once to populate dates for older records.

@@ -76,16 +76,57 @@ export function driveFileId(value) {
   return match ? match[1] : '';
 }
 
-export async function sendClaimRequest(endpoint, payload, fetchRequest = fetch) {
-  const response = await fetchRequest(endpoint, {
-    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload),
-  });
-  if (!response.ok) throw new Error(`Server menolak permintaan (${response.status}).`);
-  let data;
-  try { data = await response.json(); }
-  catch { throw new Error('Respons server tidak valid. Klaim belum dapat dikonfirmasi.'); }
-  if (data.status !== 'success') throw new Error(data.message || 'Server belum mengonfirmasi klaim.');
-  return data;
+export async function sendClaimRequest(endpoint, payload, fetchRequest = fetch, { timeoutMs = 45000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetchRequest(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload),
+      redirect: 'follow', cache: 'no-store', credentials: 'omit', signal: controller.signal,
+    });
+    if (!response.ok) {
+      const redirected = response.redirected || /^https:\/\/script\.googleusercontent\.com\//.test(response.url || '');
+      const location = redirected ? 'respons pengalihan Google' : 'endpoint Apps Script';
+      const message = response.status === 404
+        ? `HTTP 404 pada ${location}. Hasil proses belum dapat dikonfirmasi. Periksa deployment Web App yang aktif dan URL /exec.`
+        : `Server belum mengembalikan hasil (HTTP ${response.status}, ${location}).`;
+      throw Object.assign(new Error(message), { transport: true, httpStatus: response.status });
+    }
+    let data;
+    try { data = await response.json(); }
+    catch { throw Object.assign(new Error('Respons Apps Script bukan JSON yang valid. Periksa URL /exec dan akses deployment.'), { transport: true }); }
+    if (data?.status !== 'success') throw new Error(data?.message || 'Server belum mengonfirmasi permintaan.');
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted) throw Object.assign(new Error('Waktu tunggu respons Apps Script habis. Proses di server mungkin masih berjalan.'), { transport: true });
+    if (!response && !error.transport) throw Object.assign(new Error('Tidak dapat menerima respons Apps Script. Periksa koneksi atau akses deployment.'), { transport: true });
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
+// A lost response does not mean the write failed. Recover using read-only preview;
+// never automatically repeat claim/upload/delete or the processing write itself.
+export async function processSubmissionEvidence(endpoint, context, {
+  fetchRequest = fetch, onRecovery = () => {}, wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  timeoutMs = 45000, recoveryTimeoutMs = 30000,
+} = {}) {
+  const requestId = globalThis.crypto?.randomUUID?.() || `process-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    return await sendClaimRequest(endpoint, { ...context, action: 'proses_bukti', requestId }, fetchRequest, { timeoutMs });
+  } catch (error) {
+    if (!error.transport || [400, 401, 403].includes(error.httpStatus)) throw error;
+    onRecovery();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await wait(attempt === 0 ? 500 : 1500);
+      try {
+        const preview = await sendClaimRequest(endpoint, { ...context, action: 'preview_rekap_final', requestId }, fetchRequest, { timeoutMs: recoveryTimeoutMs });
+        if (!preview.spreadsheetId || !preview.revision || !Array.isArray(preview.rows)) throw new Error('Preview belum lengkap.');
+        return preview;
+      } catch { /* Bounded read-only recovery; no repeated writes. */ }
+    }
+    throw new Error(`${error.message} Pemeriksaan hasil belum berhasil. Jangan hapus klaim; coba lagi setelah beberapa saat. Kode pemeriksaan: ${requestId}`);
+  }
 }
 
 export async function checkExistingSubmission(endpoint, context, fetchRequest = fetch) {
