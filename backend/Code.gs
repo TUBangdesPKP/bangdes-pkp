@@ -1036,8 +1036,8 @@ function saveFinal_(payload) {
   state.saved.working.getRange(6, 22, result.length, 1).setValues(values);
   state.saved.working.getRange(6, 1, result.length, 22).setBackgrounds(colors);
   SpreadsheetApp.flush();
-  markProcessed_(payload, decisions);
-  return { status: 'success', spreadsheetId: state.record.spreadsheetId,
+  var revision = markProcessed_(payload, decisions);
+  return { status: 'success', spreadsheetId: state.record.spreadsheetId, revision: revision,
     spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/' + state.record.spreadsheetId + '/edit', rows: result,
     message: 'Rekap tab 2 telah diperbarui. Lanjutkan perhitungan.' };
 }
@@ -1063,6 +1063,7 @@ function markProcessed_(payload, decisions) {
   var fresh = finalState_(payload);
   fresh.saved.baseline.getRange(2, 2).setValue(JSON.stringify(decisions || {}));
   fresh.saved.baseline.getRange(1, 2).setValue(fresh.revision);
+  return fresh.revision;
 }
 function processEvidence_(payload) {
   var state = finalState_(payload);

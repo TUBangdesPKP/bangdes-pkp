@@ -2807,22 +2807,28 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   const contextKey = JSON.stringify([activeTab, identityNip, identityName, period, periodTitle]);
   const currentContext = useRef(contextKey);
   currentContext.current = contextKey;
-  const reset = () => { setSptKlaimList([]); setClaimError(''); setIsClaimingSptId(null); };
+  const loadedArchive = useRef('');
+  const reset = () => { loadedArchive.current = ''; setSptKlaimList([]); setClaimError(''); setIsClaimingSptId(null); };
   useEffect(() => { reset(); }, [activeTab, identityNip, identityName, period, periodTitle]);
   useEffect(() => {
     if (!enabled || activeStep !== 3 || !period) return;
+    const requestKey = JSON.stringify([contextKey, documentModule, archiveRevision, refreshVersion]);
+    if (loadedArchive.current === requestKey) return;
     let cancelled = false;
     setIsSptKlaimLoading(true);
     setClaimError('');
     setSptKlaimList([]);
     (documentModule === 'spt' ? fetchLiveSptData : fetchLiveCutiData)({ throwOnError: true })
       .then(items => {
-        if (!cancelled) setSptKlaimList(filterArchiveForClaim(items, { nip: identityNip, nama: identityName }, period));
+        if (!cancelled) {
+          setSptKlaimList(filterArchiveForClaim(items, { nip: identityNip, nama: identityName }, period));
+          loadedArchive.current = requestKey;
+        }
       })
       .catch(() => { if (!cancelled) setClaimError('Gagal memuat rekap ' + label + '. Silakan coba lagi.'); })
       .finally(() => { if (!cancelled) setIsSptKlaimLoading(false); });
     return () => { cancelled = true; };
-  }, [enabled, activeStep, documentModule, identityNip, identityName, period, archiveRevision, refreshVersion]);
+  }, [enabled, activeStep, contextKey, documentModule, identityNip, identityName, period, archiveRevision, refreshVersion]);
 
   const handleKlaimSpt = async (item) => {
     if (!selectedPeriod || !documents.ready || isClaimingSptId || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)) return;
@@ -3107,12 +3113,14 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
   const [archiveRevision, setArchiveRevision] = useState(0);
   const [finalRecap, setFinalRecap] = useState(null);
+  const previewSession = useRef({ key: '', data: null, review: null });
   const [isProcessingEvidence, setIsProcessingEvidence] = useState(false);
   const [processError, setProcessError] = useState('');
   const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
   const submissionKey = JSON.stringify(submission);
+  if (previewSession.current.key !== submissionKey) previewSession.current = { key: submissionKey, data: null, review: null };
   const currentSubmission = useRef(submissionKey);
   currentSubmission.current = submissionKey;
   useEffect(() => { setProcessError(''); }, [submissionKey]);
@@ -3136,14 +3144,24 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
   const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy;
   const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence;
-  useEffect(() => { if (!documents.processed) setFinalRecap(null); }, [documents.processed]);
+  useEffect(() => {
+    if (!documents.processed) {
+      setFinalRecap(null);
+      previewSession.current = { key: submissionKey, data: null, review: null };
+    }
+  }, [documents.processed, submissionKey, archiveRevision]);
+  useEffect(() => {
+    previewSession.current = { key: submissionKey, data: null, review: null };
+    setFinalRecap(null);
+  }, [documents.refreshVersion]);
   const processEvidence = async () => {
-    if (!documents.ready || documents.loading || evidenceBusy || isProcessingEvidence) return;
+    if (!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence) return;
     setIsProcessingEvidence(true); setProcessError('');
     try {
       const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'proses_bukti' });
       if (!result.spreadsheetId || !result.revision || !Array.isArray(result.rows)) throw new Error('Perbarui Code.gs: proses bukti belum didukung backend.');
       if (currentSubmission.current !== submissionKey) return;
+      previewSession.current = { key: submissionKey, data: result, review: null };
       documents.markProcessed(true);
       navigate(currentView, 4);
     } catch (err) {
@@ -3434,18 +3452,20 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
           ) : (
             <div className="flex flex-col h-full w-full">
               {/* HEADER: banner + tab 1-5 — TIDAK ikut scroll */}
-              <div className="shrink-0 bg-[#F8FAFC] pt-6 md:pt-10 px-6 md:px-10 pb-6 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)] z-20 relative">
+              <div className="shrink-0 bg-[#F8FAFC] pt-3 px-6 md:px-10 pb-3 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)] z-20 relative">
                 <div 
-                  className="rounded-3xl p-6 sm:p-8 text-white mb-6 relative shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
+                  data-testid="submission-banner" className="rounded-2xl px-4 py-2 text-white mb-3 relative shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-2"
                   style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
                 >
-                <div className="space-y-2">
-                    <span className="inline-block px-3 py-1 rounded-md text-[10px] font-extrabold bg-white/20 tracking-wider uppercase">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="inline-block shrink-0 px-2 py-0.5 rounded text-[9px] font-extrabold bg-white/20 tracking-wider uppercase">
                       OPEN SUBMISSION
                     </span>
-                    <h2 className="text-xl sm:text-2xl md:text-3xl font-black leading-tight">
+                    <h2 className="text-base sm:text-lg font-black leading-tight">
                       {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
                     </h2>
+                  </div>
                     <div className="flex items-center gap-2 text-xs text-gray-200">
                       <Calendar size={14} />
                       <span>
@@ -3461,17 +3481,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                   </div>
 
                   {selectedPeriod && (
-                    <div className="flex items-center gap-3.5 bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/15 max-w-sm self-stretch md:self-auto shadow-inner">
-                      <div className="text-right flex-1">
+                    <div className="hidden lg:flex items-center gap-2 shrink-0">
+                      <div className="text-right flex-1 hidden xl:block">
                         <p className="text-xs text-gray-200 leading-snug font-medium">
-                          <strong className="text-white font-bold">{firstName}</strong>, let's go, waktunya upload bukti dukungnya!
+                          <strong className="text-white font-bold">{firstName}</strong>, lengkapi bukti dukung Anda
                         </p>
                         <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
                       </div>
                       {loggedInUser?.Foto_Pegawai ? (
-                        <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-12 h-12 rounded-full object-cover border-2 border-white/40 shrink-0" />
+                        <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-8 h-8 rounded-full object-cover border border-white/40 shrink-0" />
                       ) : (
-                        <div className="w-12 h-12 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
+                        <div className="w-8 h-8 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center shrink-0 text-xs shadow-md">
                         {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'U'}
                       </div>
                     )}
@@ -3875,18 +3895,23 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                     <button disabled={isProcessingEvidence || evidenceBusy} onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors disabled:opacity-40">
                       <ArrowLeft size={16} /> Kembali
                     </button>
-                    <button disabled={!documents.ready || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+                    <button title={documents.processed ? 'Tidak ada perubahan. Buka preview melalui tab 4.' : 'Terapkan bukti ke rekap'} disabled={!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
                       {isProcessingEvidence ? 'Memperbarui rekap...' : 'Lanjut Proses'} <ChevronRight size={16} />
                     </button>
                   </div>
+                  {documents.processed && <p className="text-center text-xs text-teal-700">Tidak ada perubahan bukti. Klik tab 4 untuk membuka preview terakhir.</p>}
                   {sptUpload.render()}
                   {cutiUpload.render()}
                 </fieldset>
               ) : activeStep === 4 && selectedPeriod ? (
                 !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses di tab 3 untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab 3</button></div> :
                 <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
+                  cachedPreview={previewSession.current.data} cachedReview={previewSession.current.review}
+                  onPreviewLoaded={data => { previewSession.current = { key: submissionKey, data, review: null }; }}
+                  onReviewChange={review => { if (previewSession.current.key === submissionKey) previewSession.current.review = review; }}
+                  onInvalidated={() => documents.markProcessed(false)}
                   onBack={() => navigate(currentView, 3)}
-                  onSaved={result => { setFinalRecap(result); navigate(currentView, 5); }} />
+                  onSaved={result => { previewSession.current = { key: submissionKey, data: result.revision ? result : null, review: null }; setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
                 <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} />
               ) : (

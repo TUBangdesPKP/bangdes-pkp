@@ -322,6 +322,7 @@ test('unresolved conflicts and missing confirmation cannot overwrite recap', () 
   const result = f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,resolutions});
   assert.equal(result.status, 'success', result.message);
   assert.equal(result.spreadsheetId, f.spreadsheet.id);
+  assert.equal(result.revision, f.call({action:'preview_rekap_final'}).revision);
   assert.equal(f.working.rows[7][21], 'Dinas');
   assert.equal(f.working.rows[8][21], 'Cuti');
   assert.deepEqual(f.working.rows.slice(5,11).map(row => row.slice(0,21)), JSON.parse(before).slice(5,11).map(row => row.slice(0,21)));

@@ -11,6 +11,16 @@
 
 ## Alur
 
+### Navigasi cepat tab 2–3–4
+
+- Daftar arsip SPT/Cuti, daftar bukti pengumpulan, serta preview tab 4 disimpan dalam memori selama sesi dan konteks NIP/modul/periode yang sama. Ini bukan penanda `uploaded_*` di localStorage; pemeriksaan keberadaan tab 2 tetap membaca server saat memilih file atau Periksa ulang status rekap.
+- Respons `proses_bukti` langsung dipakai untuk preview. Tidak ada permintaan `preview_rekap_final` kedua setelah Lanjut Proses. Kembali 4 → 3 → 2 → 3 → 4 tanpa perubahan memakai hasil terakhir dan mempertahankan pilihan konflik/persetujuan yang belum disimpan.
+- Lanjut Proses dinonaktifkan setelah berhasil; gunakan tombol tab 4 untuk melihat hasil. Tombol aktif kembali setelah klaim/upload/hapus bukti berhasil atau rekap tab 2 diganti/disimpan ulang.
+- Sekadar melihat atau mengedit preview lokal tab 2 tidak menimpa hasil klaim. Perubahan tab 2 baru diterapkan saat Proses & Simpan Bukti/Ganti Dokumen berhasil.
+- Refresh browser, ganti akun/modul/NIP/periode, atau tombol muat ulang manual akan membaca ulang data. Perubahan langsung di Google Sheets/Drive tidak dipoll otomatis saat berpindah tab; gunakan Muat ulang daftar/preview. Saat menyimpan hasil akhir, backend tetap memvalidasi revisi untuk mencegah penggunaan data lama.
+- Backend kini mengembalikan revisi terbaru setelah konfirmasi akhir agar preview tersimpan dapat digunakan kembali dengan benar. Deploy ulang Code.gs bersama frontend; tidak perlu migrasi sheet untuk perubahan ini.
+- Banner submisi dipadatkan (sekitar 65 px pada layar desktop pengujian); ukuran tombol tab tetap 36 × 36 px. Teks proses tab 4 menjadi `memproses data terbaru`.
+
 ### Pemeriksaan Dokumen Telah Tersedia pada tab 2
 
 - Frontend tidak lagi membaca/menulis penanda `uploaded_*` di localStorage. Penanda lama boleh dibiarkan; tidak digunakan untuk menentukan status.

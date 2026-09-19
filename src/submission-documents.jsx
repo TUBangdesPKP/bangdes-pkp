@@ -8,6 +8,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   const currentKey = useRef(key);
   currentKey.current = key;
   const requestVersion = useRef(0);
+  const loadedRequest = useRef('');
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
@@ -20,11 +21,14 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
+    loadedRequest.current = '';
     setFiles([]); setReady(false); setProcessed(false); setError(''); setRemoving(null); setConfirmDelete(null);
   }, [key]);
 
   useEffect(() => {
     if (!enabled || !context.periode || (!context.nip && !context.nama)) return;
+    const requestKey = JSON.stringify([endpoint, key, revision, refreshVersion]);
+    if (loadedRequest.current === requestKey) return;
     const version = ++requestVersion.current;
     let cancelled = false;
     setLoading(true);
@@ -36,6 +40,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
         setFiles(result.documents);
         setReady(!result.requiresTab2);
         setProcessed(result.processed === true);
+        loadedRequest.current = requestKey;
       })
       .catch(err => { if (!cancelled && currentKey.current === key && requestVersion.current === version) { setError(err.message); setReady(false); setProcessed(false); } })
       .finally(() => { if (!cancelled && currentKey.current === key && requestVersion.current === version) setLoading(false); });
@@ -128,5 +133,5 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     setLoading(false);
     setProcessed(value);
   };
-  return { files, ready, loading, processed, markProcessed, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
+  return { files, ready, loading, processed, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
 }

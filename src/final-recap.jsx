@@ -2,28 +2,37 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, RefreshCw, CheckCircle2, ArrowLeft } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
 
-export function FinalRecap({ endpoint, context, onBack, onSaved }) {
-  const [preview, setPreview] = useState(null);
+export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, cachedReview, onPreviewLoaded, onReviewChange, onInvalidated }) {
+  const initialCache = useRef({ key: JSON.stringify(context), preview: cachedPreview, review: cachedReview });
+  const callbacks = useRef({ onPreviewLoaded, onReviewChange, onInvalidated });
+  callbacks.current = { onPreviewLoaded, onReviewChange, onInvalidated };
+  const [preview, setPreview] = useState(cachedPreview || null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedPreview);
   const [saving, setSaving] = useState(false);
-  const [checked, setChecked] = useState(false);
-  const [resolutions, setResolutions] = useState({});
+  const [checked, setChecked] = useState(cachedReview?.checked || false);
+  const [resolutions, setResolutions] = useState(cachedReview?.resolutions || Object.fromEntries((cachedPreview?.rows || []).filter(row => row.penyelesaian).map(row => [row.tanggal, row.penyelesaian])));
   const [reload, setReload] = useState(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
+    if (reload === 0 && initialCache.current.key === JSON.stringify(context) && initialCache.current.preview) return;
     let cancelled = false;
+    callbacks.current.onPreviewLoaded?.(null);
     setLoading(true); setError(''); setPreview(null); setChecked(false); setResolutions({});
     sendClaimRequest(endpoint, { ...context, action: 'preview_rekap_final' }).then(result => {
       if (!Array.isArray(result.rows) || !result.revision || !result.spreadsheetId) throw new Error('Perbarui backend Code.gs untuk mengaktifkan preview tab 4.');
       if (!cancelled) {
         setPreview(result);
+        callbacks.current.onPreviewLoaded?.(result);
         setResolutions(Object.fromEntries(result.rows.filter(row => row.penyelesaian).map(row => [row.tanggal, row.penyelesaian])));
       }
-    }).catch(err => { if (!cancelled) setError(err.message); }).finally(() => { if (!cancelled) setLoading(false); });
+    }).catch(err => { if (!cancelled) { setError(err.message); if (/Lanjut Proses/.test(err.message)) callbacks.current.onInvalidated?.(); } }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [endpoint, JSON.stringify(context), reload]);
+  useEffect(() => {
+    if (preview && !loading) callbacks.current.onReviewChange?.({ checked, resolutions });
+  }, [preview, loading, checked, resolutions]);
   const rows = preview?.rows || [];
   const conflicts = rows.filter(row => row.konflik);
   const unresolved = conflicts.filter(row => !row.libur && !resolutions[row.tanggal]);
@@ -35,8 +44,9 @@ export function FinalRecap({ endpoint, context, onBack, onSaved }) {
       const result = await sendClaimRequest(endpoint, { ...context, action: 'simpan_rekap_final',
         revision: preview.revision, confirmed: true, resolutions });
       if (result.spreadsheetId !== preview.spreadsheetId || !Array.isArray(result.rows)) throw new Error('Server belum mengonfirmasi spreadsheet rekap yang diperbarui.');
-      if (alive.current) onSaved({ ...preview, ...result });
-    } catch (err) { if (alive.current) { setError(err.message); setChecked(false); } }
+      if (alive.current) onSaved({ ...preview, ...result, revision: result.revision || null,
+        rows: result.rows.map(row => ({ ...row, penyelesaian: resolutions[row.tanggal] || '' })) });
+    } catch (err) { if (alive.current) { setError(err.message); setChecked(false); if (/Lanjut Proses/.test(err.message)) callbacks.current.onInvalidated?.(); } }
     finally { if (alive.current) setSaving(false); }
   };
   return <section className="space-y-5" aria-label="Preview akhir presensi">
@@ -46,7 +56,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved }) {
       <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap tab 2. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
-    {loading && <p role="status" className="p-5 text-sm">Memuat rekap tab 2 dan klaim aktif...</p>}
+    {loading && <p role="status" className="p-5 text-sm">memproses data terbaru</p>}
     {error && <p role="alert" className="rounded-xl bg-red-50 border border-red-200 text-red-700 p-4 text-sm">{error}</p>}
     {!!conflicts.length && <div role="alert" className="rounded-xl bg-amber-50 border border-amber-200 text-amber-900 p-4 space-y-2">
       <p className="font-bold flex gap-2 items-center"><AlertCircle size={18}/>{conflicts.length} tanggal memiliki SPT dan Cuti bersamaan.</p>
