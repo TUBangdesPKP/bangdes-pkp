@@ -75,9 +75,9 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     (file.sourceFileId === driveFileId(sourceUrl) || file.sourceUrl === sourceUrl));
 
   const render = () => (
-    <section aria-label="File yang Sudah Diupload" className="rounded-2xl border border-[#B4D6E3] bg-[#EAF5FA] overflow-hidden">
+    <section aria-label="Dokumen Bukti Dukung yang sudah diupload" className="rounded-2xl border border-[#B4D6E3] bg-[#EAF5FA] overflow-hidden">
       <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} className="w-full px-5 py-4 flex items-center justify-between text-[#084C61]">
-        <span className="flex items-center gap-2 text-sm font-bold"><CheckCircle2 size={18}/>File yang Sudah Diupload <span className="bg-[#084C61] text-white text-xs rounded-full px-2">{files.length} file</span></span>
+        <span className="flex items-center gap-2 text-sm font-bold"><CheckCircle2 size={18}/>Dokumen Bukti Dukung yang sudah diupload <span className="bg-[#084C61] text-white text-xs rounded-full px-2">{files.length} file</span></span>
         {expanded ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}
       </button>
       {expanded && <div className="px-5 pb-5 space-y-4">
