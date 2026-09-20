@@ -1,5 +1,7 @@
 # Preview akhir dan konfirmasi rekap tab 4
 
+Pembaruan 20 September 2026: tab 4 kini memiliki pilihan jam kerja dan tab 5 menghitung nominal. Lihat [panduan perhitungan dan deployment terbaru](README-PERHITUNGAN.md) untuk tarif Data_Pegawai, penanda kolom, ringkasan master, dan file catatan.
+
 ## Deploy
 
 1. Cadangkan Apps Script dan spreadsheet sebelum memperbarui versi produksi.
@@ -22,7 +24,7 @@ Langkah penerapan dan diagnosis:
 
 1. Ganti seluruh Code.gs, simpan, lalu pilih Deploy → Manage deployments → Edit (pensil) → New version → Deploy pada Web App yang digunakan aplikasi.
 2. Dari Apps Script salin URL Web App berakhiran /exec; cocokkan dengan APPS_SCRIPT_URL di src/App.jsx. Jangan menggunakan URL hasil redirect script.googleusercontent.com atau URL /dev.
-3. Buka URL /exec tersebut dengan tambahan `?action=health`. Versi ini harus mengembalikan JSON `status: success`, `backendVersion: 2026-09-19-process-recovery`, tanpa data pegawai. Jika tetap Halaman Tidak Ditemukan, jangan menganggap perbaikan frontend sudah menyelesaikan deployment. Periksa status deployment/akses akun pemilik dan log Executions. Bila perlu buat deployment Web App pengganti dengan pengaturan akses yang sama, lalu ganti APPS_SCRIPT_URL memakai URL /exec baru sebelum build/push frontend.
+3. Buka URL /exec tersebut dengan tambahan `?action=health`. Versi terbaru harus mengembalikan JSON `status: success`, `backendVersion: 2026-09-20-attendance-payroll`, tanpa data pegawai. Jika tetap Halaman Tidak Ditemukan, jangan menganggap perbaikan frontend sudah menyelesaikan deployment. Periksa status deployment/akses akun pemilik dan log Executions. Bila perlu buat deployment Web App pengganti dengan pengaturan akses yang sama, lalu ganti APPS_SCRIPT_URL memakai URL /exec baru sebelum build/push frontend.
 4. Deploy frontend, lalu uji satu submisi. Jika masih gagal, simpan kode pemeriksaan yang muncul dan buka Apps Script → Executions untuk melihat apakah proses selesai atau gagal. Status Success di sana dengan kegagalan HTTP di browser menunjukkan respons belum sampai, bukan izin untuk mengulang upload berkali-kali.
 
 Uji lokal: `node --test backend/attachments.test.mjs tests/existing-status.test.mjs tests/process-recovery.test.mjs`. Simulasi browser respons hilang: `/tests/submission-flow.html?lostResponse=1` pada server dev lokal; tidak mengakses backend produksi.
@@ -56,11 +58,11 @@ Referensi Google: [Content Service redirects](https://developers.google.com/apps
 - Di tab 3, tombol Kembali dan **Lanjut Proses** berada tepat di bawah daftar Dokumen Bukti Dukung yang sudah diupload, sebelum panel upload SPT/Cuti.
 - **Lanjut Proses** memanggil `proses_bukti`: backend membaca snapshot tab 2 dan dokumen active untuk NIP/modul/periode/folder yang sama, lalu memperbarui keterangan dan warna pada spreadsheet rekap yang sama sebelum membuka tab 4. SPT menjadi Dinas; semua Cuti menjadi Cuti. Sabtu/Minggu atau keterangan awal Libur tetap Libur. Jam datang/pulang tidak diubah.
 - Tab 4 terkunci sebelum Lanjut Proses berhasil. Kembali ke tab 3 tanpa perubahan tidak menguncinya. Klaim, upload bukti, atau hapus bukti yang berhasil mengunci ulang tab 4 sampai Lanjut Proses diklik kembali. Backend juga memeriksa revisi; akses langsung ke API preview tidak melewati pemeriksaan ini. Simpan ulang tab 2 juga memerlukan proses ulang.
-- Tab 4 menampilkan **Preview Bukti Tunjangan Kinerja** atau **Preview Bukti Uang Makan**, dengan tabel scroll lima kolom: Tanggal, Hari, Datang, Pulang, Ket; identitas pegawai dan total hari. Keterangan biasa hanya ditampilkan; dropdown penyesuaian tersedia untuk konflik SPT/Cuti.
+- Tab 4 menampilkan **Preview Bukti Tunjangan Kinerja** atau **Preview Bukti Uang Makan**, dengan tabel scroll enam kolom: Tanggal, Hari, Datang, Pulang, Ket, Jam Kerja; identitas pegawai dan total hari. Keterangan biasa hanya ditampilkan; dropdown penyesuaian tersedia untuk konflik SPT/Cuti.
 - SPT dan Cuti bersamaan pada hari kerja memerlukan pilihan pengguna Dinas atau Cuti di tab 4. Saat Lanjut Proses, tanggal konflik mempertahankan keterangan awal dan diberi warna kuning, bukan diputuskan otomatis. Pilihan yang sudah dikonfirmasi tetap tersimpan jika tidak ada perubahan klaim.
-- Setelah checkbox persetujuan dicentang, tombol Lanjutkan Perhitungan Uang Makan/Tunjangan Kinerja mengonfirmasi hasil akhir, termasuk keputusan konflik, pada kolom V mulai baris 6 dan warna baris A:V. ID spreadsheet, jam datang/pulang, kolom lain, formula di luar V, border, dan conditional formatting tidak diganti.
+- Setelah checkbox persetujuan dicentang, tombol Lanjutkan Perhitungan Uang Makan/Tunjangan Kinerja mengonfirmasi hasil akhir, termasuk keputusan konflik, pada kolom V mulai baris 6 dan warna baris A:V. Penanda F/K/M/N/O/P dan totalnya juga diperbarui. ID spreadsheet, jam datang/pulang, kolom di luar F/K/M/N/O/P/V, border, dan conditional formatting tidak diganti.
 - Backend menghitung ulang dan membandingkan revisi sebelum menyimpan. Jika klaim/presensi berubah setelah preview, pengguna harus memuat ulang dan memeriksa lagi.
-- Setelah penyimpanan berhasil, tab 5 menampilkan ringkasan jumlah Dinas/Cuti/Libur dan tautan spreadsheet final. Jumlah ini bukan nominal pembayaran. Rumus tarif, potongan dan nominal uang makan/tukin tidak ditambahkan dalam perubahan ini.
+- Setelah penyimpanan berhasil, tab 5 menampilkan nominal, hitungan hari, TL/PSW/flexi, kekurangan menit, dan tautan spreadsheet serta catatan perhitungan. Tarif dibaca backend dari Data_Pegawai. Input belum lengkap membuat nominal belum dapat dihitung; lihat panduan perhitungan terbaru.
 - Setelah klaim dihapus, klik Lanjut Proses kembali. Perhitungan ulang memakai snapshot tab 2, sehingga keterangan yang sebelumnya Dinas/Cuti dapat kembali ke keterangan aslinya.
 
 ## Kolom horizontal tanggal

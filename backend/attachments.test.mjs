@@ -54,6 +54,7 @@ function fixture() {
     constructor(id, name, parent, mime = 'application/pdf') { Object.assign(this, { id, name, parent, mime, trashed: false }); files.set(id, this); }
     getId() { return this.id; } getName() { return this.name; } getUrl() { return `https://drive.google.com/file/d/${this.id}/view`; }
     getMimeType() { return this.mime; } isTrashed() { return this.trashed; }
+    setContent(content) { this.content = content; return this; }
     getParents() { return iterator(this.parent ? [this.parent] : []); }
     setTrashed(value) { this.trashed = value; return this; } setSharing() { return this; }
     makeCopy(name, parent) {
@@ -70,7 +71,7 @@ function fixture() {
     createFolder(name) { return new Folder(`folder_created_${++sequence}`, name, this); }
     getFiles() { return iterator([...files.values()].filter(f => f.parent === this && !f.trashed)); }
     getFilesByName(name) { return iterator([...files.values()].filter(f => f.parent === this && f.name === name && !f.trashed)); }
-    createFile(blob) { return new File(`upload_document_${++sequence}`, blob.name, this, blob.mime); }
+    createFile(blob) { const file = new File(`upload_document_${++sequence}`, blob.name, this, blob.mime); file.content = blob.data; return file; }
   }
   let locked = false;
   const context = vm.createContext({
@@ -123,7 +124,7 @@ test('health probe returns deployment version without reading employee data or c
   const f=fixture(), count=f.files.size;
   const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
   assert.equal(response.status,'success');
-  assert.equal(response.backendVersion,'2026-09-19-process-recovery');
+  assert.equal(response.backendVersion,'2026-09-20-attendance-payroll');
   assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
 });
 
@@ -308,7 +309,8 @@ test('process applies SPT to same recap; subsequent preview is read-only, protec
   assert.equal(preview.rows[2].keterangan, 'Dinas');
   assert.equal(preview.rows[5].keterangan, 'Libur');
   assert.equal(f.working.rows[7][21], 'Dinas');
-  assert.deepEqual(f.working.rows.slice(5,11).map(row => row.slice(0,21)), JSON.parse(before).slice(5,11).map(row => row.slice(0,21)));
+  const untouchedColumns = row => row.slice(0,21).filter((_, i) => ![5,10,12,13,14,15].includes(i));
+  assert.deepEqual(f.working.rows.slice(5,11).map(untouchedColumns), JSON.parse(before).slice(5,11).map(untouchedColumns));
   const processed = JSON.stringify(f.working.rows);
   assert.equal(f.call({action:'preview_rekap_final'}).status, 'success');
   assert.equal(JSON.stringify(f.working.rows), processed);
@@ -333,7 +335,8 @@ test('unresolved conflicts and missing confirmation cannot overwrite recap', () 
   assert.equal(result.revision, f.call({action:'preview_rekap_final'}).revision);
   assert.equal(f.working.rows[7][21], 'Dinas');
   assert.equal(f.working.rows[8][21], 'Cuti');
-  assert.deepEqual(f.working.rows.slice(5,11).map(row => row.slice(0,21)), JSON.parse(before).slice(5,11).map(row => row.slice(0,21)));
+  const untouchedColumns = row => row.slice(0,21).filter((_, i) => ![5,10,12,13,14,15].includes(i));
+  assert.deepEqual(f.working.rows.slice(5,11).map(untouchedColumns), JSON.parse(before).slice(5,11).map(untouchedColumns));
   assert.equal(f.working.backgrounds[2][0], '#c9efbc');
   assert.equal(f.working.backgrounds[3][0], '#affdfd');
   assert.equal(f.working.backgrounds[5][0], '#f4cccc');
@@ -517,4 +520,143 @@ test('preview recomputes original dates rather than using shifted legacy date co
   const preview = f.call({action:'proses_bukti'});
   assert.equal(preview.status, 'success', preview.message);
   assert.equal(preview.rows.find(row=>row.tanggal==='2026-07-08').keterangan,'Dinas');
+});
+
+const employeeRate = { uangMakan:37000, pajak:5, tukin:6349000, skp:100, jabatan:'Analis', golongan:'III', warnings:[] };
+const attendanceDay = extra => ({tanggal:'2026-07-06',keterangan:'WFO',datang:'07:30',pulang:'16:00',jamKerja:'biasa',...extra});
+function payrollFixture(f) {
+  const headers=Array(21).fill(''), row=Array(21).fill('');
+  headers[0]='NIP'; headers[1]='Nama'; headers[13]='Jabatan'; headers[16]='Besaran Tunjangan Kinerja'; headers[17]='Nilai SKP'; headers[18]='Persentase SKP'; headers[19]='Besaran Uang Makan'; headers[20]='Potongan Uang Makan';
+  row[0]=f.scope.nip; row[1]=f.scope.nama; row[13]='Analis'; row[16]=6349000; row[17]=17; row[18]='100%'; row[19]=37000; row[20]='5.00%';
+  f.master.getSheetByName('Data_Pegawai').rows=[headers,row];
+}
+test('regular and Ramadan lateness boundaries, flexi and Friday departure are exact', () => {
+  const f=fixture(), run=extra=>f.context.calculateAttendance_([attendanceDay(extra)],employeeRate,'tukin');
+  for (const [jamKerja, start] of [['biasa',450],['ramadan',480]]) {
+    for (const [delay,level] of [[0,0],[1,0],[60,0],[61,1],[90,1],[91,2],[120,2],[121,3]]) {
+      const datang=f.context.attendanceClock_(start+delay);
+      const result=run({jamKerja,datang,pulang:'23:59'});
+      assert.equal(result.days[0].tl,level,`${jamKerja} ${datang}`);
+      assert.equal(result.totals.flexi,delay>0&&delay<=60?1:0);
+      assert.equal(result.days[0].flexiMenit,Math.min(60,delay));
+    }
+  }
+  assert.equal(run({datang:'09:00',pulang:'17:00'}).days[0].wajibPulang,'17:00');
+  assert.equal(run({tanggal:'2026-07-10',datang:'08:30',pulang:'17:30'}).days[0].wajibPulang,'17:30');
+  assert.equal(run({tanggal:'2026-07-10',jamKerja:'ramadan',datang:'09:00',pulang:'16:30'}).days[0].wajibPulang,'16:30');
+  assert.equal(run({datang:'07:00'}).totals.potonganAbsensi,0);
+});
+test('PSW boundaries apply to flexi-adjusted end without double-counting missing punches', () => {
+  const f=fixture();
+  for (const [early,level,rate] of [[0,0,0],[1,1,.5],[30,1,.5],[31,2,.75],[60,2,.75],[61,3,1],[90,3,1],[91,4,1.25]]) {
+    const calc=f.context.calculateAttendance_([attendanceDay({datang:'08:00',pulang:f.context.attendanceClock_(990-early)})],employeeRate,'tukin');
+    assert.equal(calc.days[0].psw,level); assert.equal(calc.totals.potonganAbsensi,rate);
+  }
+  const both=f.context.calculateAttendance_([attendanceDay({datang:'-',pulang:'-'})],employeeRate,'uang-makan');
+  assert.equal(both.totals.masuk,0); assert.equal(both.totals.tidakMasuk,1);
+  assert.equal(both.totals.potonganAbsensi,2.5); assert.equal(both.totals.menitTanpaPresensi,480);
+  assert.equal(both.totals.totalMenit,480); assert.equal(both.amount.netto,0);
+  for (const times of [{datang:'-',pulang:'16:00'},{datang:'07:30',pulang:'-'}]) {
+    const one=f.context.calculateAttendance_([attendanceDay(times)],employeeRate,'tukin');
+    assert.equal(one.totals.potonganAbsensi,1.25); assert.equal(one.totals.totalMenit,240); assert.equal(one.totals.masuk,1);
+  }
+});
+test('exempt statuses, WFH eligibility, money formula and missing rates', () => {
+  const f=fixture();
+  const rows=['Dinas','Cuti Tahunan','TB','Tugas Belajar','Libur'].map(keterangan=>attendanceDay({keterangan,datang:'-',pulang:'-'}));
+  rows.push(attendanceDay({keterangan:'WFH'}),attendanceDay({keterangan:'WFA'}));
+  const meal=f.context.calculateAttendance_(rows,employeeRate,'uang-makan');
+  assert.equal(meal.totals.hariKerja,6); assert.equal(meal.totals.masuk,2); assert.equal(meal.totals.tb,2);
+  assert.equal(meal.totals.potonganAbsensi,0); assert.equal(meal.totals.totalMenit,0);
+  assert.equal(meal.amount.bruto,74000); assert.equal(meal.amount.potongan,3700); assert.equal(meal.amount.netto,70300);
+  const tukin=f.context.calculateAttendance_([attendanceDay({datang:'-',pulang:'-'})],{...employeeRate,skp:90},'tukin');
+  assert.equal(tukin.amount.persenPotongan,7.75); assert.equal(tukin.amount.potongan,492048); assert.equal(tukin.amount.netto,5856952);
+  const missing=f.context.calculateAttendance_([attendanceDay()],{...employeeRate,uangMakan:null},'uang-makan');
+  assert.equal(missing.amount.netto,null); assert.equal(missing.complete,false);
+  assert.equal(f.context.calculateAttendance_([attendanceDay({keterangan:'Izin'})],employeeRate,'tukin').complete,false);
+  assert.throws(()=>f.context.calculateAttendance_([attendanceDay({datang:'25:00'})],employeeRate,'tukin'),/tidak valid/);
+});
+test('Data_Pegawai selects S percentage not R score, handles number formats and duplicate NIP safely', () => {
+  const f=fixture(); payrollFixture(f);
+  let employee=f.context.payrollEmployee_(f.scope);
+  assert.equal(employee.skp,100); assert.equal(employee.tukin,6349000); assert.equal(employee.uangMakan,37000); assert.equal(employee.pajak,5);
+  assert.equal(f.context.payrollNumber_(.15,'15.00%',true),15);
+  assert.equal(f.context.payrollNumber_('15,00%','15,00%',true),15);
+  assert.equal(f.context.payrollNumber_(1,'100%',true),100);
+  assert.equal(f.context.payrollNumber_('41,000','41,000',false),41000);
+  assert.equal(f.context.payrollNumber_('Rp 6.349.000','',false),6349000);
+  assert.equal(f.context.payrollNumber_('','',true),null);
+  f.master.getSheetByName('Data_Pegawai').rows.push([...f.master.getSheetByName('Data_Pegawai').rows[1]]);
+  assert.throws(()=>f.context.payrollEmployee_(f.scope),/tepat satu/);
+});
+test('final confirmation persists schedule, flags, master results and a single tracked note per module', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f=fixture(); payrollFixture(f);
+    const call=payload=>f.call({modul,...payload});
+    const preview=call({action:'proses_bukti'});
+    const save=call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,schedules:{'2026-07-06':'ramadan'}});
+    assert.equal(save.status,'success',save.message); assert.equal(save.calculation.complete,true);
+    assert.equal(save.rows[2].jamKerja,'ramadan');
+    assert.equal(call({action:'preview_rekap_final'}).rows[2].jamKerja,'ramadan');
+    assert.equal(f.working.rows[7][5],'v'); assert.equal(f.working.rows[7][15],'v');
+    assert.equal(f.working.rows[5][14],'v'); assert.equal(f.working.rows[5][15],'');
+    const note=f.files.get(save.note.fileId); assert.equal(note.parent,f.destination); assert.match(note.content,/2026-07-06/);
+    const master=f.master.getSheetByName(modul==='tukin'?'REKAP_TUKIN':'REKAP_UANG_MAKAN');
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Hari_Masuk')],3);
+    const count=f.files.size;
+    const retry=call({action:'simpan_rekap_final',revision:save.revision,confirmed:true,schedules:{'2026-07-06':'biasa'}});
+    assert.equal(retry.status,'success',retry.message); assert.equal(retry.note.fileId,save.note.fileId); assert.equal(f.files.size,count);
+    assert.match(note.content,/jam biasa/);
+    const before=JSON.stringify(f.working.rows);
+    assert.equal(call({action:'simpan_rekap_final',revision:retry.revision,confirmed:true,schedules:{'2026-07-06':'bad'}}).status,'error');
+    assert.equal(call({action:'simpan_rekap_final',revision:retry.revision,confirmed:true,schedules:{'2027-01-01':'biasa'}}).status,'error');
+    assert.equal(JSON.stringify(f.working.rows),before);
+    call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Status')],'Menunggu perhitungan ulang');
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Netto')],'');
+  }
+});
+test('all requested tick columns are mapped, times and unrelated formulas survive', () => {
+  const f=fixture(), statuses=['WFO','WFA','WFH','Dinas','Cuti','TB','Tugas Belajar','Libur'];
+  f.context.writeAttendanceFlags_(f.working,statuses.map(keterangan=>attendanceDay({keterangan})));
+  const flags=f.working.rows.slice(5,13).map(row=>[5,10,12,13,14,15].map(i=>row[i]));
+  assert.deepEqual(flags,[['v','','','','','v'],['v','','','','','v'],['v','','','','','v'],['','v','','','','v'],['','','','v','','v'],['','','v','','','v'],['','','v','','','v'],['','','','','v','']]);
+});
+
+test('missing or zero rates are distinct and client monetary payload cannot override Data_Pegawai', () => {
+  const f=fixture(); payrollFixture(f);
+  let preview=f.call({action:'proses_bukti'});
+  let result=f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,calculation:{netto:999999999},uangMakan:999999999});
+  assert.equal(result.calculation.amount.tarif,37000);
+  const pegawai=f.master.getSheetByName('Data_Pegawai').rows[1];
+  pegawai[19]=0; pegawai[20]='0%';
+  result=f.call({action:'simpan_rekap_final',revision:result.revision,confirmed:true});
+  assert.equal(result.calculation.complete,true); assert.equal(result.calculation.amount.netto,0);
+  pegawai[19]='';
+  result=f.call({action:'simpan_rekap_final',revision:result.revision,confirmed:true});
+  assert.equal(result.calculation.complete,false); assert.equal(result.calculation.amount.netto,null);
+});
+test('note is reused after tab 2 replacement, but moved note and service failures cannot overwrite other files', () => {
+  const f=fixture(); payrollFixture(f);
+  let preview=f.call({action:'proses_bukti'});
+  const result=f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true});
+  const note=f.files.get(result.note.fileId), originalContent=note.content;
+  assert.equal(f.call({sheetData:f.recapBook.getSheetByName('_PRESENSI_TAB2').rows.slice(5),ringkasan:{}}).status,'success');
+  preview=f.call({action:'proses_bukti'});
+  const updated=f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true});
+  assert.equal(updated.status,'success',updated.message); assert.equal(updated.note.fileId,note.id);
+  assert.equal([...f.files.values()].filter(file=>file.mime==='text/plain').length,1);
+  note.parent=f.otherDestination;
+  const invalid=f.call({action:'simpan_rekap_final',revision:updated.revision,confirmed:true});
+  assert.equal(invalid.status,'error'); assert.match(invalid.message,/Lokasi\/jenis/); assert.equal(note.content,originalContent);
+  assert.equal(f.spt.trashed,false); assert.equal(f.cuti.trashed,false); assert.equal(f.untouched.trashed,false);
+});
+test('new summary columns append without overwriting custom formulas/headers', () => {
+  const f=fixture(); payrollFixture(f);
+  const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN');
+  sheet.rows[0].push('Hitung_Lainnya','Catatan Pengelola'); sheet.rows[1].push('=SUM(E2:F2)','Jangan ditimpa');
+  const preview=f.call({action:'proses_bukti'});
+  assert.equal(f.call({action:'simpan_rekap_final',confirmed:true,revision:preview.revision}).status,'success');
+  f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+  assert.deepEqual(sheet.rows[1].slice(10,12),['=SUM(E2:F2)','Jangan ditimpa']);
 });

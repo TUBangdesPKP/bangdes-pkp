@@ -1075,6 +1075,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       status = 'Cuti';
     } else if (/Dinas/i.test(line)) {
       status = 'Dinas';
+    } else if (/\bTB\b|Tugas\s+Belajar/i.test(line)) {
+      status = 'TB';
     }
     
     rows.push({
@@ -1089,7 +1091,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   }
 
   rows.sort((a, b) => b._dateObj - a._dateObj);
-  const totalHariMasuk = rows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
+  const totalHariMasuk = rows.filter(r => ['WFO','WFA','WFH'].includes(r.keterangan) && [r.datang,r.pulang].some(time => time && time !== '-')).length;
 
   let isDateValid = true;
   let extractedStartStr = '-';
@@ -3183,7 +3185,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
       const updatedRow = { ...newRows[index], [field]: value };
       if (field === 'tanggal') updatedRow._dateObj = parseIndoDate(value);
       newRows[index] = updatedRow;
-      const totalMasuk = newRows.filter(r => (r.keterangan === 'WFO' || r.keterangan === 'WFA' || r.keterangan === 'Dinas') && r.datang !== '-').length;
+      const totalMasuk = newRows.filter(r => ['WFO','WFA','WFH'].includes(r.keterangan) && [r.datang,r.pulang].some(time => time && time !== '-')).length;
       return { ...prev, rows: newRows, totalHariMasuk: totalMasuk };
     });
   };
@@ -3870,7 +3872,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                         {activeTab !== 'spt' && (
                            <>
                              <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
-                             <span className="text-gray-500">Hari Masuk (WFO/WFA): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
+                             <span className="text-gray-500">Hari Masuk (WFO/WFA/WFH): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
                            </>
                         )}
                         <span className="text-gray-400 italic text-[10px] ml-auto hidden sm:inline-block">Target Folder GDrive: <span className="font-semibold">{parsedData ? parsedData.periodeFolder : (selectedPeriod?.periodeFolder || 'Belum Ada Berkas')}</span></span>
@@ -3911,7 +3913,13 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                 <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
                   cachedPreview={previewSession.current.data} cachedReview={previewSession.current.review}
                   onPreviewLoaded={data => { previewSession.current = { key: submissionKey, data, review: null }; }}
-                  onReviewChange={review => { if (previewSession.current.key === submissionKey) previewSession.current.review = review; }}
+                  onReviewChange={review => {
+                    if (previewSession.current.key === submissionKey) previewSession.current.review = review;
+                    if (finalRecap && finalRecap.rows.some(row =>
+                      (review.schedules?.[row.tanggal] || 'biasa') !== (row.jamKerja || 'biasa') ||
+                      (review.resolutions?.[row.tanggal] || '') !== (row.penyelesaian || '')
+                    )) setFinalRecap(null);
+                  }}
                   onInvalidated={() => documents.markProcessed(false)}
                   onBack={() => navigate(currentView, 3)}
                   onSaved={result => { previewSession.current = { key: submissionKey, data: result.revision ? result : null, review: null }; setFinalRecap(result); navigate(currentView, 5); }} />
