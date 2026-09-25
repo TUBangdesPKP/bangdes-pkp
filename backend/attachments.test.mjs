@@ -118,14 +118,14 @@ function fixture() {
     ];
   }
   const call = payload => JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...scope, ...payload }) } }).getContent());
-  return { context, master, files, folders, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
+  return { context, master, files, folders, books, Book, File, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
 }
 
 test('health probe returns deployment version without reading employee data or changing files', () => {
   const f=fixture(), count=f.files.size;
   const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
   assert.equal(response.status,'success');
-  assert.equal(response.backendVersion,'2026-09-25-adjustment-monthly');
+  assert.equal(response.backendVersion,'2026-09-25-recap-source');
   assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
 });
 
@@ -710,7 +710,7 @@ test('one correction of two missing punches earns a meal, retains other penalty,
   assert.equal(report.employees[0].tukin,undefined); assert.equal(report.employees[0].pin,undefined);
   assert.match(f.files.get(result.note.fileId).content,/adjustment datang menjadi 07:30/);
   const again=confirmRecap(f,adjustments); assert.equal(again.status,'success',again.message);
-  assert.equal(f.master.getSheetByName('REKAP_HARIAN').rows.length,7);
+  assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
   assert.equal(f.master.getSheetByName('ADJUSTMENT_PRESENSI').rows.length,2);
 });
 test('adjustments reject both punches, existing clock, holidays, invalid time or unrelated proof', () => {
@@ -778,13 +778,42 @@ test('Tukin allows eight adjustments split four per month, but not five in one c
 });
 test('report deduplicates overlapping periods by employee/date using latest calculation', () => {
   const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
-  const daily=f.master.getSheetByName('REKAP_HARIAN');
-  const copy=[...daily.rows[1]];copy[19]='2099-01-01T00:00:00Z';daily.appendRow(copy);
+  const copyBook=new f.Book(), copyFile=new f.File('overlap_spreadsheet', 'Second recap',f.destination,'application/vnd.google-apps.spreadsheet');
+  f.books.set(copyFile.id,copyBook);
+  const copySheet=copyBook.insertSheet('Rekap'); copySheet.rows=f.working.rows.map(r=>[...r]);
+  copySheet.rows[7][3]='07:00';
+  const master=f.master.getSheetByName('REKAP_UANG_MAKAN'), copy=[...master.rows[1]];
+  copy[3]='02-07-2026 s/d 31-07-2026'; copy[9]=copyFile.id; master.appendRow(copy);
+  const scope={...f.scope,periode:copy[3]};
+  const preview=f.call({...scope,action:'proses_bukti'});
+  assert.equal(f.call({...scope,action:'simpan_rekap_final',confirmed:true,revision:preview.revision}).status,'success');
+  copyBook.getSheetByName('_PRESENSI_TAB2').getRange(1,3).setValue('2099-01-01T00:00:00Z');
   const report=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(report.status,'success',report.message);
   assert.equal(report.daily.length,6);
-  const date=f.context.parseDate_('2026-07-04');date.setUTCHours(0);
-  daily.rows[1][5]=date;
+  assert.equal(report.daily.find(r=>r.tanggal==='2026-07-06').arrival,420);
+  assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
+});
+
+test('legacy daily sheet is neither read nor changed and monthly reports survive its removal', () => {
+  const f=fixture();payrollFixture(f);
+  const legacy=f.master.insertSheet('REKAP_HARIAN');legacy.appendRow(['Old data, unrelated headers']);
+  const before=JSON.stringify(legacy.rows);
+  legacy.getDataRange=()=>{throw new Error('Legacy sheet must not be read');};
+  assert.equal(confirmRecap(f).status,'success');
   assert.equal(f.call({action:'rekap_bulanan',month:'2026-07'}).daily.length,6);
+  assert.equal(JSON.stringify(legacy.rows),before);
+  f.master.sheets.delete('REKAP_HARIAN');
+  assert.equal(f.call({action:'rekap_bulanan_publik',month:'2026-07'}).status,'success');
+  assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
+});
+
+test('monthly reads only selected month and reports unavailable source instead of silently zeroing attendance', () => {
+  const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
+  f.books.delete(f.spreadsheet.id);
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-08'}).status,'success');
+  const result=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(result.status,'error');assert.match(result.message,/belum dapat dibaca/);
 });
 test('manual clock tampering remains rejected even when a valid correction exists', () => {
   const f=fixture();f.working.rows[7][3]='-';const doc=uploadExtra(f).document;

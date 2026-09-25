@@ -1,13 +1,13 @@
 # Dokumen tambahan, adjustment, dan Rekap Bulanan
 
-Versi backend: `2026-09-25-adjustment-monthly`.
+Versi backend: `2026-09-25-recap-source`. Pembaruan pembaca dokumen dan penghentian rekap harian: lihat `README-PEMBACA-DOKUMEN.md`.
 
 ## Memasang pembaruan
 
 1. Cadangkan project Apps Script dan spreadsheet Kepegawaian.
 2. Buka `D:\bangdes-pkp\backend\Code.gs`, salin seluruh isinya. Di editor Apps Script, ganti seluruh kode backend lama, bukan menambahkannya di bawah kode lama. Simpan.
 3. Klik **Deploy → Manage deployments → pensil/Edit → Version: New version → Deploy**. Gunakan deployment web app yang sama agar URL `/exec` tidak berubah. Menekan Simpan di editor saja belum memperbarui web app.
-4. Periksa URL web app dengan menambahkan `?action=health`. Nilai `backendVersion` harus `2026-09-25-adjustment-monthly`.
+4. Periksa URL web app dengan menambahkan `?action=health`. Nilai `backendVersion` harus `2026-09-25-recap-source`.
 5. Deploy frontend dari proyek `D:\bangdes-pkp` melalui alur Git/Railway yang biasa digunakan. Sertakan file baru `src/extra-documents.jsx` dan `src/monthly-recap.jsx`, serta perubahan `src/App.jsx`, `src/final-recap.jsx`, dan `src/submission-documents.jsx`.
 6. Setelah deployment frontend berhasil, muat ulang browser. Uji satu pegawai terlebih dahulu sebelum digunakan untuk semua pegawai.
 
@@ -27,21 +27,21 @@ Perubahan ini belum dipasang otomatis ke produksi. Tidak perlu membuat sheet bar
 
 - `DOKUMEN_PENDUKUNG`: file tambahan menggunakan jenis `lupa_absen`, `tugas_belajar`, atau `lainnya`. Tidak mengubah kolom O+ yang dipakai tanggal SPT/Cuti.
 - `ADJUSTMENT_PRESENSI`: NIP, modul, periode, tanggal, datang/pulang, jam koreksi, FileId surat, status, dan waktu pembaruan. Digunakan untuk validasi kuota lintas modul. Jangan menghapus barisnya untuk mengubah kuota; batalkan koreksi lewat tab 4 lalu simpan.
-- `REKAP_HARIAN`: fakta presensi per pegawai/modul/periode/tanggal untuk dashboard. Menyimpan jumlah lupa absen asli, adjustment, sisa tidak absen, TL/PSW, dan dokumen terkait. Tidak menyimpan PIN atau tarif gaji.
+- `REKAP_HARIAN`: tidak lagi dibuat, dibaca, atau ditulis. Data lama tidak dihapus otomatis. Dashboard membaca spreadsheet hasil final per pegawai pada bulan/modul yang dipilih.
 - `REKAP_UANG_MAKAN` / `REKAP_TUKIN`: kolom tambahan `Hitung_Lupa_Absen`, `Hitung_Adjustment`, `Hitung_Tidak_Absen`, dan `Hitung_Adjustment_Bulanan`. Kolom lama tidak dipindah.
 - Spreadsheet per pegawai: jam hasil koreksi ditulis pada D/E. Snapshot tab 2 tetap menyimpan jam asli; data koreksi disimpan terpisah pada sheet internal. Catatan perhitungan TXT mencatat tanggal, jam koreksi, dan ID surat.
 
 ## Rekap Bulanan
 
-Pilih sumber Uang Makan atau Tukin, bulan kalender, dan SubUnit Kerja. Filter SubUnit mengikuti `Data_Pegawai`. Dashboard menampilkan hasil yang sudah dikonfirmasi di tab 4, bukan seluruh pegawai yang belum mengirim data. Data sebelum versi ini perlu dikonfirmasi ulang satu kali agar masuk `REKAP_HARIAN`.
+Pilih sumber Uang Makan atau Tukin, bulan kalender, dan SubUnit Kerja. Filter SubUnit mengikuti `Data_Pegawai`. Dashboard menampilkan hasil yang sudah dikonfirmasi di tab 4 (`Hitung_Status` Lengkap / Perlu penyesuaian), bukan seluruh pegawai yang belum mengirim data. Tidak diperlukan migrasi dari `REKAP_HARIAN`; spreadsheet per pegawai dan snapshot internalnya harus tetap tersedia. Waktu konfirmasi terbaru disimpan pada C1 snapshot internal untuk memilih hasil terbaru pada periode bertumpuk.
 
-- Pilihan bulan berdasarkan tanggal presensi, bukan bulan pembayaran Tukin.
+- Pilihan bulan berdasarkan rentang presensi submisi yang sudah dikonfirmasi, bukan bulan pembayaran Tukin. Angka hanya memakai tanggal yang benar-benar tercatat pada bulan tersebut.
 - Sumber modul dipisahkan untuk menghindari penghitungan ganda; pasangan NIP/tanggal yang berulang menggunakan hasil terbaru.
 - Tingkat masuk = hari WFO/WFA/WFH yang hadir ÷ seluruh hari kerja tercatat. Dinas/Cuti/TB tidak masuk pembilang ini; bukan ukuran menyeluruh kepatuhan pegawai.
 - Perjalanan dihitung per pasangan pegawai/surat tugas; satu surat untuk beberapa pegawai berarti beberapa perjalanan pegawai. Total hari dinas adalah hari-orang, bukan jumlah surat.
 - Bukti tambahan berkaitan dengan periode submisi; bukti tanpa tanggal spesifik dapat muncul pada kedua bulan dalam periode Tukin.
 - Ranking bersifat ringkasan mekanis, bukan keputusan kepegawaian. Minimal 5 hari WFO; ranking disiplin memakai proporsi hari tanpa TL/PSW/lupa absen, lalu jumlah hari dinilai. Ranking tepat waktu memakai kedatangan tanpa flexi.
-- Perubahan klaim melalui aplikasi membuat rekap menunggu konfirmasi ulang dan sementara tidak ditampilkan. Penghapusan manual file di Drive tidak dipantau otomatis oleh dashboard; muat ulang daftar bukti dan proses ulang submisi untuk menyelaraskan data.
+- Perubahan klaim melalui aplikasi membuat rekap menunggu konfirmasi ulang dan sementara tidak ditampilkan. Sumber/berkas yang hilang atau tidak dapat dibaca akan dilaporkan sebagai kesalahan, bukan diam-diam dianggap nol. Membaca banyak spreadsheet per pegawai bisa lebih lambat daripada tabel harian terpusat; hanya submisi yang melintasi bulan pilihan yang dibaca.
 
 ## Pengujian lokal
 

@@ -2,6 +2,7 @@ import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
+import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -601,34 +602,11 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
   };
 
   let found = null;
-  let cutiDuration = 1;
+  let cutiDuration = null;
 
   if (modul === 'cuti') {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/IV\.\s*LAMANYA\s*CUTI/i.test(line) || /LAMANYA\s*CUTI/i.test(line) || (/Selama/i.test(line) && /tanggal/i.test(line))) {
-        const windowText = normalizeDashes(lines.slice(i, Math.min(lines.length, i + 4)).join(' ').replace(/\s+/g, ' '));
-        
-        found = applyFullRange(windowText) || applyShortRange(windowText) || applySingleDate(windowText);
-        
-        const lamaMatch = windowText.match(/Selama\s+(\d+)\s+(?:\(|Satu|Dua|Tiga|Empat|Lima|hari)/i) || windowText.match(/Selama\s*:\s*(\d+)/i) || windowText.match(/Selama\s+(\d+)/i);
-        if (lamaMatch && lamaMatch[1]) {
-          cutiDuration = parseInt(lamaMatch[1], 10);
-        }
-
-        if (found) {
-           if (found.berangkat === found.pulang && cutiDuration > 1) {
-              const d1 = parseIndoDate(found.berangkat);
-              if (d1.getTime() > 0) {
-                 d1.setDate(d1.getDate() + (cutiDuration - 1));
-                 const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-                 found.pulang = `${d1.getDate()} ${months[d1.getMonth()]} ${d1.getFullYear()}`;
-              }
-           }
-           break;
-        }
-      }
-    }
+    found = extractCutiPeriod(fullText);
+    cutiDuration = found.duration;
   }
 
   if (!found) {
@@ -703,7 +681,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
 
   let detectedJenisCuti = '';
   if (modul === 'cuti') {
-    const marks = '([vVxX✓✔])';
+    const marks = '([vVxX✓✔√])';
     const cutiPatterns = [
       { name: "Cuti Tahunan", regex: new RegExp(`(?:1\\.?\\s*)?CUTI\\s*TAHUNAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
       { name: "Cuti Besar", regex: new RegExp(`(?:2\\.?\\s*)?CUTI\\s*BESAR[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
@@ -779,7 +757,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
     }
   });
 
-  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, tujuan: finalTujuan };
+  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, cutiDuration, tujuan: finalTujuan };
 };
 
 const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = null, onProgress = null) => {
@@ -787,6 +765,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
   let fullText = '';
   let lines = [];
+  let excelRows = [];
 
   if (isExcel) {
     if (!window.XLSX) {
@@ -803,12 +782,13 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     
     workbook.SheetNames.forEach(sheetName => {
       const sheet = workbook.Sheets[sheetName];
-      const csv = window.XLSX.utils.sheet_to_csv(sheet, { FS: ' ' }); 
-      lines = lines.concat(csv.split('\n'));
+      const cells = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '', blankrows: true, range: 0 });
+      excelRows = excelRows.concat(cells);
+      lines = lines.concat(cells.map(row => row.join(' ')));
     });
     
     const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
-    lines = lines.map(line => {
+    const normalizeExcelDates = line => {
       let l = line.replace(/\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/g, (match, d, m, y) => {
         const monthIdx = parseInt(m, 10) - 1;
         if (monthIdx >= 0 && monthIdx < 12) return `${parseInt(d, 10)} ${months[monthIdx]} ${y}`;
@@ -820,7 +800,9 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
         return match;
       });
       return l;
-    });
+    };
+    lines = lines.map(normalizeExcelDates);
+    excelRows = excelRows.map(row => row.map(cell => normalizeExcelDates(String(cell))));
     fullText = lines.join('\n');
 
   } else if (fileName.endsWith('.pdf')) {
@@ -880,8 +862,12 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     const digitsOnly = fullText.replace(/[^0-9]/g, '');
     const hasNip = /(19\d{16}|20\d{16})/.test(digitsOnly);
     const isTooShort = fullText.trim().length < 50;
+    let needsCutiOcr = false;
+    if (activeTab === 'cuti') {
+      try { extractCutiPeriod(fullText); } catch { needsCutiOcr = true; }
+    }
 
-    if (!hasNip || isTooShort) {
+    if (!hasNip || isTooShort || needsCutiOcr) {
       if (onProgress) onProgress("Dokumen terdeteksi sebagai hasil scan. Mengunduh modul OCR AI...");
       
       if (!window.Tesseract) {
@@ -962,6 +948,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       arsipDatePulang: arsipData.datePulang,
       arsipTanggalSurat: arsipData.tanggalSurat,
       arsipTujuan: arsipData.tujuan,
+      arsipJumlahHariCuti: arsipData.cutiDuration,
       arsipNames: finalNames,
       nip: '-',
       nama: 'Berbagai Pegawai',
@@ -1005,7 +992,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
-    const dateMatch = line.match(/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i);
+    const dateSource = isExcel ? String(excelRows[i]?.[2] ?? '') : line;
+    const dateMatch = dateSource.match(/(?:(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)[,\s]+)?(\d{1,2})\s*(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*(\d{4})/i);
     if (!dateMatch) continue;
     
     let hari = dateMatch[1];
@@ -1032,6 +1020,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)];
     let datang = times.length > 0 ? times[0][1] : '-';
     let pulang = times.length > 1 ? times[1][1] : (times.length > 0 && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0][1] : '-');
+    if (isExcel) ({ datang, pulang } = attendanceExcelClocks(excelRows[i]));
     
     let lokasiDatangRaw = '';
     let lokasiPulangRaw = '';
@@ -1085,8 +1074,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       tanggal: dateKey,
       hari,
       datang,
-      pulang: (pulang !== datang || times.length > 1) ? pulang : '-',
-      keterangan: status === '-' && datang !== '-' ? 'WFO' : status,
+      pulang: isExcel || pulang !== datang || times.length > 1 ? pulang : '-',
+      keterangan: status === '-' && (datang !== '-' || pulang !== '-') ? 'WFO' : status,
       lokasiDatangRaw,
       _dateObj: dateObj
     });
@@ -2030,6 +2019,10 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
 
   const handleSaveArsipDetails = (fileId) => {
+    if (documentModule === 'cuti' && (!Number.isInteger(Number(editArsipForm.jumlahHariCuti)) || Number(editArsipForm.jumlahHariCuti) < 1)) {
+      setArsipSubmitResult({ type: 'error', message: 'Jumlah hari cuti harus diisi sesuai Bab IV pada surat.' });
+      return;
+    }
     updateArsipFileData(fileId, pd => {
       const newTujuan = editArsipForm.tujuan;
       let newNames = [...pd.arsipNames];
@@ -2048,6 +2041,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         arsipDateBerangkat: editArsipForm.berangkat,
         arsipDatePulang: editArsipForm.pulang,
         arsipTanggalSurat: editArsipForm.tanggalSurat,
+        arsipJumlahHariCuti: documentModule === 'cuti' ? Number(editArsipForm.jumlahHariCuti) : pd.arsipJumlahHariCuti,
         arsipTujuan: newTujuan,
         arsipNames: newNames
       };
@@ -2071,7 +2065,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         const arsipDataPayload = fObj.parsedData.arsipNames.filter(p => p.selected).map(pegawai => {
           const tglBerangkat = fObj.parsedData.arsipDateBerangkat || '-';
           const tglPulang = fObj.parsedData.arsipDatePulang || '-';
-          const jumlahHari = documentModule === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang)) : hitungHariDinas(tglBerangkat, tglPulang);
+          const jumlahHari = documentModule === 'cuti' ? (fObj.parsedData.arsipJumlahHariCuti ?? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang))) : hitungHariDinas(tglBerangkat, tglPulang);
           
           let bulan = '-';
           let tahun = '-';
@@ -2564,6 +2558,12 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                             <input type="date" value={formatIndoToYMD(editArsipForm.tanggalSurat)} onChange={(e) => setEditArsipForm({...editArsipForm, tanggalSurat: formatYMDtoIndo(e.target.value)})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs font-semibold text-gray-800 outline-none focus:border-teal-500" />
                                           </div>
                                         )}
+                                        {documentModule === 'cuti' && (
+                                          <div className="flex items-center gap-3">
+                                            <label className="w-20 text-xs font-bold text-[#114053]">Hari cuti:</label>
+                                            <input aria-label="Jumlah hari cuti pada surat" type="number" min="1" step="1" value={editArsipForm.jumlahHariCuti ?? ''} onChange={e => setEditArsipForm({...editArsipForm, jumlahHariCuti: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs" />
+                                          </div>
+                                        )}
                                         <div className="flex items-center gap-3">
                                           <label className="w-20 text-xs font-bold text-[#114053]">{documentModule === 'spt' ? 'Tujuan' : 'Jenis Cuti'}:</label>
                                           {documentModule === 'spt' ? (
@@ -2615,6 +2615,11 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
                                             <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({documentModule === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
                                           </div>
+                                          {documentModule === 'cuti' && pd.arsipJumlahHariCuti != null && (
+                                            <p className="text-xs text-[#114053]">Bab IV pada surat: {pd.arsipJumlahHariCuti} hari cuti.
+                                              {pd.arsipJumlahHariCuti !== hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah berbeda dari kalender kerja. Periksa tanggal, hari libur, dan jumlah pada surat sebelum klaim.</span>}
+                                            </p>
+                                          )}
                                           {documentModule !== 'cuti' && (
                                             <div className="flex items-center gap-2 pl-[22px]">
                                               <FileText size={12} className="text-gray-400 shrink-0" />
@@ -2627,7 +2632,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                           </div>
                                         </div>
                                         <button onClick={() => {
-                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-' });
+                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-', jumlahHariCuti: pd.arsipJumlahHariCuti ?? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) });
                                           setEditingArsipId(fileObj.id);
                                         }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
                                           <Edit3 size={14} /> Ubah Data
