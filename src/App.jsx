@@ -1256,9 +1256,9 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
             </div>
           </div>
 
-          <div 
-            onClick={() => navigate('rekap')}
-            className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98] bg-[#084C61]" 
+          <a
+            href="#/rekap-publik"
+            className="rounded-xl p-4 flex items-center justify-between cursor-pointer text-white shadow-sm hover:shadow-md transition-all active:scale-[0.98] bg-[#084C61]"
           >
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-white/10">
@@ -1270,7 +1270,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
               </div>
             </div>
             <ChevronRight size={20} className="opacity-80" />
-          </div>
+          </a>
         </div>
       </div>
     </div>
@@ -4102,7 +4102,7 @@ const ProfileView = ({ navigate }) => {
 
 export default function App() {
   const getHashData = () => {
-    const rawHash = window.location.hash.replace('#/', '');
+    const rawHash = window.location.hash.replace(/^#\/?/, '');
     const [view, queryStr] = rawHash.split('?');
     const params = new URLSearchParams(queryStr || '');
     return { view: view || 'home', step: params.get('step') ? parseInt(params.get('step'), 10) : 1 };
@@ -4114,11 +4114,15 @@ export default function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
-    fetchPegawaiData(false);
     const handleHashChange = () => setRouteData(getHashData());
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  useEffect(() => {
+    // A direct public recap visit needs only the restricted recap response.
+    if (routeData.view !== 'rekap-publik' && !(routeData.view === 'rekap' && !loggedInUser)) fetchPegawaiData(false);
+  }, [routeData.view, loggedInUser]);
 
   useEffect(() => {
     if (!loggedInUser) return;
@@ -4135,7 +4139,8 @@ export default function App() {
         try {
           const { timestamp } = JSON.parse(stored);
           if (new Date().getTime() - timestamp >= SESSION_DURATION) {
-            setLoggedInUser(null); localStorage.removeItem('pkp_session'); setSessionExpired(true); navigate('login');
+            setLoggedInUser(null); localStorage.removeItem('pkp_session'); setSessionExpired(true);
+            if (!['home','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
           }
         } catch(e) {}
       }
@@ -4164,9 +4169,11 @@ export default function App() {
 
   const currentView = routeData.view;
   const activeStep = routeData.step;
-  const isDashboardView = ['rekap', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
+  const isPublicRecap = currentView === 'rekap-publik' || (currentView === 'rekap' && !loggedInUser);
+  const isDashboardView = !isPublicRecap && ['rekap', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
 
   const renderView = () => {
+    if (isPublicRecap) return <PublicRecapPage endpoint={APPS_SCRIPT_URL}/>;
     switch (currentView) {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
       case 'rekap': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
@@ -4206,4 +4213,14 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export function PublicRecapPage({ endpoint }) {
+  return <section className="mx-auto max-w-7xl px-4 py-6 md:px-8 space-y-4" aria-label="Rekap Kinerja dan Kedisiplinan Publik">
+    <div className="flex flex-wrap justify-between items-center gap-3">
+      <div><h1 className="text-xl font-extrabold text-[#084C61]">Rekap Kinerja &amp; Kedisiplinan</h1><p className="text-xs text-gray-500 mt-1">Halaman publik • hanya-baca • tidak memerlukan login</p></div>
+      <a href="#/home" className="inline-flex items-center gap-2 rounded-xl border bg-white px-4 py-2 text-sm text-[#084C61]"><ArrowLeft size={16}/>Kembali ke Beranda</a>
+    </div>
+    <MonthlyRecap endpoint={endpoint} publicView/>
+  </section>;
 }

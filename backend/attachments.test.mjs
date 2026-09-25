@@ -792,3 +792,26 @@ test('manual clock tampering remains rejected even when a valid correction exist
   f.working.rows[7][3]='05:00';
   assert.match(f.call({action:'preview_rekap_final'}).message,/Tanggal\/jam/);
 });
+
+test('public recap is read-only and excludes NIP, payroll, photo, source IDs, and individual daily records', () => {
+  const f=fixture();payrollFixture(f);
+  f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
+  assert.equal(confirmRecap(f).status,'success');
+  const before=JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])), files=f.files.size;
+  const report=f.call({action:'rekap_bulanan_publik',month:'2026-07'});
+  assert.equal(report.status,'success',report.message);assert.equal(report.publicView,true);
+  assert.equal(report.employees[0].nama,f.scope.nama);assert.equal(report.employees[0].nip,'public-0');
+  assert.ok(report.daily.every(row=>!('nip' in row)&&row.count>0&&typeof row.unit==='string'));
+  assert.ok(report.documents.every(row=>!('id' in row)&&!('nip' in row)&&row.count>0));
+  for(const privateValue of [f.scope.nip,f.spt.id,f.spreadsheet.id,f.destination.id,'6349000']) assert.equal(JSON.stringify(report).includes(privateValue),false);
+  assert.equal(JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])),before);
+  assert.equal(f.files.size,files);
+});
+test('public recap handles empty months without creating sheets and keeps validation', () => {
+  const f=fixture(), count=f.master.sheets.size;
+  const result=f.call({action:'rekap_bulanan_publik',month:'2026-08'});
+  assert.equal(result.status,'success');assert.deepEqual(result.employees,[]);assert.deepEqual(result.daily,[]);
+  assert.equal(f.master.sheets.size,count);
+  assert.equal(f.call({action:'rekap_bulanan_publik',modul:'invalid'}).status,'error');
+  assert.equal(f.call({action:'rekap_bulanan_publik',month:'2026-99'}).status,'error');
+});

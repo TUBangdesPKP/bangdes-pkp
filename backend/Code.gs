@@ -878,6 +878,7 @@ function doPost(e) {
     if (payload.action === 'simpan_rekap_final') return json_(saveFinal_(payload));
     if (payload.action === 'list_pendukung') return json_(listAttachments_(payload));
     if (payload.action === 'rekap_bulanan') return json_(monthlyRecap_(payload));
+    if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
     if (['klaim_dokumen', 'klaim_spt', 'klaim_cuti'].indexOf(payload.action) !== -1) return json_(claimAttachment_(payload));
     if (payload.action === 'upload_pendukung') return json_(uploadAttachment_(payload));
     if (payload.action === 'upload_pendukung_lain') return json_(uploadExtraAttachment_(payload));
@@ -1556,6 +1557,31 @@ function saveDailyRecap_(state, calculation) {
   var groups = [];
   updates.forEach(function(update) { var group = groups[groups.length-1]; if (!group || group.row + group.values.length !== update.row) { group={row:update.row,values:[]};groups.push(group); } group.values.push(update.values); });
   groups.forEach(function(group) { if (group.row + group.values.length - 1 > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(),group.row + group.values.length - 1 - sheet.getMaxRows()); sheet.getRange(group.row,6,group.values.length,1).setNumberFormat('@'); sheet.getRange(group.row,9,group.values.length,2).setNumberFormat('@'); sheet.getRange(group.row,1,group.values.length,DAILY_HEADERS.length).setValues(group.values); });
+}
+function publicMonthlyRecap_(payload) {
+  var result = monthlyRecap_({modul:payload.modul,month:payload.month});
+  var units = {}, daily = {}, documents = {};
+  var metrics = ['masuk','hariKerja','dinas','cuti','tb','terlambat','psw','lupaAbsen','adjusted','unadjusted','assessed','clean','onTime','avgArrival'];
+  var employees = result.employees.map(function(employee,index) {
+    units[employee.nip] = employee.unit;
+    // The UI needs a row key, not the employee's government identifier.
+    var publicEmployee = {nip:'public-'+index,nama:employee.nama,unit:employee.unit,photo:''};
+    metrics.forEach(function(key) { publicEmployee[key] = employee[key]; });
+    return publicEmployee;
+  });
+  result.daily.forEach(function(row) {
+    var unit = units[row.nip], key=JSON.stringify([unit,row.tanggal,row.status,row.libur,row.hadir]);
+    if (!daily[key]) daily[key]={unit:unit,tanggal:row.tanggal,status:row.status,libur:row.libur,hadir:row.hadir,arrival:null,count:0};
+    daily[key].count++;
+    if (row.arrival !== null && (daily[key].arrival === null || row.arrival < daily[key].arrival)) daily[key].arrival=row.arrival;
+  });
+  result.documents.forEach(function(doc) {
+    var unit=units[doc.nip], key=JSON.stringify([unit,doc.type,doc.tujuan]);
+    if (!documents[key]) documents[key]={unit:unit,type:doc.type,tujuan:doc.tujuan,count:0};
+    documents[key].count++;
+  });
+  return {status:'success',publicView:true,month:result.month,months:result.months,employees:employees,
+    daily:Object.keys(daily).map(function(key){return daily[key];}),documents:Object.keys(documents).map(function(key){return documents[key];})};
 }
 function monthlyRecap_(payload) {
   eventSheetName_(payload.modul);
