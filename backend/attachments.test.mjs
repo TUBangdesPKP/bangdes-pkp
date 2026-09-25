@@ -22,6 +22,7 @@ function fixture() {
     getLastColumn() { return Math.max(1, ...this.rows.map(row => row.length)); }
     getMaxRows() { return Math.max(100, this.rows.length); }
     insertRowAfter() { return this; }
+    insertRowsAfter() { return this; }
     appendRow(row) { this.rows.push([...row]); return this; }
     setFrozenRows() { return this; }
     getRange(row, col, height = 1, width = 1) {
@@ -124,7 +125,7 @@ test('health probe returns deployment version without reading employee data or c
   const f=fixture(), count=f.files.size;
   const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
   assert.equal(response.status,'success');
-  assert.equal(response.backendVersion,'2026-09-20-attendance-payroll');
+  assert.equal(response.backendVersion,'2026-09-25-adjustment-monthly');
   assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
 });
 
@@ -659,4 +660,135 @@ test('new summary columns append without overwriting custom formulas/headers', (
   assert.equal(f.call({action:'simpan_rekap_final',confirmed:true,revision:preview.revision}).status,'success');
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   assert.deepEqual(sheet.rows[1].slice(10,12),['=SUM(E2:F2)','Jangan ditimpa']);
+});
+
+const uploadExtra = (f, extra = {}) => f.call({action:'upload_pendukung_lain',jenisDokumen:'lupa_absen',fileName:'Surat.pdf',fileBase64:Buffer.from('%PDF-test').toString('base64'),requestId:'extra-1',...extra});
+const confirmRecap = (f, adjustments = {}, extra = {}) => {
+  const p=f.call({action:'proses_bukti',...extra});
+  assert.equal(p.status,'success',p.message);
+  return f.call({action:'simpan_rekap_final',revision:p.revision,confirmed:true,adjustments,...extra});
+};
+test('extra supporting files upload once, list, process, and safely delete without touching archives', () => {
+  const f=fixture();
+  for(const type of ['lupa_absen','tugas_belajar','lainnya']) {
+    const a=uploadExtra(f,{jenisDokumen:type,requestId:type});
+    assert.equal(a.status,'success',a.message);
+    assert.equal(a.document.jenisDokumen,type);
+    assert.equal(uploadExtra(f,{jenisDokumen:type,requestId:type}).document.fileId,a.document.fileId);
+  }
+  assert.equal(f.call({action:'list_pendukung'}).documents.length,3);
+  const p=f.call({action:'proses_bukti'});
+  assert.equal(p.rows[2].keterangan,'WFO'); // TB is proof only.
+  assert.equal(p.adjustmentDocuments.length,1);
+  assert.equal(f.call({action:'hapus_pendukung',fileId:p.adjustmentDocuments[0].fileId}).status,'success');
+  assert.equal(f.call({action:'list_pendukung'}).processed,false);
+  assert.equal(f.spt.trashed,false); assert.equal(f.cuti.trashed,false);
+});
+test('extra upload rejects invalid types/files, foreign scope, and reused removed request', () => {
+  const f=fixture(), before=f.files.size;
+  for(const payload of [{jenisDokumen:'spt'},{fileName:'bad.exe'},{fileBase64:'bad<>data'},{fileBase64:''},{nip:'9999'}]) assert.equal(uploadExtra(f,payload).status,'error');
+  assert.equal(f.files.size,before);
+  const a=uploadExtra(f); f.call({action:'hapus_pendukung',fileId:a.document.fileId});
+  assert.equal(uploadExtra(f).status,'error');
+});
+test('one correction of two missing punches earns a meal, retains other penalty, persists audit and monthly counts', () => {
+  const f=fixture(); payrollFixture(f); f.working.rows[7][3]='-'; f.working.rows[7][4]='-';
+  const doc=uploadExtra(f).document;
+  const adjustments={'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}};
+  const result=confirmRecap(f,adjustments);
+  assert.equal(result.status,'success',result.message);
+  const day=result.calculation.days.find(d=>d.tanggal==='2026-07-06');
+  assert.equal(day.lupaAbsen,2); assert.equal(day.adjusted,1); assert.equal(day.tl,0); assert.equal(day.psw,4); assert.equal(day.potongan,1.25);
+  assert.equal(result.calculation.totals.masuk,3); assert.equal(result.calculation.totals.unadjusted,1);
+  assert.equal(f.working.rows[7][3],'07:30');
+  assert.equal(f.recapBook.getSheetByName('_PRESENSI_TAB2').rows[7][3],'-');
+  const p=f.call({action:'preview_rekap_final'});
+  assert.deepEqual(p.adjustments,adjustments); assert.equal(p.revision,result.revision);
+  const report=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(report.status,'success',report.message); assert.equal(report.employees[0].lupaAbsen,2); assert.equal(report.employees[0].adjusted,1); assert.equal(report.employees[0].unadjusted,1);
+  assert.equal(report.documents.length,1);
+  assert.equal(report.employees[0].tukin,undefined); assert.equal(report.employees[0].pin,undefined);
+  assert.match(f.files.get(result.note.fileId).content,/adjustment datang menjadi 07:30/);
+  const again=confirmRecap(f,adjustments); assert.equal(again.status,'success',again.message);
+  assert.equal(f.master.getSheetByName('REKAP_HARIAN').rows.length,7);
+  assert.equal(f.master.getSheetByName('ADJUSTMENT_PRESENSI').rows.length,2);
+});
+test('adjustments reject both punches, existing clock, holidays, invalid time or unrelated proof', () => {
+  const f=fixture(); f.working.rows[7][3]='-'; f.working.rows[7][4]='-';
+  const doc=uploadExtra(f).document, c={fileId:doc.fileId,time:'07:30'};
+  for(const a of [
+    {'2026-07-06':{datang:c,pulang:{...c,time:'16:00'}}},
+    {'2026-07-07':{datang:c}}, {'2026-07-04':{datang:c}},
+    {'2026-07-06':{datang:{...c,time:'24:00'}}}, {'2026-07-06':{datang:{...c,fileId:f.spt.id}}}
+  ]) assert.equal(confirmRecap(f,a).status,'error');
+  assert.equal(f.master.getSheetByName('ADJUSTMENT_PRESENSI'),null);
+});
+test('deleting proof removes correction option; reprocess and confirm restore baseline times and invalidate analytics', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';
+  const doc=uploadExtra(f).document;
+  assert.equal(confirmRecap(f,{'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}}).status,'success');
+  f.call({action:'hapus_pendukung',fileId:doc.fileId});
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-07'}).employees.length,0);
+  const p=f.call({action:'proses_bukti'});assert.deepEqual(p.adjustments,{});assert.equal(f.working.rows[7][3],'-');
+  assert.equal(confirmRecap(f).status,'success');
+  assert.equal(f.master.getSheetByName('ADJUSTMENT_PRESENSI').rows[1][8],'inactive');
+});
+test('quota is four distinct calendar-month events shared across modules, not number of letters', () => {
+  const f=fixture(), doc=uploadExtra(f).document;
+  const other=uploadExtra(f,{modul:'tukin',requestId:'tukin'}).document;
+  const ledger=f.context.adjustmentSheet_(true);
+  for(const date of ['2026-07-01','2026-07-02','2026-07-03','2026-07-06']) ledger.appendRow(['tukin','123456',f.scope.periode,f.spreadsheet.id,date,'datang','07:30',other.fileId,'active','2026-07-20']);
+  f.working.rows[7][3]='-';f.working.rows[8][3]='-';
+  // Reusing the same event in UM is not a fifth occurrence.
+  assert.equal(confirmRecap(f,{'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}}).status,'success');
+  const rejected=confirmRecap(f,{'2026-07-07':{datang:{fileId:doc.fileId,time:'07:30'}}});
+  assert.equal(rejected.status,'error');assert.match(rejected.message,/Kuota 4/);
+});
+test('cross-module correction cannot change the approved time or correct both missing punches', () => {
+  const f=fixture(), doc=uploadExtra(f).document, other=uploadExtra(f,{modul:'tukin',requestId:'tukin'}).document;
+  f.working.rows[7][3]='-';f.working.rows[7][4]='-';
+  f.context.adjustmentSheet_(true).appendRow(['tukin','123456',f.scope.periode,f.spreadsheet.id,'2026-07-06','datang','07:30',other.fileId,'active','2026-07-20']);
+  assert.match(confirmRecap(f,{'2026-07-06':{datang:{fileId:doc.fileId,time:'08:30'}}}).message,/berbeda/);
+  assert.match(confirmRecap(f,{'2026-07-06':{pulang:{fileId:doc.fileId,time:'16:00'}}}).message,/hanya satu/);
+});
+test('monthly report uses calendar dates, current saved results, employee unit, and source module only', () => {
+  const f=fixture();payrollFixture(f);
+  const people=f.master.getSheetByName('Data_Pegawai');people.rows[0][14]='SubUnitKerja';people.rows[1][14]='Subbagian Tata Usaha';
+  assert.equal(confirmRecap(f).status,'success');
+  const report=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(report.employees.length,1);assert.equal(report.employees[0].unit,'Subbagian Tata Usaha');assert.equal(report.daily.length,6);
+  assert.equal(f.call({action:'rekap_bulanan',modul:'tukin',month:'2026-07'}).employees.length,0);
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-08'}).employees.length,0);
+  f.master.getSheetByName('REKAP_UANG_MAKAN').rows.splice(1,1);
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-07'}).employees.length,0);
+});
+
+test('Tukin allows eight adjustments split four per month, but not five in one calendar month', () => {
+  const f=fixture(), doc=uploadExtra(f,{modul:'tukin'}).document;
+  const state={record:{...f.scope,modul:'tukin',folderId:f.destination.id,spreadsheetId:f.spreadsheet.id},documents:[doc]};
+  const dates=['2026-06-22','2026-06-23','2026-06-24','2026-06-25','2026-07-01','2026-07-02','2026-07-03','2026-07-06'];
+  const rows=dates.map(tanggal=>({tanggal,keterangan:'WFO',datang:'-',pulang:'16:00',libur:false}));
+  const adjustments=Object.fromEntries(dates.map(date=>[date,{datang:{fileId:doc.fileId,time:'07:30'}}]));
+  assert.equal(Object.keys(f.context.validateAdjustments_(state,rows,adjustments)).length,8);
+  const calc=f.context.calculateAttendance_(f.context.applyAdjustments_(rows,adjustments),{uangMakan:37000,pajak:5,tukin:6349000,skp:100,warnings:[]},'tukin');
+  assert.equal(calc.totals.adjusted,8);assert.equal(calc.totals.adjustmentMonths['2026-06'],4);assert.equal(calc.totals.adjustmentMonths['2026-07'],4);
+  rows.push({tanggal:'2026-07-07',keterangan:'WFO',datang:'-',pulang:'16:00'});
+  adjustments['2026-07-07']={datang:{fileId:doc.fileId,time:'07:30'}};
+  assert.throws(()=>f.context.validateAdjustments_(state,rows,adjustments),/Kuota 4/);
+});
+test('report deduplicates overlapping periods by employee/date using latest calculation', () => {
+  const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
+  const daily=f.master.getSheetByName('REKAP_HARIAN');
+  const copy=[...daily.rows[1]];copy[19]='2099-01-01T00:00:00Z';daily.appendRow(copy);
+  const report=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(report.daily.length,6);
+  const date=f.context.parseDate_('2026-07-04');date.setUTCHours(0);
+  daily.rows[1][5]=date;
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-07'}).daily.length,6);
+});
+test('manual clock tampering remains rejected even when a valid correction exists', () => {
+  const f=fixture();f.working.rows[7][3]='-';const doc=uploadExtra(f).document;
+  assert.equal(confirmRecap(f,{'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}}).status,'success');
+  f.working.rows[7][3]='05:00';
+  assert.match(f.call({action:'preview_rekap_final'}).message,/Tanggal\/jam/);
 });

@@ -1,5 +1,7 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
+import { MonthlyRecap } from './monthly-recap.jsx';
+import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -3117,6 +3119,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   const [finalRecap, setFinalRecap] = useState(null);
   const previewSession = useRef({ key: '', data: null, review: null });
   const [isProcessingEvidence, setIsProcessingEvidence] = useState(false);
+  const [extraUploadBusy, setExtraUploadBusy] = useState(false);
   const [processStatus, setProcessStatus] = useState('Memperbarui rekap...');
   const [processError, setProcessError] = useState('');
   const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
@@ -3145,7 +3148,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
   };
   const sptUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'spt' });
   const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
-  const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy;
+  const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy || extraUploadBusy;
   const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence;
   useEffect(() => {
     if (!documents.processed) {
@@ -3407,13 +3410,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
       <main className={`flex-1 bg-[#F8FAFC] text-gray-900 h-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
         <div className={`w-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'h-full flex flex-col' : ''}`}>
           {activeTab === 'rekap' ? (
-            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
-              <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100">
-                <FileBarChart size={32} />
-              </div>
-              <h2 className="text-2xl md:text-3xl font-black mb-3" style={{ color: PALETTE_PKP.midnightGreen }}>Selamat Datang di Modul Rekap</h2>
-              <p className="text-sm text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">Halaman rekapitulasi data kedisiplinan dan kinerja bulanan sedang dalam penyiapan. Silakan pilih modul lain pada menu di sebelah kiri.</p>
-            </div>
+            <MonthlyRecap endpoint={APPS_SCRIPT_URL}/>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div>
               <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 shadow-sm">
@@ -3885,9 +3882,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
                     <div className="mt-1 text-gray-400"><FolderOpen size={24} /></div>
                     <div>
-                      <h3 className="text-sm font-extrabold text-gray-900 mb-1">Upload Bukti Dukung (SPT, Cuti, Izin)</h3>
+                      <h3 className="text-sm font-extrabold text-gray-900 mb-1">Upload Bukti Dukung dan Dokumen Tambahan</h3>
                       <p className="text-xs text-gray-600 leading-relaxed">
-                        Di halaman ini terdapat <strong>3 section upload</strong>: SPT (Surat Perintah Tugas), Surat Cuti, dan Surat Izin. Upload dalam format <strong>JPG/PNG (lebih cepat)</strong> atau PDF. Sistem akan membaca dokumen dan ekstrak data pegawai secara otomatis.
+                        Klaim arsip SPT/Cuti atau lampirkan bukti tambahan di bawah. Bagian upload SPT dan Cuti dapat dibuka saat diperlukan. Surat lupa absen dipilih sebagai bukti koreksi datang/pulang pada tab 4.
                       </p>
                     </div>
                   </div>
@@ -3905,8 +3902,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                     </button>
                   </div>
                   {documents.processed && <p className="text-center text-xs text-teal-700">Tidak ada perubahan bukti. Klik tab 4 untuk membuka preview terakhir.</p>}
-                  {sptUpload.render()}
-                  {cutiUpload.render()}
+                  <ExtraDocumentsUpload key={submissionKey} context={submission} documents={documents} onBusy={setExtraUploadBusy}/>
+                  <details className="rounded-2xl border bg-white p-5"><summary className="cursor-pointer font-bold text-sm text-[#084C61]">Upload SPT — buka/tutup</summary><div className="mt-5">{sptUpload.render()}</div></details>
+                  <details className="rounded-2xl border bg-white p-5"><summary className="cursor-pointer font-bold text-sm text-[#084C61]">Upload Cuti — buka/tutup</summary><div className="mt-5">{cutiUpload.render()}</div></details>
                 </fieldset>
               ) : activeStep === 4 && selectedPeriod ? (
                 !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses di tab 3 untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab 3</button></div> :
@@ -3915,10 +3913,10 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                   onPreviewLoaded={data => { previewSession.current = { key: submissionKey, data, review: null }; }}
                   onReviewChange={review => {
                     if (previewSession.current.key === submissionKey) previewSession.current.review = review;
-                    if (finalRecap && finalRecap.rows.some(row =>
+                    if (finalRecap && (JSON.stringify(review.adjustments || {}) !== JSON.stringify(finalRecap.adjustments || {}) || finalRecap.rows.some(row =>
                       (review.schedules?.[row.tanggal] || 'biasa') !== (row.jamKerja || 'biasa') ||
                       (review.resolutions?.[row.tanggal] || '') !== (row.penyelesaian || '')
-                    )) setFinalRecap(null);
+                    ))) setFinalRecap(null);
                   }}
                   onInvalidated={() => documents.markProcessed(false)}
                   onBack={() => navigate(currentView, 3)}

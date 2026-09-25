@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronUp, Eye, Trash2 } from 'lucide-react';
 import { driveFileId, sendClaimRequest } from './archive-claims.js';
+import { EXTRA_TYPES } from './extra-documents.jsx';
 
 // One server-backed collection shared by SPT/Cuti claims and direct uploads.
 export function useSubmissionDocuments({ endpoint, context, enabled, revision, onPreview }) {
@@ -97,11 +98,11 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
         {error && <div role="alert" className="text-xs text-red-700 bg-red-50 rounded-lg p-3">{error}</div>}
         {loading && <p className="text-xs text-gray-500">Memuat dokumen dari folder pengumpulan...</p>}
         {!loading && !ready && !error && <p className="text-xs text-gray-600">Simpan file presensi dan rekap pada tab 2 terlebih dahulu.</p>}
-        {!loading && ready && files.length === 0 && <p className="text-xs text-gray-500">Belum ada SPT atau Cuti yang dilampirkan pada pengumpulan ini.</p>}
-        {['spt', 'cuti'].map(type => {
+        {!loading && ready && files.length === 0 && <p className="text-xs text-gray-500">Belum ada dokumen pendukung pada pengumpulan ini.</p>}
+        {['spt', 'cuti', ...Object.keys(EXTRA_TYPES)].map(type => {
           const group = files.filter(file => file.jenisDokumen === type);
           return group.length > 0 && <div key={type} className="space-y-2">
-            <h4 className="text-xs font-bold text-[#084C61]">{type === 'spt' ? 'SPT' : 'Cuti'} ({group.length} file)</h4>
+            <h4 className="text-xs font-bold text-[#084C61]">{EXTRA_TYPES[type] || (type === 'spt' ? 'SPT' : 'Cuti')} ({group.length} file)</h4>
             {group.map(file => <div key={file.fileId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3">
               <span className="text-xs text-[#084C61] min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
               <div className="flex gap-2 shrink-0">

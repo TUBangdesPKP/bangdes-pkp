@@ -13,6 +13,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   const [checked, setChecked] = useState(cachedReview?.checked || false);
   const [resolutions, setResolutions] = useState(cachedReview?.resolutions || Object.fromEntries((cachedPreview?.rows || []).filter(row => row.penyelesaian).map(row => [row.tanggal, row.penyelesaian])));
   const [schedules, setSchedules] = useState(cachedReview?.schedules || Object.fromEntries((cachedPreview?.rows || []).map(row => [row.tanggal, row.jamKerja || 'biasa'])));
+  const [adjustments, setAdjustments] = useState(cachedReview?.adjustments || cachedPreview?.adjustments || {});
   const [reload, setReload] = useState(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -20,7 +21,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     if (reload === 0 && initialCache.current.key === JSON.stringify(context) && initialCache.current.preview) return;
     let cancelled = false;
     callbacks.current.onPreviewLoaded?.(null);
-    setLoading(true); setError(''); setPreview(null); setChecked(false); setResolutions({}); setSchedules({});
+    setLoading(true); setError(''); setPreview(null); setChecked(false); setResolutions({}); setSchedules({}); setAdjustments({});
     sendClaimRequest(endpoint, { ...context, action: 'preview_rekap_final' }).then(result => {
       if (!Array.isArray(result.rows) || !result.revision || !result.spreadsheetId) throw new Error('Perbarui backend Code.gs untuk mengaktifkan preview tab 4.');
       if (!cancelled) {
@@ -28,14 +29,41 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
         callbacks.current.onPreviewLoaded?.(result);
         setResolutions(Object.fromEntries(result.rows.filter(row => row.penyelesaian).map(row => [row.tanggal, row.penyelesaian])));
         setSchedules(Object.fromEntries(result.rows.map(row => [row.tanggal, row.jamKerja || 'biasa'])));
+        setAdjustments(result.adjustments || {});
       }
     }).catch(err => { if (!cancelled) { setError(err.message); if (/Lanjut Proses/.test(err.message)) callbacks.current.onInvalidated?.(); } }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [endpoint, JSON.stringify(context), reload]);
   useEffect(() => {
-    if (preview && !loading) callbacks.current.onReviewChange?.({ checked, resolutions, schedules });
-  }, [preview, loading, checked, resolutions, schedules]);
+    if (preview && !loading) callbacks.current.onReviewChange?.({ checked, resolutions, schedules, adjustments });
+  }, [preview, loading, checked, resolutions, schedules, adjustments]);
+  const changeCorrection = (date, punch, value) => {
+    setChecked(false);
+    setAdjustments(previous => {
+      const next = { ...previous, [date]: { ...previous[date] } };
+      if (value === null) delete next[date][punch]; else next[date][punch] = value;
+      if (!Object.keys(next[date]).length) delete next[date];
+      return next;
+    });
+  };
+  const correctionCell = (row, punch, status) => {
+    const original = row[punch === 'datang' ? 'originalDatang' : 'originalPulang'] ?? row[punch];
+    const other = punch === 'datang' ? 'pulang' : 'datang';
+    const missing = !original || original === '-';
+    const correction = adjustments[row.tanggal]?.[punch];
+    if (!missing || row.libur || !['WFO','WFA','WFH'].includes(status.toUpperCase())) return original;
+    return <div className="space-y-2 min-w-[170px]">
+      <span className="text-gray-500">Asli: {original || '-'}</span>
+      <label className="flex gap-2 items-center"><input type="checkbox" aria-label={`Koreksi ${punch} ${row.tanggal}`} checked={!!correction} disabled={saving || !preview?.adjustmentDocuments?.length || (!correction && !!adjustments[row.tanggal]?.[other])} onChange={e => changeCorrection(row.tanggal,punch,e.target.checked ? {time:'',fileId:preview.adjustmentDocuments[0].fileId} : null)}/>Koreksi {punch}</label>
+      {correction && <><select aria-label={`Surat koreksi ${punch} ${row.tanggal}`} className="border rounded p-1 w-full max-w-[200px]" disabled={saving} value={correction.fileId} onChange={e => changeCorrection(row.tanggal,punch,{...correction,fileId:e.target.value})}>{preview.adjustmentDocuments.map(doc => <option key={doc.fileId} value={doc.fileId}>{doc.fileName}</option>)}</select><input type="time" aria-label={`Jam koreksi ${punch} ${row.tanggal}`} className="border rounded p-1 block" disabled={saving} value={correction.time} onChange={e => changeCorrection(row.tanggal,punch,{...correction,time:e.target.value})}/></>}
+    </div>;
+  };
   const rows = preview?.rows || [];
+  const presentCount = rows.filter(row => !row.libur && ['WFO','WFA','WFH'].includes((resolutions[row.tanggal] || row.keterangan).toUpperCase()) && ['datang','pulang'].some(punch => {
+    const original = row[punch === 'datang' ? 'originalDatang' : 'originalPulang'] ?? row[punch];
+    const time = adjustments[row.tanggal]?.[punch]?.time || original;
+    return time && time !== '-';
+  })).length;
   const conflicts = rows.filter(row => row.konflik);
   const unresolved = conflicts.filter(row => !row.libur && !resolutions[row.tanggal]);
   const moduleLabel = context.modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan';
@@ -44,7 +72,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     setSaving(true); setError('');
     try {
       const result = await sendClaimRequest(endpoint, { ...context, action: 'simpan_rekap_final',
-        revision: preview.revision, confirmed: true, resolutions, schedules });
+        revision: preview.revision, confirmed: true, resolutions, schedules, adjustments });
       if (result.spreadsheetId !== preview.spreadsheetId || !Array.isArray(result.rows)) throw new Error('Server belum mengonfirmasi spreadsheet rekap yang diperbarui.');
       if (!result.calculation) throw new Error('Backend belum menyediakan perhitungan. Deploy versi terbaru Code.gs terlebih dahulu.');
       if (alive.current) onSaved({ ...preview, ...result, revision: result.revision || null,
@@ -55,7 +83,8 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   return <section className="space-y-5" aria-label="Preview akhir presensi">
     <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-3">
       <h2 className="text-lg font-extrabold text-[#084C61]">Preview Bukti {moduleLabel}</h2>
-      <p className="text-sm text-gray-600">Keterangan dari tab 2 disesuaikan dengan SPT dan Cuti yang masih aktif. Jam datang/pulang tidak berubah. Sabtu, Minggu, dan keterangan Libur tetap Libur.</p>
+      <p className="text-sm text-gray-600">Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.</p>
+      <p className="text-xs text-teal-800">Adjustment maksimal 4 kejadian per bulan kalender, dihitung bersama Uang Makan dan Tukin. Jika datang dan pulang sama-sama kosong, hanya satu yang boleh dikoreksi. Jam koreksi digunakan untuk menghitung TL/PSW; absen yang masih kosong tetap dikenai potongan.</p>
       <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap tab 2. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
@@ -75,14 +104,14 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
               const status = row.libur ? 'Libur' : resolutions[row.tanggal] || row.keterangan;
               const color = status === 'Libur' ? 'bg-[#f4cccc]' : row.konflik && !resolutions[row.tanggal] ? 'bg-amber-50' : status === 'Dinas' ? 'bg-[#c9efbc]' : status === 'Cuti' ? 'bg-[#affdfd]' : 'bg-white';
               return <tr key={row.tanggal} className={`${color} border-b border-gray-200 text-gray-900`}>
-                <td className="px-4 py-4 whitespace-nowrap font-bold">{new Date(row.tanggal + 'T12:00:00Z').toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</td><td className="px-4 py-4">{row.hari}</td><td className="px-4 py-4">{row.datang}</td><td className="px-4 py-4">{row.pulang}</td>
+                <td className="px-4 py-4 whitespace-nowrap font-bold">{new Date(row.tanggal + 'T12:00:00Z').toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</td><td className="px-4 py-4">{row.hari}</td><td className="px-4 py-4">{correctionCell(row,'datang',status)}</td><td className="px-4 py-4">{correctionCell(row,'pulang',status)}</td>
                 <td className="px-4 py-4 font-bold" title={'Awal: ' + row.keteranganAwal + '\n' + row.dokumen.map(doc => doc.jenisDokumen.toUpperCase() + ': ' + doc.fileName).join('\n')}>{row.konflik && !row.libur ? <select aria-label={'Penyelesaian konflik ' + row.tanggal} disabled={saving} value={resolutions[row.tanggal] || ''} onChange={e => { setResolutions(prev => ({ ...prev, [row.tanggal]: e.target.value })); setChecked(false); }} className="border border-amber-400 bg-white rounded-lg px-2 py-2"><option value="">Pilih keterangan</option><option>Dinas</option><option>Cuti</option></select> : <span className="inline-block border border-black/10 rounded-md px-3 py-1">{status.toUpperCase()}</span>}</td>
                 <td className="px-4 py-4"><select aria-label={'Jam kerja ' + row.tanggal} disabled={saving} value={schedules[row.tanggal] || 'biasa'} onChange={e => { setSchedules(prev => ({ ...prev, [row.tanggal]: e.target.value })); setChecked(false); }} className="border border-gray-300 bg-white rounded-lg px-2 py-2"><option value="biasa">Jam Kerja Biasa</option><option value="ramadan">Jam Kerja Ramadan</option></select></td>
               </tr>;
             })}</tbody>
           </table>
         </div>
-        <div className="p-5 border-t text-xs text-gray-500 flex flex-wrap gap-5"><span>Total Hari: <strong className="text-gray-900">{rows.length} Hari</strong></span><span>Hari Masuk (WFO/WFA/WFH): <strong className="text-teal-700">{rows.filter(row => !row.libur && ['WFO','WFA','WFH'].includes((resolutions[row.tanggal] || row.keterangan).toUpperCase()) && [row.datang,row.pulang].some(time => time && time !== '-')).length} Hari</strong></span><a href={preview.spreadsheetUrl} target="_blank" rel="noreferrer" className="ml-auto underline text-[#084C61]">Lihat spreadsheet rekap</a></div>
+        <div className="p-5 border-t text-xs text-gray-500 flex flex-wrap gap-5"><span>Total Hari: <strong className="text-gray-900">{rows.length} Hari</strong></span><span>Hari Masuk (WFO/WFA/WFH): <strong className="text-teal-700">{presentCount} Hari</strong></span><a href={preview.spreadsheetUrl} target="_blank" rel="noreferrer" className="ml-auto underline text-[#084C61]">Lihat spreadsheet rekap</a></div>
       </div>
       <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700"><input type="checkbox" checked={checked} disabled={saving || unresolved.length > 0} onChange={e => setChecked(e.target.checked)} className="mt-1"/>Saya telah memeriksa preview dan menyetujui hasil akhir pada spreadsheet rekap.</label>
     </>}
@@ -122,7 +151,7 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone }) {
         <div className="flex justify-between gap-3 items-center py-2"><strong className="text-sm">{tukin ? 'Tunjangan' : 'Uang Makan'} diterima</strong><strong className="text-xl text-[#0E5B73]">{rupiah(a.netto)}</strong></div>
       </div>
       <div className="space-y-4">
-        <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><AlertCircle size={18}/>Catatan Perbaikan Diri</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.flexi} label="Datang Flexi (hari)"/><SummaryStat value={t.terlambat} label="Terlambat (hari)"/><div className="col-span-2 w-1/2 mx-auto"><SummaryStat value={t.psw} label="Pulang Sebelum Waktunya (hari)"/></div></div></div>
+        <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><AlertCircle size={18}/>Catatan Perbaikan Diri</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.flexi} label="Datang Flexi (hari)"/><SummaryStat value={t.terlambat} label="Terlambat (hari)"/><SummaryStat value={t.psw} label="Pulang Sebelum Waktunya (hari)"/><div className="rounded-2xl border border-slate-300 bg-white p-3 text-center text-xs space-y-2"><strong className="text-xl">{t.lupaAbsen ?? 0}</strong><p>Lupa Absen (kejadian)</p><p>{t.adjusted ?? 0} Adjustment Sistem</p><p>{t.unadjusted ?? 0} Tidak Absen</p>{tukin && Object.entries(t.adjustmentMonths || {}).map(([month,count]) => <p key={month} className="text-teal-700">{month}: {count} adjustment</p>)}</div></div></div>
         <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><Clock size={18}/>Kekurangan Jam Kerja</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.menitTelat} label="Terlambat (menit)"/><SummaryStat value={t.menitPsw} label="Pulang Awal (menit)"/><SummaryStat value={t.menitTanpaPresensi} label="Tidak Presensi (menit)"/><SummaryStat value={t.totalMenit} label="Total (menit)" danger/></div></div>
       </div>
     </div>
