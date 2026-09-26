@@ -127,6 +127,17 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+test('published leaders retain the job title from the employee master, not browser data', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);
+  const people=f.master.getSheetByName('Data_Pegawai');
+  const column=people.rows[0].indexOf('Jabatan');
+  assert.ok(column>=0);people.rows[1][column]='Penata Kelola Perumahan Ahli Pertama';
+  publishWrap(f);
+  const result=f.call({action:'rekap_bulanan_publik'});
+  assert.equal(result.employees[0].jabatan,'Penata Kelola Perumahan Ahli Pertama');
+  people.rows[1][column]='Perubahan belum diproses';
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].jabatan,result.employees[0].jabatan);
+});
 function profileFixture() {
   const f=fixture(), sheet=f.master.getSheetByName('Data_Pegawai');
   sheet.rows=[Array(44).fill(''),Array(44).fill(''),Array(44).fill('')];

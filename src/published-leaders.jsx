@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
-import { monthLabel, monthlyView, ratio } from './monthly-recap-model.js';
+import { monthLabel, monthlyView } from './monthly-recap-model.js';
 import { EmployeePhoto } from './employee-photo.jsx';
+import { subunitBadge } from './subunit-badge.js';
 
 export function PublishedLeaders({ endpoint }) {
   const [data, setData] = useState(null), [error, setError] = useState('');
@@ -17,6 +18,12 @@ export function PublishedLeaders({ endpoint }) {
   const leaders = data?.published ? monthlyView(data, '', true).punctual : [];
   return <section aria-label="Juara rekap yang dipublikasikan" className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
     <div className="px-5 py-4 text-white font-bold text-sm flex items-center gap-2 bg-[#084C61]"><Trophy size={16}/>PALING DISIPLIN{data?.month ? ` • ${monthLabel(data.month).toUpperCase()}` : ''}</div>
-    {leaders.length ? <><p className="px-5 pt-4 text-[11px] text-slate-500">5 teratas Paling Tepat Waktu pada rekap yang ditampilkan.</p><ol className="p-5 space-y-4">{leaders.map((row, index) => <li key={row.nip} className="flex items-center gap-3"><span className="text-xs font-bold text-slate-400 w-4">{index + 1}</span><EmployeePhoto src={row.photo} name={row.nama} className="w-11 h-14 rounded-lg shrink-0"/><div className="min-w-0 flex-1"><p className="text-xs font-bold text-[#084C61]">{row.nama}</p><p className="text-[10px] text-slate-500 mt-1">{row.unit}</p></div><strong className="text-xs text-teal-700">{ratio(row.onTime, row.assessed)}</strong></li>)}</ol></> : <p role="status" className="p-8 text-center text-xs text-slate-500">{error || (!data ? 'Memuat juara rekap…' : !data.published ? 'Belum ada rekap yang dipublikasikan.' : 'Belum ada rekap lengkap yang memenuhi peringkat.')}</p>}
+    {leaders.length ? <ol className="px-5 py-2 divide-y divide-slate-100">{leaders.map((row, index) => {
+      const badge = subunitBadge(row.unit);
+      return <li key={row.nip} className="flex items-start gap-3 py-3">
+        <div className="relative shrink-0"><EmployeePhoto src={row.photo} name={row.nama} className="w-10 h-12 rounded-lg"/><span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[#D5C58A] text-[#243746] text-[9px] font-bold flex items-center justify-center border border-white" aria-label={`Peringkat ${index + 1}`}>{index + 1}</span></div>
+        <div className="min-w-0 flex-1"><p className="text-xs font-bold text-[#084C61] break-words">{row.nama}</p><div className="flex items-start justify-between gap-2 mt-1"><p className="text-[10px] leading-relaxed text-slate-500 min-w-0 flex-1 break-words">{row.jabatan || 'Jabatan belum tersedia'}</p><span title={row.unit} className="shrink-0 max-w-[7rem] rounded-full px-2 py-1 text-[9px] leading-tight font-bold text-center break-words" style={{ backgroundColor: badge.background, color: badge.color }}>{badge.label}</span></div></div>
+      </li>;
+    })}</ol> : <p role="status" className="p-8 text-center text-xs text-slate-500">{error || (!data ? 'Memuat juara rekap…' : !data.published ? 'Belum ada rekap yang dipublikasikan.' : 'Belum ada rekap lengkap yang memenuhi peringkat.')}</p>}
   </section>;
 }

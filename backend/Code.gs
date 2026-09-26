@@ -1764,7 +1764,7 @@ function publicWrapData_(result) {
     // The UI needs a row key, not the employee's government identifier.
     // Profile photos are explicitly part of the public podium; other Drive URLs remain private.
     var photo=/^https:\/\/lh3\.googleusercontent\.com\/d\/[\w-]+=s(?:200|800)$/.test(employee.photo||'')?employee.photo:'';
-    var publicEmployee = {nip:'public-'+index,nama:employee.nama,unit:employee.unit,photo:photo};
+    var publicEmployee = {nip:'public-'+index,nama:employee.nama,jabatan:text_(employee.jabatan),unit:employee.unit,photo:photo};
     metrics.forEach(function(key) { publicEmployee[key] = employee[key]; });
     return publicEmployee;
   });
@@ -1984,6 +1984,7 @@ function monthlyRecap_(payload) {
       var nip=record.nip, person=byNip[nip]||[];
       var photo=employeeField(person,['fotopegawai','foto','linkfoto','urlfoto','fotoprofil','photo','image']), photoId=driveId_(photo);
       var t=calculation.totals, employee={nip:nip,nama:employeeField(person,['nama'])||record.nama,
+        jabatan:employeeField(person,['jabatan']),
         unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s800':'',
         masuk:t.masuk,hariKerja:t.hariKerja,dinas:t.dinas,cuti:t.cuti,tb:t.tb,terlambat:t.terlambat,psw:t.psw,
         lupaAbsen:t.lupaAbsen,adjusted:t.adjusted,unadjusted:t.unadjusted,flexi:t.flexi,flexiMinutes:0,
