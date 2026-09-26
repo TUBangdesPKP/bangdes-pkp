@@ -8,7 +8,7 @@ const sourceCode = fs.readFileSync(new URL('./Code.gs', import.meta.url), 'utf8'
 
 function fixture() {
   const files = new Map(), folders = new Map(), books = new Map();
-  const properties = new Map();
+  const properties = new Map(), cache = new Map();
   let sequence = 0;
   const iterator = values => { let i = 0; return { hasNext: () => i < values.length, next: () => values[i++] }; };
   class Sheet {
@@ -82,7 +82,8 @@ function fixture() {
     console, Logger: { log() {} },
     ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: text => ({ setMimeType() { return this; }, getContent: () => text }) },
     LockService: { getScriptLock: () => ({ waitLock: () => { locked = true; }, hasLock: () => locked, releaseLock: () => { locked = false; } }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) ?? null, setProperty(key,value) { properties.set(key,String(value)); return this; }, getProperties: () => Object.fromEntries(properties) }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) ?? null, setProperty(key,value) { properties.set(key,String(value)); return this; }, deleteProperty: key => properties.delete(key), getProperties: () => Object.fromEntries(properties) }) },
+    CacheService: { getScriptCache: () => ({get:key=>cache.get(key)||null,put:(key,value)=>cache.set(key,value),remove:key=>cache.delete(key)}) },
     DriveApp: { getFolderById: id => { if (!folders.has(id)) throw Error('No folder'); return folders.get(id); }, getFileById: id => { if (!files.has(id)) throw Error('No file'); return files.get(id); }, Access: {}, Permission: {} },
     SpreadsheetApp: { flush() {}, openById: id => { if (!books.has(id)) throw Error('No spreadsheet'); return books.get(id); } },
     Utilities: { DigestAlgorithm: {SHA_256:'sha256'}, computeDigest: (algorithm, value) => [...crypto.createHash(algorithm).update(value).digest()], getUuid: () => `uuid_${++sequence}`, formatDate: (date, timeZone, format) => format === 'yyyy-MM-dd' ? new Intl.DateTimeFormat('en-CA', {timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date) : '19/09/2026 10:00:00', base64Decode: data => Buffer.from(data, 'base64'), newBlob: (data, mime, name) => ({ data, mime, name }) },
@@ -126,6 +127,87 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+function profileFixture() {
+  const f=fixture(), sheet=f.master.getSheetByName('Data_Pegawai');
+  sheet.rows=[Array(44).fill(''),Array(44).fill(''),Array(44).fill('')];
+  ['NIP','Nama','Jabatan','SubUnitKerja','PIN'].forEach((key,i)=>sheet.rows[0][i]=key);
+  sheet.rows[0][43]='Foto_Pegawai';
+  sheet.rows[1].splice(0,5,'123456','Pegawai Uji','Analis','Unit Uji','012345');
+  sheet.rows[2].splice(0,5,'654321','Pegawai Lain','Analis','Unit Lain','654321');
+  const folder=f.destination.constructor;
+  new folder(f.context.PROFILE_PHOTO_FOLDER_ID,'Foto Profil');
+  return {...f,people:sheet};
+}
+
+test('profile login verifies server PIN, never returns PIN, and rejects a forged identity',()=>{
+  const f=profileFixture();
+  assert.equal(f.call({action:'login_pegawai',nip:'123456',pin:'123456'}).status,'error');
+  const login=f.call({action:'login_pegawai',nip:'123456',pin:'012345'});
+  assert.equal(login.status,'success',login.message);assert.ok(login.sessionToken);assert.equal(login.user.PIN,undefined);
+  assert.equal(JSON.stringify(JSON.parse(f.context.doGet({parameter:{}}).getContent())).includes('012345'),false);
+  assert.equal(f.call({action:'profil_saya',sessionToken:login.sessionToken,nip:'654321'}).status,'error');
+  assert.equal(f.call({action:'ubah_pin',nip:'123456',oldPin:'012345',newPin:'222222',confirmPin:'222222'}).status,'error');
+});
+test('PIN change validates old PIN and confirmation, preserves leading zeros, invalidates other sessions',()=>{
+  const f=profileFixture(), login=()=>f.call({action:'login_pegawai',nip:'123456',pin:'012345'});
+  const a=login(),b=login(), payload={action:'ubah_pin',sessionToken:a.sessionToken,oldPin:'012345',newPin:'001234',confirmPin:'001234'};
+  assert.equal(f.call({...payload,oldPin:'111111'}).status,'error');
+  assert.equal(f.call({...payload,confirmPin:'999999'}).status,'error');
+  assert.equal(f.people.rows[1][4],'012345');
+  assert.equal(f.call(payload).status,'success');assert.equal(f.people.rows[1][4],'001234');assert.equal(f.people.rows[2][4],'654321');
+  assert.equal(f.call({action:'profil_saya',sessionToken:b.sessionToken}).status,'error');
+  assert.equal(login().status,'error');
+  assert.equal(f.call({action:'login_pegawai',nip:'123456',pin:'001234'}).status,'success');
+});
+test('profile brute-force attempts are limited and no invalid upload can modify a photo',()=>{
+  const f=profileFixture();
+  for(let i=0;i<5;i++)assert.equal(f.call({action:'login_pegawai',nip:'123456',pin:'000000'}).status,'error');
+  assert.match(f.call({action:'login_pegawai',nip:'123456',pin:'012345'}).message,/15 menit/);
+  const token=f.call({action:'login_pegawai',nip:'654321',pin:'654321'}).sessionToken, before=f.files.size;
+  for(const fileBase64 of ['PHN2Zz48L3N2Zz4=','!', 'A'.repeat(2800001)])assert.equal(f.call({action:'ubah_foto_profil',sessionToken:token,fileBase64}).status,'error');
+  assert.equal(f.files.size,before);assert.equal(f.people.rows[2][43],'');
+});
+test('photo upload writes only authenticated employee AR and the configured folder, preserving prior files',()=>{
+  const f=profileFixture(), sessionToken=f.call({action:'login_pegawai',nip:'123456',pin:'012345'}).sessionToken;
+  const fileBase64=Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]).toString('base64');
+  const before=f.people.rows[1].slice(0,43), result=f.call({action:'ubah_foto_profil',sessionToken,fileBase64});
+  assert.equal(result.status,'success',result.message);assert.equal(result.user.Foto_Pegawai,f.people.rows[1][43]);
+  assert.deepEqual(f.people.rows[1].slice(0,43),before);assert.equal(f.people.rows[2][43],'');
+  const uploaded=[...f.files.values()].find(file=>file.getUrl()===result.user.Foto_Pegawai);
+  assert.equal(uploaded.parent.id,f.context.PROFILE_PHOTO_FOLDER_ID);
+  f.call({action:'ubah_foto_profil',sessionToken,fileBase64});assert.equal(uploaded.trashed,false);
+});
+
+test('manual wrap process updates one month, cleans orphan duplicate chunks and does not auto publish',()=>{
+  const f=fixture();payrollFixture(f);confirmRecap(f);f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  const input={action:'proses_wrap_bulanan',month:'2026-07',adminKey:wrapKey};
+  const first=f.call(input);assert.equal(first.status,'success',first.message);
+  const sheet=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT');sheet.appendRow([...sheet.rows[1]]);
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Nama Baru';
+  const next=f.call(input);assert.equal(next.status,'success',next.message);
+  assert.equal(sheet.rows.slice(1).filter(row=>row[1]==='2026-07').length,1);
+  assert.equal(next.publication.drafts.length,1);assert.equal(next.data.employees[0].nama,'Nama Baru');
+  f.context.monthlyRecap_=()=>{throw Error('Cannot scan on page load');};
+  assert.equal(f.call({action:'rekap_bulanan_tersimpan',month:'2026-07'}).employees[0].nama,'Nama Baru');
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).published,false);
+});
+test('legacy date-coerced snapshot months are readable; new writes remain text',()=>{
+  const f=fixture();payrollFixture(f);confirmRecap(f);const saved=saveWrap(f);
+  const sheet=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT');sheet.rows[1][1]=new Date('2026-06-30T17:00:00Z');
+  assert.equal(f.call({action:'rekap_bulanan_tersimpan',month:'2026-07'}).status,'success');
+  assert.equal(f.call({action:'publikasikan_wrap_bulanan',month:'2026-07',snapshotId:saved.draft.snapshotId,confirmed:true,adminKey:wrapKey}).status,'success');
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Baru';
+  assert.equal(saveWrap(f).status,'success');assert.equal(sheet.rows[1][1],'2026-07');
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].nama,f.scope.nama);
+});
+test('unreadable draft can be manually repaired even when source revision is unchanged',()=>{
+  const f=fixture();payrollFixture(f);confirmRecap(f);saveWrap(f);
+  f.master.getSheetByName('REKAP_WRAP_SNAPSHOT').rows[1][5]='broken';
+  const loaded=f.call({action:'rekap_bulanan_tersimpan',month:'2026-07'});
+  assert.equal(loaded.status,'success');assert.equal(loaded.processed,false);assert.match(loaded.warning,/Proses Rekap/);assert.equal(loaded.publication.version,1);
+  const repaired=f.call({action:'proses_wrap_bulanan',month:'2026-07',adminKey:wrapKey});
+  assert.equal(repaired.status,'success',repaired.message);assert.equal(repaired.data.processed,true);
+});
 function saveWrap(f, month='2026-07') {
   f.properties.set('WRAP_ADMIN_KEY',wrapKey);
   const preview=f.call({action:'rekap_bulanan',month});
@@ -1060,7 +1142,7 @@ test('public serving reads only persisted snapshot, never live employee data or 
   f.context.monthlyRecap_=()=>{throw Error('Live scan forbidden');};
   f.context.DriveApp.getFileById=()=>{throw Error('Drive forbidden');};
   f.context.DriveApp.getFolderById=()=>{throw Error('Drive forbidden');};
-  f.context.SpreadsheetApp.openById=id=>{assert.equal(id,f.context.TARGET_SPREADSHEET_ID);return {getSheetByName:name=>{assert.equal(name,'REKAP_WRAP_SNAPSHOT');return f.master.getSheetByName(name);}};};
+  f.context.SpreadsheetApp.openById=id=>{assert.equal(id,f.context.TARGET_SPREADSHEET_ID);return {getSheetByName:name=>{assert.equal(name,'REKAP_WRAP_PUBLIK');return f.master.getSheetByName(name);}};};
   assert.deepEqual(f.call({action:'rekap_bulanan_publik'}),expected);
 });
 
@@ -1080,12 +1162,13 @@ test('snapshot chunking is formula-safe, validates checksums, and fails closed o
   const f=fixture();payrollFixture(f);confirmRecap(f);
   f.master.getSheetByName('Data_Pegawai').rows[1][1]='=HYPERLINK("https://invalid.test")'.repeat(2000);
   publishWrap(f);
-  const meta=JSON.parse(f.properties.get('WRAP_PUBLISHED_V1')), sheet=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT');
+  const meta=JSON.parse(f.properties.get('WRAP_PUBLISHED_V1')), sheet=f.master.getSheetByName(meta.sheet);
   assert.ok(meta.count>1);
   assert.ok(sheet.rows.slice(1).every(row=>row[5].startsWith('json:')&&row[5].length<=24005));
   sheet.rows[1][5]=sheet.rows[1][5].replace('HYPERLINK','HYPERLINX');
   const result=f.call({action:'rekap_bulanan_publik'});
   assert.equal(result.status,'error');assert.equal(result.employees,undefined);assert.match(result.message,/tersimpan belum dapat dibaca/);
+  const draft=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT');draft.rows[1][5]=draft.rows[1][5].replace('HYPERLINK','HYPERLINX');
   assert.equal(f.call({action:'publikasikan_wrap_bulanan',month:'2026-07',adminKey:wrapKey,confirmed:true,snapshotId:meta.snapshotId}).status,'error');
 });
 

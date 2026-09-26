@@ -1,13 +1,14 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { MonthlyRecap } from './monthly-recap.jsx';
+import { MyProfile } from './my-profile.jsx';
 import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
-import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
+import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, HelpCircle, MessageCircle, User, ChevronRight,
@@ -76,7 +77,6 @@ const normalizePegawai = (item) => {
     AtasanLangsung: normalized.atasanlangsung || normalized.atasan || '',
     JabatanAtasan: normalized.jabatanatasanlangsung || normalized.jabatanatasan || '',
     Foto_Pegawai: normalized.fotopegawai || normalized.foto || normalized.linkfoto || normalized.urlfoto || normalized.fotoprofil || normalized.photo || normalized.image || '',
-    PIN: normalized.pin || '',
     Tukin: normalized.tunjangankinerja || normalized.tukin || '',
     Akun_Role: normalized.akunrole || normalized.role || 'pegawai'
   };
@@ -89,7 +89,9 @@ const fetchPegawaiData = async (forceRefresh = false) => {
       try {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return { data: parsed, source: 'cache' };
+          const safe = parsed.map(normalizePegawai);
+          localStorage.setItem('cached_pegawai_json', JSON.stringify(safe));
+          return { data: safe, source: 'cache' };
         }
       } catch (e) {
         console.error(e);
@@ -1303,21 +1305,16 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
       return;
     }
 
-    let sheetPin = String(targetUser?.PIN || '').trim();
-    if (sheetPin.length > 0 && sheetPin.length < 6) {
-      sheetPin = sheetPin.padStart(6, '0'); 
-    }
-
-    if (sheetPin === pinToVerify || pinToVerify === '123456') {
-      setLoading(false);
-      onLoginSuccess(targetUser);
+    try {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'login_pegawai', nip: targetUser?.NIP, pin: pinToVerify });
+      if (!result.sessionToken || !result.user) throw Error('Backend login perlu diperbarui. Hubungi pengelola.');
+      onLoginSuccess({ ...result.user, sessionToken: result.sessionToken });
       navigate('rekap');
-    } else {
-      setLoading(false);
-      setMessage({ type: 'error', text: 'PIN salah. Silakan coba kembali.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
       setPinDigits(['', '', '', '', '', '']);
       setTimeout(() => document.getElementById('pin-box-0')?.focus(), 50);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleNipSubmit = async (e) => {
@@ -2960,7 +2957,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   return { render, reset };
 };
 
-export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, currentView, activeStep }) => {
+export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   
   const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
@@ -3016,6 +3013,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
       case 'arsip-surat-tugas': return 'spt';
       case 'arsip-surat-cuti': return 'cuti';
       case 'rekap': return 'rekap';
+      case 'profil-saya': return 'profil-saya';
       default: return 'rekap';
     }
   };
@@ -3373,7 +3371,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
         </div>
       )}
 
-      <aside className="w-full md:w-72 bg-[#091522] border-r border-white/5 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
+      <aside className="w-full md:w-72 bg-[#084C61] border-r border-white/10 flex flex-col justify-between p-6 shrink-0 h-full overflow-y-auto">
         <div>
           <div className="mb-8">
             <div className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-1">Profil Pegawai</div>
@@ -3381,7 +3379,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
           </div>
           <div className="flex items-center gap-3 mb-8 p-3 rounded-2xl bg-white/5 border border-white/5">
             {loggedInUser?.Foto_Pegawai ? (
-              <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-10 h-10 rounded-full object-cover border border-teal-500/30" />
+              <EmployeePhoto src={loggedInUser.Foto_Pegawai} name={loggedInUser.Nama} className="w-10 h-10 shrink-0 rounded-full overflow-hidden border border-white/20" />
             ) : (
               <div className="w-10 h-10 rounded-full bg-teal-700 font-bold flex items-center justify-center text-white text-sm">
                 {loggedInUser?.Nama ? loggedInUser.Nama.charAt(0) : 'A'}
@@ -3394,6 +3392,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
           </div>
 
           <nav className="space-y-1">
+            <button onClick={() => handleTabClick('profil-saya')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'profil-saya' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`}><User size={16}/>Profil Saya</button>
             <button onClick={() => handleTabClick('rekap')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'rekap' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileBarChart size={16} /> Rekap Bulanan
             </button>
@@ -3423,7 +3422,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
 
       <main className={`flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full ${activeTab !== 'rekap' ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
         <div className={`w-full ${activeTab !== 'rekap' ? 'h-full min-h-0 flex flex-col' : ''}`}>
-          {activeTab === 'rekap' ? (
+          {activeTab === 'profil-saya' ? (
+            <div className="overflow-y-auto h-full"><MyProfile endpoint={APPS_SCRIPT_URL} user={loggedInUser} onUpdate={onProfileUpdate} onRelogin={() => navigate('login')}/></div>
+          ) : activeTab === 'rekap' ? (
             <MonthlyRecap endpoint={APPS_SCRIPT_URL} role={loggedInUser?.Akun_Role}/>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div className="flex flex-col h-full min-h-0">
@@ -4166,19 +4167,25 @@ export default function App() {
     localStorage.setItem('pkp_session', JSON.stringify({ user, timestamp: new Date().getTime() }));
     setSessionExpired(false);
   };
+  const handleProfileUpdate = user => {
+    const safe = { ...user }; delete safe.PIN;
+    setLoggedInUser(safe);
+    localStorage.setItem('pkp_session', JSON.stringify({ user: safe, timestamp: Date.now() }));
+    localStorage.removeItem('cached_pegawai_json');
+  };
 
   const currentView = routeData.view;
   const activeStep = routeData.step;
   const isPublicRecap = currentView === 'rekap-publik' || (currentView === 'rekap' && !loggedInUser);
-  const isDashboardView = !isPublicRecap && ['rekap', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
+  const isDashboardView = !isPublicRecap && ['rekap', 'profil-saya', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
 
   const renderView = () => {
     if (isPublicRecap) return <PublicRecapPage endpoint={APPS_SCRIPT_URL}/>;
     switch (currentView) {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
-      case 'rekap': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
+      case 'rekap': case 'profil-saya': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
         if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
-        return <UserDashboardView loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} navigate={navigate} currentView={currentView} activeStep={activeStep} />;
+        return <UserDashboardView loggedInUser={loggedInUser} onProfileUpdate={handleProfileUpdate} onLogoutRequest={() => setShowLogoutModal(true)} navigate={navigate} currentView={currentView} activeStep={activeStep} />;
       case 'profile': return <ProfileView navigate={navigate} />;
       case 'login': return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
       default: return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;

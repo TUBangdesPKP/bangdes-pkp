@@ -1,11 +1,13 @@
 # Rekap Kinerja & Kedisiplinan — satu bulan kalender
 
+> Alur terbaru: lihat [Profil Saya dan rekap manual](README-PROFIL-DAN-REKAP-MANUAL.md). Proses Rekap mengganti preview/simpan otomatis; draft bulan yang sama ditimpa dan publikasi mempunyai salinan terpisah.
+
 ## Perubahan
 
 - Halaman mengikuti bagian Ringkasan, Kehadiran, Per Unit, Juara, Catatan, dan Dinas dari contoh wrap. Tidak ada lembur.
-- Admin memilih bulan/tahun untuk preview → **Simpan Rekap** → pilih **Rekap tersimpan** → **Tampilkan ke Publik** → konfirmasi. Simpan tidak otomatis menerbitkan. Publik dan juara beranda membaca versi yang dipublikasikan, bukan data terbaru otomatis.
+- Admin memilih bulan/tahun → **Proses Rekap** → pilih **Rekap tersimpan** → **Publikasikan** → konfirmasi. Proses tidak otomatis menerbitkan. Publik dan juara beranda membaca versi yang dipublikasikan, bukan data terbaru otomatis.
 - Filter SubUnit mengikuti kolom `SubUnitKerja` di `Data_Pegawai`, bukan nama unit dari situs contoh. Filter berlaku pada statistik, peringkat, catatan, dan dinas.
-- Preview internal diperbarui setiap dua menit saat aktif, ditunda selama simpan/publikasi. Publik tidak melakukan polling; muat ulang hanya membaca snapshot terpublikasi. Saat gagal, hasil terakhir tetap terlihat dengan peringatan.
+- Tidak ada refresh otomatis pada admin maupun publik. Muat ulang hanya membaca hasil tersimpan. Data sumber dipindai setelah admin menekan Proses Rekap.
 - Header publik selebar browser memakai logo PKP lokal, judul Direktorat, dan tautan kembali, tanpa banner beranda/judul ganda. Background solid mencegah tumpukan konten saat digulir.
 
 ## Sumber dan ketepatan data

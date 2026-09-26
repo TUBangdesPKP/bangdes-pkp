@@ -8,8 +8,6 @@ let fail=false, count=0, sequence=0, published=null;
 const drafts=new Map();
 const publication=()=>({version:1,drafts:[...drafts.values()].map(item=>item.meta),published});
 const nativeTimeout=window.setTimeout.bind(window);
-// Accelerate only the recap's 2-minute timer in this local fixture.
-window.setTimeout=(callback,ms,...args)=>nativeTimeout(callback,ms===120000?4000:ms,...args);
 window.fetch = async (url,options) => {
   if(url!=='/mock-monthly') throw Error('Network disabled in fixture');
   const payload=JSON.parse(options.body);
@@ -17,22 +15,23 @@ window.fetch = async (url,options) => {
   await new Promise(resolve=>nativeTimeout(resolve,500));
   if(fail)return new Response('Service unavailable',{status:503});
   const month=payload.month||'2026-08', rows=['2026-08','2025-12'].includes(month)?employees:[];
-  if(['simpan_wrap_bulanan','publikasikan_wrap_bulanan'].includes(payload.action)) {
+  const data={status:'success',publicView:true,wrapVersion:2,month,months:['2026-08','2025-12'],units:['Subbagian Tata Usaha','Subdirektorat Uji'],coverage:{submitted:rows.length,available:rows.length},updatedAt:new Date().toISOString(),employees:rows,daily:rows.map(person=>({unit:person.unit,tanggal:`${month}-03`,status:'WFO',libur:false,hadir:true,arrival:person.avgArrival})),documents:[]};
+  if(['proses_wrap_bulanan','publikasikan_wrap_bulanan'].includes(payload.action)) {
     if(payload.adminKey!=='fixture-key')return Response.json({status:'error',message:'Kunci simulasi salah'});
-    if(payload.action==='simpan_wrap_bulanan'){
-      const meta={snapshotId:`test-${++sequence}`,month,savedAt:new Date().toISOString(),employees:rows.length};drafts.set(month,{meta});
-      return Response.json({status:'success',draft:meta,publication:publication()});
+    if(payload.action==='proses_wrap_bulanan'){
+      const meta={snapshotId:`test-${++sequence}`,month,savedAt:new Date().toISOString(),employees:rows.length};drafts.set(month,{meta,data:structuredClone(data)});
+      return Response.json({status:'success',draft:meta,publication:publication(),data:{...data,publication:publication()}});
     }
     const draft=drafts.get(month);
     if(!payload.confirmed||draft?.meta.snapshotId!==payload.snapshotId)return Response.json({status:'error',message:'Versi berubah'});
     published={...draft.meta,publishedAt:new Date().toISOString()};
     return Response.json({status:'success',publication:publication()});
   }
-  return Response.json({status:'success',wrapVersion:2,previewRevision:`revision-${rows.length}`,publication:publication(),month,months:['2026-08','2025-12'],units:['Subbagian Tata Usaha','Subdirektorat Uji'],coverage:{submitted:rows.length,available:rows.length},updatedAt:new Date().toISOString(),employees:rows,daily:rows.flatMap(person=>Array.from({length:6},(_,i)=>({nip:person.nip,tanggal:`${month}-${String(3+i).padStart(2,'0')}`,status:'WFO',libur:false,hadir:true,arrival:person.avgArrival}))),documents:rows.length?[{nip:'2',type:'spt',id:'test',tujuan:'Kota Uji'}]:[]});
+  return Response.json({...data,employees:[],daily:[],...drafts.get(month)?.data,publication:publication()});
 };
 export function Fixture(){
   const [request,setRequest]=useState(''),[role,setRole]=useState('super_admin');
   useEffect(()=>{const update=event=>setRequest(event.detail);window.addEventListener('wrap-request',update);return()=>window.removeEventListener('wrap-request',update);},[]);
-  return <main className="p-4 md:p-6 bg-slate-50"><div className="text-xs mb-3 space-y-2"><p>SIMULASI LOKAL — angka buatan, tanpa akses Drive. Interval uji 4 detik. Kunci uji: fixture-key.</p><div className="flex flex-wrap gap-3"><label><input type="checkbox" onChange={event=>{fail=event.target.checked;}}/> Simulasikan server gagal</label><button onClick={()=>{if(!employees.some(row=>row.nip==='baru'))employees.push({...employees[0],nip:'baru',nama:'Pegawai Baru Uji'});}}>Tambahkan data masuk</button><label>Peran uji <select value={role} onChange={event=>setRole(event.target.value)}><option value="super_admin">Super Admin</option><option value="admin">Admin</option><option value="pegawai">Pegawai</option></select></label></div><output aria-label="Permintaan rekap">{request}</output></div><MonthlyRecap endpoint="/mock-monthly" role={role}/></main>;
+  return <main className="p-4 md:p-6 bg-slate-50"><div className="text-xs mb-3 space-y-2"><p>SIMULASI LOKAL — angka buatan, tanpa akses Drive. Tidak ada refresh otomatis. Kunci uji: fixture-key.</p><div className="flex flex-wrap gap-3"><label><input type="checkbox" onChange={event=>{fail=event.target.checked;}}/> Simulasikan server gagal</label><button onClick={()=>{if(!employees.some(row=>row.nip==='baru'))employees.push({...employees[0],nip:'baru',nama:'Pegawai Baru Uji'});}}>Tambahkan data masuk</button><label>Peran uji <select value={role} onChange={event=>setRole(event.target.value)}><option value="super_admin">Super Admin</option><option value="admin">Admin</option><option value="pegawai">Pegawai</option></select></label></div><output aria-label="Permintaan rekap">{request}</output></div><MonthlyRecap endpoint="/mock-monthly" role={role}/></main>;
 }
 createRoot(document.getElementById('root')).render(<Fixture/>);

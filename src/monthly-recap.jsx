@@ -32,7 +32,7 @@ function PunctualCard({ row, index }) {
 }
 
 export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
-  const wrapper = useRef(null), header = useRef(null), busyRef = useRef(false);
+  const wrapper = useRef(null), header = useRef(null);
   const [month, setMonth] = useState(''), [unit, setUnit] = useState('');
   const [data, setData] = useState(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [reload, setReload] = useState(0);
   const [activeSection, setActiveSection] = useState('ringkasan');
@@ -47,29 +47,23 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
     return () => observer.disconnect();
   }, [publicView]);
   useEffect(() => {
-    let cancelled = false, inFlight = false, timer, lastAttempt = 0;
+    let cancelled = false;
     async function refresh() {
-      if (cancelled || inFlight) return;
-      clearTimeout(timer);
-      if (busyRef.current || (!publicView && document.visibilityState === 'hidden')) { if (!publicView) timer = setTimeout(refresh, 120000); return; }
-      inFlight = true; lastAttempt = Date.now(); setLoading(true);
+      setLoading(true);
       try {
-        const result = await sendClaimRequest(endpoint, publicView ? { action: 'rekap_bulanan_publik' } : { action: 'rekap_bulanan', month }, fetch, { timeoutMs: 120000 });
+        const result = await sendClaimRequest(endpoint, publicView ? { action: 'rekap_bulanan_publik' } : { action: 'rekap_bulanan_tersimpan', month }, fetch, { timeoutMs: 120000 });
         if (result.wrapVersion !== 2 || !Array.isArray(result.employees) || !Array.isArray(result.months)) throw Error('Deploy backend terbaru untuk mengaktifkan rekap satu bulan kalender.');
         if (publicView && (result.publicView !== true || result.publicationVersion !== 1 || typeof result.published !== 'boolean')) throw Error('Backend publikasi rekap belum diperbarui. Hubungi admin; data langsung tidak ditampilkan sebagai rekap tersimpan.');
         if (!cancelled) { setData(result); setError(''); }
       } catch (err) { if (!cancelled) setError(err.message); }
       finally {
-        inFlight = false;
-        if (!cancelled) { setLoading(false); if (!publicView) timer = setTimeout(refresh, 120000); }
+        if (!cancelled) setLoading(false);
       }
     }
-    const onVisible = () => { if (document.visibilityState !== 'hidden' && Date.now() - lastAttempt >= 120000) refresh(); };
     refresh();
-    if (!publicView) { document.addEventListener('visibilitychange', onVisible); window.addEventListener('focus', onVisible); }
-    return () => { cancelled = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible); };
+    return () => { cancelled = true; };
   }, [endpoint, month, reload, publicView]);
-  const view = useMemo(() => monthlyView(data, unit, publicView), [data, unit, publicView]);
+  const view = useMemo(() => monthlyView(data, unit, data?.publicView || publicView), [data, unit, publicView]);
   const { rows, units, chosenUnit, documents, trips, days, dailyWfo, earliest, discipline, punctual, destinations, groups, top } = view;
   const todayParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
   const todayMonth = `${todayParts.find(part => part.type === 'year').value}-${todayParts.find(part => part.type === 'month').value}`;
@@ -82,8 +76,7 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
   const updated = data?.updatedAt ? new Date(data.updatedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' }) : '';
   const visibleGroups = groups.filter(group => !chosenUnit || group.name === chosenUnit);
   const countPeople = total(visibleGroups.map(group => ({ count: group.people.length })), 'count');
-  const setPublicationBusy = value => { busyRef.current = value; setBusy(value); };
-  const savePublication = publication => setData(current => current ? { ...current, publication } : current);
+  const savePublication = result => setData(current => result.data || (current ? { ...current, publication: result.publication } : current));
   const periodControls = <>
     {canChoosePeriod ? <>
       <label className="sr-only" htmlFor="wrap-month">Bulan rekap</label><select id="wrap-month" disabled={busy} value={selectedNumber} onChange={event => chooseMonth(`${selectedYear}-${event.target.value}`)} className="border rounded-lg p-2 bg-white">{Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(value => <option key={value} value={value}>{monthLabel(`2026-${value}`).replace(' 2026', '')}</option>)}</select>
@@ -109,23 +102,24 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
       </div>
     </header>
     {loading && !data && <p role="status" className="p-8 text-slate-500">Memuat rekap bulanan...</p>}
-    {error && <div role="alert" className="bg-amber-50 text-amber-900 rounded-xl p-4 my-4 text-sm max-w-7xl mx-auto">{error}{data && <p className="mt-1">Hasil terakhir tetap ditampilkan. {publicView ? 'Gunakan tombol muat ulang untuk mencoba lagi.' : 'Pembaruan akan dicoba kembali.'}</p>}</div>}
-    {canChoosePeriod && <WrapPublication endpoint={endpoint} data={data} month={selectedMonth} loading={loading} onBusy={setPublicationBusy} onSaved={savePublication}/>}
+    {error && <div role="alert" className="bg-amber-50 text-amber-900 rounded-xl p-4 my-4 text-sm max-w-7xl mx-auto">{error}{data && <p className="mt-1">Hasil terakhir tetap ditampilkan. Gunakan tombol muat ulang untuk mencoba lagi.</p>}</div>}
+    {canChoosePeriod && <WrapPublication endpoint={endpoint} data={data} month={selectedMonth} loading={loading} onBusy={setBusy} onSaved={savePublication}/>}
+    {!publicView && data?.warning && <p role="alert" className="p-4 my-4 rounded-xl bg-amber-50 text-amber-900 text-sm">{data.warning}</p>}
     {data && publicView && !data.published && <p role="status" className="max-w-7xl mx-auto p-12 text-center text-slate-500">Belum ada rekap yang dipublikasikan oleh admin.</p>}
     {data && (!publicView || data.published) && <>
       <section id="rekap-ringkasan" className={`scroll-mt-48 bg-gradient-to-br from-[#204E6C] via-[#183B52] to-[#0A2235] text-white ${publicView ? '' : 'rounded-b-3xl'}`}>
         <div className="max-w-7xl mx-auto px-6 py-10 md:p-12">
         <span className="inline-flex items-center gap-2 text-[11px] tracking-wider uppercase font-bold rounded-full bg-[#C4B391] text-[#17394F] px-4 py-2"><Sparkles size={14}/>{monthLabel(data.month)} WRAP</span>
         <h2 className="text-4xl md:text-5xl leading-tight font-extrabold mt-6">Rekap {monthLabel(data.month)}<br/><span className="text-[#C4B391]">{rows.length ? 'sudah tersedia!' : 'menunggu data'}</span></h2>
-        <p className="text-slate-200 text-sm md:text-base max-w-xl mt-5">Melihat kembali kehadiran dan kedisiplinan sepanjang {monthLabel(data.month)}. {chosenUnit || 'Seluruh SubUnit Kerja'}.</p>
+        <p className="text-slate-200 text-sm md:text-base max-w-xl mt-5">Melihat kembali kehadiran dan kedisiplinan Direktorat Pembangunan Perumahan Perdesaan sepanjang {monthLabel(data.month)}.</p>
         <div className="grid sm:grid-cols-3 gap-4 mt-8">{[[Users, number(rows.length), 'Pegawai dengan rekap'], [Calendar, number(days.length), 'Hari kerja tercatat'], [CheckCircle2, ratio(total(rows, 'masuk'), total(rows, 'hariKerja')), 'Tingkat kehadiran']].map(([Icon, value, label]) => <div key={label} className="border border-white/20 bg-white/10 rounded-2xl p-5"><Icon className="bg-white/10 rounded-xl p-2" size={40}/><strong className="block text-4xl font-bold mt-3">{value}</strong><span className="text-xs text-slate-200">{label}</span></div>)}</div>
         <p className="text-xs text-slate-300 mt-5">Rasio kehadiran = masuk WFO/WFA/WFH ÷ hari kerja (termasuk Dinas, Cuti, dan TB; tanpa Libur). Jumlah pegawai mengikuti rekap yang sudah tersedia, bukan seluruh pegawai aktif.</p>
         </div>
       </section>
       <div className={publicView ? 'max-w-7xl mx-auto px-4 md:px-6 py-12' : ''}>
-      {!publicView && <div className="flex flex-wrap justify-between gap-2 py-4 text-xs text-slate-500" aria-live="polite"><span>{loading ? 'Memperbarui data…' : `Diperbarui ${updated || 'baru saja'}${updated ? ' WIB' : ''}`}</span><span>Preview diperbarui setiap 2 menit; rekap publik hanya berubah setelah publikasi admin.</span></div>}
+      {!publicView && <div className="flex flex-wrap justify-between gap-2 py-4 text-xs text-slate-500" aria-live="polite"><span>{updated ? `Diproses ${updated} WIB` : 'Belum diproses'}</span><span>Gunakan Proses Rekap untuk memperbarui hasil. Halaman publik berubah setelah Publikasikan.</span></div>}
       {!publicView && <div className="bg-cyan-50 border border-cyan-100 rounded-xl p-4 text-xs text-[#1C465F] mb-8" role="status">
-        Rekap sementara: {coverage.available || 0} dari {coverage.submitted || 0} submisi bulan ini sudah dapat dibaca. Data bertambah saat rekap pegawai disimpan.
+        Hasil proses: {coverage.available || 0} dari {coverage.submitted || 0} submisi bulan ini sudah dapat dibaca. Proses kembali untuk menyertakan data baru.
         {coverage.pending > 0 && <span> {coverage.pending} menunggu konfirmasi/perhitungan ulang.</span>}
         {coverage.unavailable > 0 && <span> {coverage.unavailable} file belum dapat dibaca; data pegawai lainnya tetap ditampilkan.</span>}
         {coverage.incomplete > 0 && <span> {coverage.incomplete} rekap memiliki tanggal belum lengkap dan belum masuk peringkat.</span>}

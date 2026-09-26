@@ -186,6 +186,7 @@ function doGet(e) {
       if (!row || row.every(cell => cell === '')) continue;
       const item = {};
       for (let j = 0; j < headers.length; j++) {
+        if (payrollHeader_(headers[j]) === 'pin') continue;
         item[headers[j]] = row[j] !== undefined ? row[j].toString().trim() : '';
       }
       data.push(item);
@@ -726,7 +727,15 @@ function legacyPnsPlan_() {
   return {items:items,errors:errors,revision:digest_(items),ready:errors.length===0};
 }
 function previewMigrasiFolderPNS2026() {
-  var plan=legacyPnsPlan_();Logger.log(JSON.stringify(plan));return plan;
+  var plan=legacyPnsPlan_();
+  // Separate short entries keep the revision visible even for large folder lists.
+  Logger.log('revision: ' + plan.revision);
+  Logger.log('ready: ' + plan.ready);
+  Logger.log('jumlah item: ' + plan.items.length);
+  Logger.log('jumlah error: ' + plan.errors.length);
+  plan.errors.forEach(function(error,index) { Logger.log('ERROR ' + (index+1) + ': ' + JSON.stringify(error)); });
+  plan.items.forEach(function(item,index) { Logger.log('FOLDER ' + (index+1) + ': ' + JSON.stringify(item)); });
+  return plan;
 }
 function jalankanMigrasiFolderPNS2026() {
   var lock=LockService.getScriptLock(), report={moved:[],already:[],failed:[]};
@@ -965,9 +974,15 @@ function doPost(e) {
     var payload = JSON.parse(e.postData.contents);
     // Read-only wrap requests must not hold the write lock while opening employee files.
     if (payload.action === 'rekap_bulanan') return json_(monthlyWrapPreview_(payload));
+    if (payload.action === 'rekap_bulanan_tersimpan') return json_(savedMonthlyWrap_(payload));
     if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
     if (payload.action === 'simpan_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
+    if (payload.action === 'proses_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     lock.waitLock(30000);
+    if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
+    if (payload.action === 'profil_saya') return json_({status:'success',user:profileUser_(requireProfileSession_(payload))});
+    if (payload.action === 'ubah_foto_profil') return json_(updateProfilePhoto_(payload));
+    if (payload.action === 'ubah_pin') return json_(updateProfilePin_(payload));
     if (payload.action === 'publikasikan_wrap_bulanan') return json_(publishWrapSnapshot_(payload));
     if (payload.action === 'proses_bukti') {
       var trace = text_(payload.requestId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -996,6 +1011,86 @@ function doPost(e) {
     return json_({ status: 'error', message: error.message });
   }
   finally { if (lock.hasLock()) lock.releaseLock(); }
+}
+
+// Profile mutations authenticate the owner on the server, independently of browser role/NIP.
+var PROFILE_PHOTO_FOLDER_ID = '1DuhZWVr_T929P6mDac6SqLftUkZK5zEH';
+function employeeAccount_(nip) {
+  var sheet=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('Data_Pegawai');
+  if(!sheet)throw new Error('Data pegawai tidak tersedia.');
+  var rows=sheet.getDataRange().getValues(), headers=(rows[0]||[]).map(payrollHeader_), col=headers.indexOf('nip');
+  if(col<0||headers[4]!=='pin')throw new Error('Periksa header NIP dan kolom E PIN pada Data_Pegawai.');
+  var matches=[];
+  rows.slice(1).forEach(function(row,i){if(nip_(row[col])===nip)matches.push({sheet:sheet,row:i+2,values:row,headers:headers,nip:nip});});
+  if(matches.length!==1)throw new Error('Akun pegawai tidak tersedia atau NIP tidak unik.');
+  return matches[0];
+}
+function accountPin_(account) {
+  var value=text_(account.values[4]).replace(/^'/,'');
+  return /^\d{1,6}$/.test(value)?('000000'+value).slice(-6):'';
+}
+function profileUser_(account) {
+  function field(names){for(var i=0;i<names.length;i++){var c=account.headers.indexOf(names[i]);if(c>=0)return text_(account.values[c]);}return '';}
+  return {NIP:account.nip,Nama:field(['nama']),Jabatan:field(['jabatan']),SubUnitKerja:field(['subunitkerja','subunit']),
+    Foto_Pegawai:text_(account.values[43]),Akun_Role:field(['akunrole','role'])||'pegawai',KelasJabatan:field(['kelasjabatan','kelas']),
+    EmailDinas:field(['emaildinas','email']),AtasanLangsung:field(['atasanlangsung','atasan']),JabatanAtasan:field(['jabatanatasanlangsung','jabatanatasan']),Tukin:field(['tunjangankinerja','tukin'])};
+}
+function checkProfilePin_(account,pin) {
+  var props=PropertiesService.getScriptProperties(), key='PROFILE_ATTEMPTS_'+digest_(account.nip), now=Date.now();
+  var attempts=JSON.parse(props.getProperty(key)||'{"count":0,"until":0}');
+  if(attempts.until<=now)attempts={count:0,until:now+15*60*1000};
+  if(attempts.count>=5)throw new Error('Terlalu banyak percobaan PIN. Coba lagi setelah 15 menit.');
+  if(!/^\d{6}$/.test(String(pin||''))||!accountPin_(account)||digest_(String(pin))!==digest_(accountPin_(account))){
+    attempts.count++;props.setProperty(key,JSON.stringify(attempts));throw new Error('PIN salah.');
+  }
+  props.deleteProperty(key);
+}
+function loginEmployee_(payload) {
+  var account=employeeAccount_(nip_(payload.nip));
+  checkProfilePin_(account,payload.pin);
+  var token=Utilities.getUuid()+Utilities.getUuid();
+  CacheService.getScriptCache().put('profile:'+digest_(token),JSON.stringify({nip:account.nip,pinHash:digest_(accountPin_(account)),expires:Date.now()+30*60*1000}),1800);
+  return {status:'success',user:profileUser_(account),sessionToken:token};
+}
+function requireProfileSession_(payload) {
+  var token=String(payload.sessionToken||'');
+  if(!token||token.length>200)throw new Error('Sesi profil berakhir. Silakan login kembali.');
+  var raw=CacheService.getScriptCache().get('profile:'+digest_(token));
+  if(!raw)throw new Error('Sesi profil berakhir. Silakan login kembali.');
+  var session=JSON.parse(raw), account=employeeAccount_(session.nip);
+  if(session.expires<Date.now()||session.pinHash!==digest_(accountPin_(account))||(payload.nip&&nip_(payload.nip)!==account.nip))throw new Error('Sesi profil tidak valid. Silakan login kembali.');
+  return account;
+}
+function updateProfilePin_(payload) {
+  var account=requireProfileSession_(payload);
+  checkProfilePin_(account,payload.oldPin);
+  if(!/^\d{6}$/.test(String(payload.newPin||'')))throw new Error('PIN baru harus 6 angka.');
+  if(payload.newPin!==payload.confirmPin)throw new Error('Konfirmasi PIN baru tidak sama.');
+  if(payload.newPin===accountPin_(account))throw new Error('PIN baru harus berbeda dari PIN lama.');
+  account.sheet.getRange(account.row,5).setNumberFormat('@').setValue(payload.newPin);
+  SpreadsheetApp.flush();
+  CacheService.getScriptCache().remove('profile:'+digest_(payload.sessionToken));
+  // Other sessions fail the stored PIN fingerprint check after this update.
+  return {status:'success',message:'PIN diperbarui. Silakan login kembali dengan PIN baru.'};
+}
+function updateProfilePhoto_(payload) {
+  var account=requireProfileSession_(payload), encoded=String(payload.fileBase64||'');
+  if(['fotopegawai','foto','fotoprofil','linkfoto','urlfoto','photo','image'].indexOf(account.headers[43])<0)throw new Error('Periksa header kolom AR untuk foto pegawai.');
+  if(encoded.length>2800000||!encoded||!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error('Foto harus JPG/PNG, maksimal 2 MB.');
+  var bytes=Utilities.base64Decode(encoded), octets=Array.prototype.map.call(bytes,function(b){return (b+256)%256;});
+  var png=octets.slice(0,8).join(',')==='137,80,78,71,13,10,26,10', jpg=octets[0]===255&&octets[1]===216&&octets[2]===255;
+  if(bytes.length>2*1024*1024||(!png&&!jpg))throw new Error('Foto harus JPG/PNG, maksimal 2 MB.');
+  var photo=DriveApp.getFolderById(PROFILE_PHOTO_FOLDER_ID).createFile(Utilities.newBlob(bytes,png?'image/png':'image/jpeg','Profil_'+account.nip+'_'+Utilities.getUuid()+(png?'.png':'.jpg')));
+  try {
+    photo.setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);
+    account.sheet.getRange(account.row,44).setNumberFormat('@').setValue(photo.getUrl());
+    SpreadsheetApp.flush();
+  } catch(error) {
+    account.sheet.getRange(account.row,44).setValue(account.values[43]||'');
+    photo.setTrashed(true);throw error;
+  }
+  account.values[43]=photo.getUrl();
+  return {status:'success',user:profileUser_(account)};
 }
 
 // Tab 4: preview from saved tab-2 data; only the final confirmation writes V6:V.
@@ -1689,8 +1784,8 @@ function publicWrapData_(result) {
     daily:Object.keys(daily).map(function(key){return daily[key];}),documents:Object.keys(documents).map(function(key){return documents[key];})};
 }
 
-// Immutable public-safe snapshots. Draft and published pointers are separate:
-// saving another draft cannot silently change the data already shown to the public.
+// Replaceable monthly drafts and separately persisted public-safe publication.
+// Processing a draft never silently changes the currently published data.
 var WRAP_SNAPSHOT_SHEET = 'REKAP_WRAP_SNAPSHOT';
 var WRAP_SNAPSHOT_HEADERS = ['SnapshotId','Bulan','Disimpan','Bagian','JumlahBagian','DataJSON'];
 var WRAP_PUBLISHED_PROPERTY = 'WRAP_PUBLISHED_V1';
@@ -1730,18 +1825,19 @@ function monthlyWrapPreview_(payload) {
   result.publication=wrapCatalog_();
   return result;
 }
-function wrapSnapshotSheet_(create) {
-  var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet=book.getSheetByName(WRAP_SNAPSHOT_SHEET);
-  if(!sheet&&create){sheet=book.insertSheet(WRAP_SNAPSHOT_SHEET);sheet.appendRow(WRAP_SNAPSHOT_HEADERS);sheet.setFrozenRows(1);}
+function wrapSnapshotSheet_(create, name) {
+  name=name||WRAP_SNAPSHOT_SHEET;
+  var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet=book.getSheetByName(name);
+  if(!sheet&&create){sheet=book.insertSheet(name);sheet.appendRow(WRAP_SNAPSHOT_HEADERS);sheet.setFrozenRows(1);}
   if(sheet&&JSON.stringify(sheet.getRange(1,1,1,6).getValues()[0])!==JSON.stringify(WRAP_SNAPSHOT_HEADERS)) throw new Error('Header REKAP_WRAP_SNAPSHOT tidak sesuai.');
   return sheet;
 }
 function readWrapSnapshot_(meta) {
-  var sheet=wrapSnapshotSheet_(false);
+  var sheet=wrapSnapshotSheet_(false,meta&&meta.sheet);
   if(!sheet||!meta||!Number.isInteger(meta.row)||meta.row<2||!Number.isInteger(meta.count)||meta.count<1||meta.count>100) throw new Error('Snapshot rekap tidak tersedia.');
   var parts=sheet.getRange(meta.row,1,meta.count,6).getValues();
   var encoded=parts.map(function(row,i){
-    if(row[0]!==meta.snapshotId||row[1]!==meta.month||Number(row[3])!==i+1||Number(row[4])!==meta.count) throw new Error('Bagian snapshot rekap tidak lengkap.');
+    if(text_(row[0])!==meta.snapshotId||wrapStoredMonth_(row[1])!==meta.month||Number(row[3])!==i+1||Number(row[4])!==meta.count) throw new Error('Bagian snapshot rekap tidak lengkap.');
     if(typeof row[5]!=='string'||row[5].indexOf('json:')!==0) throw new Error('Format bagian snapshot tidak sesuai.');
     return row[5].slice(5);
   }).join('');
@@ -1749,37 +1845,74 @@ function readWrapSnapshot_(meta) {
   if(digest_(data)!==meta.checksum||data.publicView!==true||data.month!==meta.month||!Array.isArray(data.employees)) throw new Error('Integritas snapshot rekap tidak sesuai.');
   return data;
 }
+function wrapStoredMonth_(value) {
+  // Existing Sheets may have coerced yyyy-mm to a date. New writes use plain text.
+  return Object.prototype.toString.call(value)==='[object Date]'
+    ? Utilities.formatDate(value,SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSpreadsheetTimeZone(),'yyyy-MM-dd').slice(0,7)
+    : text_(value).replace(/^'/,'');
+}
+function savedMonthlyWrap_(payload) {
+  var catalog=wrapCatalog_(), month=payload.month?wrapMonth_(payload.month):(catalog.drafts[0]||{}).month||Utilities.formatDate(new Date(),'Asia/Jakarta','yyyy-MM-dd').slice(0,7);
+  var meta=wrapMeta_(WRAP_DRAFT_PREFIX+month);
+  var data={status:'success',publicView:true,wrapVersion:2,month:month,units:[],employees:[],daily:[],documents:[]}, warning='';
+  if(meta){try{data=readWrapSnapshot_(meta);}catch(error){warning='Rekap tersimpan belum dapat dibaca. Gunakan Proses Rekap untuk memperbaiki bulan ini.';}}
+  return Object.assign({},data,{months:catalog.drafts.map(function(d){return d.month;}),publication:catalog,processed:!!meta&&!warning,warning:warning});
+}
+function writeWrapSnapshot_(data, meta, sheetName, row) {
+  var sheet=wrapSnapshotSheet_(true,sheetName), encoded=JSON.stringify(data), parts=[];
+  for(var i=0;i<encoded.length;i+=24000)parts.push(encoded.slice(i,i+24000));
+  if(parts.length>100)throw new Error('Snapshot melebihi batas ukuran rekap.');
+  meta=Object.assign({},meta,{sheet:sheetName,row:row||sheet.getLastRow()+1,count:parts.length,checksum:digest_(data)});
+  var last=meta.row+meta.count-1;
+  if(last>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),last-sheet.getMaxRows());
+  sheet.getRange(meta.row,1,meta.count,6).setNumberFormat('@').setValues(parts.map(function(part,index){return [meta.snapshotId,meta.month,meta.savedAt,index+1,meta.count,'json:'+part];}));
+  SpreadsheetApp.flush();
+  readWrapSnapshot_(meta);
+  return meta;
+}
+function preservePublishedWrap_() {
+  var active=wrapMeta_(WRAP_PUBLISHED_PROPERTY);
+  if(active&&!active.sheet){
+    active=writeWrapSnapshot_(readWrapSnapshot_(active),active,'REKAP_WRAP_PUBLIK');
+    wrapProperties_().setProperty(WRAP_PUBLISHED_PROPERTY,JSON.stringify(active));
+  }
+}
 function saveWrapSnapshot_(payload) {
   requireWrapAdmin_(payload);
   var month=wrapMonth_(payload.month);
-  if(!text_(payload.previewRevision)) throw new Error('Muat preview rekap sebelum menyimpan.');
+  if(payload.action!=='proses_wrap_bulanan'&&!text_(payload.previewRevision)) throw new Error('Muat preview rekap sebelum menyimpan.');
   // Compute server-side; do not accept browser-supplied employee/daily data.
   var source=monthlyRecap_({month:month}), data=publicWrapData_(source);
   if(!data.employees.length) throw new Error('Belum ada rekap yang dapat disimpan pada bulan ini.');
   var revision=wrapPreviewRevision_(data);
-  if(revision!==payload.previewRevision) throw new Error('Data sumber berubah sejak preview. Muat ulang rekap, periksa, lalu simpan kembali.');
+  if(payload.action!=='proses_wrap_bulanan'&&revision!==payload.previewRevision) throw new Error('Data sumber berubah sejak preview. Muat ulang rekap, periksa, lalu simpan kembali.');
   var lock=LockService.getScriptLock();
   try {
     lock.waitLock(30000);
     var old=wrapMeta_(WRAP_DRAFT_PREFIX+month);
     if(old&&old.revision===revision) {
-      readWrapSnapshot_(old);
-      return {status:'success',draft:wrapMetaView_(old),publication:wrapCatalog_()};
+      var readable=true;
+      try{readWrapSnapshot_(old);}catch(error){if(payload.action!=='proses_wrap_bulanan')throw error;readable=false;}
+      if(readable)return {status:'success',draft:wrapMetaView_(old),publication:wrapCatalog_(),data:savedMonthlyWrap_({month:month})};
     }
-    var sheet=wrapSnapshotSheet_(true), encoded=JSON.stringify(data), parts=[];
-    // A Sheets cell is limited to 50k characters. Keep each chunk safely below it.
-    for(var i=0;i<encoded.length;i+=24000)parts.push(encoded.slice(i,i+24000));
-    if(parts.length>100)throw new Error('Snapshot melebihi batas ukuran rekap.');
-    var meta={snapshotId:Utilities.getUuid(),month:month,savedAt:new Date().toISOString(),row:sheet.getLastRow()+1,
-      count:parts.length,checksum:digest_(data),revision:revision,employees:data.employees.length};
-    var last=meta.row+meta.count-1;
-    if(last>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),last-sheet.getMaxRows());
-    // Prefix every chunk so untrusted text at a chunk boundary cannot become a Sheets formula.
-    sheet.getRange(meta.row,1,meta.count,6).setValues(parts.map(function(part,index){return [meta.snapshotId,month,meta.savedAt,index+1,meta.count,'json:'+part];}));
-    SpreadsheetApp.flush();
-    readWrapSnapshot_(meta); // Move the draft pointer only after the entire snapshot is verifiable.
-    wrapProperties_().setProperty(WRAP_DRAFT_PREFIX+month,JSON.stringify(meta));
-    return {status:'success',draft:wrapMetaView_(meta),publication:wrapCatalog_()};
+    preservePublishedWrap_();
+    var sheet=wrapSnapshotSheet_(true), previous=sheet.getDataRange().getValues();
+    var matching=[];
+    previous.slice(1).forEach(function(row,index){if(wrapStoredMonth_(row[1])===month)matching.push(index+2);});
+    var count=Math.ceil(JSON.stringify(data).length/24000), start=matching[0]||sheet.getLastRow()+1;
+    // Reuse the month's contiguous slots; stage at the end if the new result grows.
+    if(!Array.from({length:count},function(_,i){return start+i;}).every(function(row){return matching.indexOf(row)>=0||row>sheet.getLastRow();}))start=sheet.getLastRow()+1;
+    var meta;
+    try {
+      meta=writeWrapSnapshot_(data,{snapshotId:Utilities.getUuid(),month:month,savedAt:new Date().toISOString(),revision:revision,employees:data.employees.length},WRAP_SNAPSHOT_SHEET,start);
+      wrapProperties_().setProperty(WRAP_DRAFT_PREFIX+month,JSON.stringify(meta));
+    } catch(error) {
+      // A failed verification must leave the previous saved month usable.
+      if(previous.length>1)sheet.getRange(2,1,previous.length-1,6).setValues(previous.slice(1));
+      throw error;
+    }
+    matching.forEach(function(row){if(row<meta.row||row>=meta.row+meta.count)sheet.getRange(row,1,1,6).setValues([['','','','','','']]);});
+    return {status:'success',draft:wrapMetaView_(meta),publication:wrapCatalog_(),data:savedMonthlyWrap_({month:month})};
   } finally { if(lock.hasLock())lock.releaseLock(); }
 }
 function publishWrapSnapshot_(payload) {
@@ -1787,11 +1920,13 @@ function publishWrapSnapshot_(payload) {
   var month=wrapMonth_(payload.month), meta=wrapMeta_(WRAP_DRAFT_PREFIX+month);
   if(payload.confirmed!==true)throw new Error('Konfirmasi menampilkan rekap ke publik diperlukan.');
   if(!meta||meta.snapshotId!==text_(payload.snapshotId))throw new Error('Versi tersimpan berubah atau tidak tersedia. Muat ulang status rekap sebelum publikasi.');
-  readWrapSnapshot_(meta);
+  var data=readWrapSnapshot_(meta);
   var active=wrapMeta_(WRAP_PUBLISHED_PROPERTY);
   if(!active||active.snapshotId!==meta.snapshotId){
-    meta=Object.assign({},meta,{publishedAt:new Date().toISOString()});
+    meta=writeWrapSnapshot_(data,Object.assign({},meta,{publishedAt:new Date().toISOString()}),'REKAP_WRAP_PUBLIK');
     wrapProperties_().setProperty(WRAP_PUBLISHED_PROPERTY,JSON.stringify(meta));
+    var sheet=wrapSnapshotSheet_(false,'REKAP_WRAP_PUBLIK');
+    sheet.getDataRange().getValues().slice(1).forEach(function(row,index){if(row[0]&&row[0]!==meta.snapshotId)sheet.getRange(index+2,1,1,6).setValues([['','','','','','']]);});
   }
   return {status:'success',publication:wrapCatalog_()};
 }
