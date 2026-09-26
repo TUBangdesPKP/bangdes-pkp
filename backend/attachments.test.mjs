@@ -8,6 +8,7 @@ const sourceCode = fs.readFileSync(new URL('./Code.gs', import.meta.url), 'utf8'
 
 function fixture() {
   const files = new Map(), folders = new Map(), books = new Map();
+  const properties = new Map();
   let sequence = 0;
   const iterator = values => { let i = 0; return { hasNext: () => i < values.length, next: () => values[i++] }; };
   class Sheet {
@@ -67,6 +68,8 @@ function fixture() {
   class Folder {
     constructor(id, name, parent) { Object.assign(this, { id, name, parent }); folders.set(id, this); }
     getId() { return this.id; } getUrl() { return `https://drive.google.com/drive/folders/${this.id}`; } isTrashed() { return false; }
+    getName() { return this.name; }
+    moveTo(parent) { this.parent=parent; return this; }
     getParents() { return iterator(this.parent ? [this.parent] : []); }
     getFoldersByName(name) { return iterator([...folders.values()].filter(f => f.parent === this && f.name === name)); }
     createFolder(name) { return new Folder(`folder_created_${++sequence}`, name, this); }
@@ -79,6 +82,7 @@ function fixture() {
     console, Logger: { log() {} },
     ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: text => ({ setMimeType() { return this; }, getContent: () => text }) },
     LockService: { getScriptLock: () => ({ waitLock: () => { locked = true; }, hasLock: () => locked, releaseLock: () => { locked = false; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: key => properties.get(key) ?? null, setProperty(key,value) { properties.set(key,String(value)); return this; }, getProperties: () => Object.fromEntries(properties) }) },
     DriveApp: { getFolderById: id => { if (!folders.has(id)) throw Error('No folder'); return folders.get(id); }, getFileById: id => { if (!files.has(id)) throw Error('No file'); return files.get(id); }, Access: {}, Permission: {} },
     SpreadsheetApp: { flush() {}, openById: id => { if (!books.has(id)) throw Error('No spreadsheet'); return books.get(id); } },
     Utilities: { DigestAlgorithm: {SHA_256:'sha256'}, computeDigest: (algorithm, value) => [...crypto.createHash(algorithm).update(value).digest()], getUuid: () => `uuid_${++sequence}`, formatDate: (date, timeZone, format) => format === 'yyyy-MM-dd' ? new Intl.DateTimeFormat('en-CA', {timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date) : '19/09/2026 10:00:00', base64Decode: data => Buffer.from(data, 'base64'), newBlob: (data, mime, name) => ({ data, mime, name }) },
@@ -118,14 +122,29 @@ function fixture() {
     ];
   }
   const call = payload => JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...scope, ...payload }) } }).getContent());
-  return { context, master, files, folders, books, Book, File, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
+  return { context, properties, master, files, folders, books, Book, File, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
+}
+
+const wrapKey = 'local-test-key-only-1234567890';
+function saveWrap(f, month='2026-07') {
+  f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  const preview=f.call({action:'rekap_bulanan',month});
+  assert.equal(preview.status,'success',preview.message);
+  return f.call({action:'simpan_wrap_bulanan',month,adminKey:wrapKey,previewRevision:preview.previewRevision});
+}
+function publishWrap(f, month='2026-07') {
+  const saved=saveWrap(f,month);
+  assert.equal(saved.status,'success',saved.message);
+  const published=f.call({action:'publikasikan_wrap_bulanan',month,adminKey:wrapKey,snapshotId:saved.draft.snapshotId,confirmed:true});
+  assert.equal(published.status,'success',published.message);
+  return saved;
 }
 
 test('health probe returns deployment version without reading employee data or changing files', () => {
   const f=fixture(), count=f.files.size;
   const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
   assert.equal(response.status,'success');
-  assert.equal(response.backendVersion,'2026-09-26-calendar-wrap');
+  assert.equal(response.backendVersion,'2026-09-26-published-wrap');
   assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
 });
 
@@ -601,7 +620,7 @@ test('final confirmation persists schedule, flags, master results and a single t
     assert.equal(call({action:'preview_rekap_final'}).rows[2].jamKerja,'ramadan');
     assert.equal(f.working.rows[7][5],'v'); assert.equal(f.working.rows[7][15],'v');
     assert.equal(f.working.rows[5][14],'v'); assert.equal(f.working.rows[5][15],'');
-    const note=f.files.get(save.note.fileId); assert.equal(note.parent,f.destination); assert.match(note.content,/2026-07-06/);
+    const note=f.files.get(save.note.fileId); assert.equal(note.parent,f.destination); assert.doesNotMatch(note.content,/Pada tanggal 2026-07-06/);
     const master=f.master.getSheetByName(modul==='tukin'?'REKAP_TUKIN':'REKAP_UANG_MAKAN');
     assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Hari_Masuk')],3);
     const count=f.files.size;
@@ -690,6 +709,84 @@ test('extra upload rejects invalid types/files, foreign scope, and reused remove
   assert.equal(f.files.size,before);
   const a=uploadExtra(f); f.call({action:'hapus_pendukung',fileId:a.document.fileId});
   assert.equal(uploadExtra(f).status,'error');
+});
+
+test('letters count without clock edits in both modules, without changing attendance or payment', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f=fixture(); payrollFixture(f);
+    const before=confirmRecap(f,{}, {modul});
+    const doc=uploadExtra(f,{modul}).document;
+    uploadExtra(f,{modul,jenisDokumen:'tugas_belajar',requestId:'tb'});
+    const result=confirmRecap(f,{}, {modul});
+    assert.equal(result.status,'success',result.message);
+    const t=result.calculation.totals;
+    assert.equal(t.adjustmentDocuments,1);assert.equal(t.adjustmentDocumentsUnclaimed,1);
+    assert.equal(t.adjustmentReported,1);assert.equal(t.adjusted,0);assert.equal(t.unadjusted,0);
+    assert.equal(t.masuk,before.calculation.totals.masuk);
+    assert.deepEqual(result.calculation.amount,before.calculation.amount);
+    const master=f.master.getSheetByName(modul==='tukin'?'REKAP_TUKIN':'REKAP_UANG_MAKAN');
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Adjustment_Tercatat')],1);
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Surat_Lupa_Absen')],1);
+    assert.equal(f.call({action:'hapus_pendukung',fileId:doc.fileId,modul}).status,'success');
+    assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Adjustment_Tercatat')],'');
+    assert.equal(confirmRecap(f,{}, {modul}).calculation.totals.adjustmentReported,0);
+  }
+});
+
+test('missing punches remain penalized even when a letter is uploaded without a clock correction', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[7][4]='-';
+  const before=confirmRecap(f);
+  uploadExtra(f);
+  const result=confirmRecap(f), t=result.calculation.totals;
+  assert.equal(result.status,'success',result.message);
+  assert.equal(t.adjustmentReported,1);assert.equal(t.adjusted,0);assert.equal(t.unadjusted,2);
+  assert.equal(t.masuk,before.calculation.totals.masuk);
+  assert.deepEqual(result.calculation.amount,before.calculation.amount);
+  const day=result.calculation.days.find(row=>row.tanggal==='2026-07-06');
+  assert.equal(day.potongan,2.5);assert.equal(day.menitTanpaPresensi,480);
+  assert.match(f.files.get(result.note.fileId).content,/Tidak Absen datang dan pulang/);
+});
+
+test('one letter for multiple corrections is not double counted; only active scoped letters reach wrap', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[8][3]='-';
+  const used=uploadExtra(f).document;
+  uploadExtra(f,{requestId:'unclaimed'});
+  const removed=uploadExtra(f,{requestId:'removed'}).document;
+  f.call({action:'hapus_pendukung',fileId:removed.fileId});
+  uploadExtra(f,{modul:'tukin',requestId:'other-module'});
+  const corrections=Object.fromEntries(['2026-07-06','2026-07-07'].map(date=>[date,{datang:{fileId:used.fileId,time:'07:30'}}]));
+  const result=confirmRecap(f,corrections), t=result.calculation.totals;
+  assert.equal(result.status,'success',result.message);
+  assert.equal(t.adjustmentDocuments,2);assert.equal(t.adjustmentDocumentsUsed,1);
+  assert.equal(t.adjustmentDocumentsUnclaimed,1);assert.equal(t.adjusted,2);assert.equal(t.adjustmentReported,3);
+  assert.equal(confirmRecap(f,corrections).calculation.totals.adjustmentReported,3);
+  const live=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(live.employees[0].adjustmentReported,3);
+  assert.equal(f.call({action:'rekap_bulanan',month:'2026-08'}).employees.length,0);
+  publishWrap(f);
+  const published=f.call({action:'rekap_bulanan_publik'});
+  assert.equal(published.employees[0].adjustmentReported,3);
+  assert.equal(published.employees[0].adjustmentDocuments,2);
+  assert.equal(JSON.stringify(published).includes(used.fileId),false);
+});
+
+test('calculation notes list only dates with TL, PSW or missing punches', () => {
+  const f=fixture();payrollFixture(f);
+  const dateRows=[
+    ['2026-07-06','WFO','07:30','16:00'], ['2026-07-07','WFA','08:00','16:30'],
+    ['2026-07-08','WFO','09:00','17:00'], ['2026-07-09','WFH','07:30','15:30'],
+    ['2026-07-10','WFO','-','17:00'], ['2026-07-11','Libur','-','-'],
+    ['2026-07-13','Dinas','-','-'], ['2026-07-14','Cuti','-','-'], ['2026-07-15','TB','-','-'],
+  ];
+  f.working.rows=Array.from({length:5},()=>[]).concat(dateRows.map(([date,status,arrival,departure],i)=>{
+    const row=Array(22).fill('');row[0]=i+1;row[2]=date;row[3]=arrival;row[4]=departure;row[21]=status;return row;
+  }),[['TOTAL']]);
+  const result=confirmRecap(f);assert.equal(result.status,'success',result.message);
+  const note=f.files.get(result.note.fileId).content;
+  const dates=[...note.matchAll(/Pada tanggal (\d{4}-\d{2}-\d{2})/g)].map(match=>match[1]);
+  assert.deepEqual(dates,['2026-07-08','2026-07-09','2026-07-10']);
+  assert.match(note,/TL 1/);assert.match(note,/PSW 1/);assert.match(note,/Tidak Absen datang/);
+  assert.match(note,/RINGKASAN/);assert.match(note,/Diterima:/);
 });
 test('one correction of two missing punches earns a meal, retains other penalty, persists audit and monthly counts', () => {
   const f=fixture(); payrollFixture(f); f.working.rows[7][3]='-'; f.working.rows[7][4]='-';
@@ -824,10 +921,11 @@ test('manual clock tampering remains rejected even when a valid correction exist
   assert.match(f.call({action:'preview_rekap_final'}).message,/Tanggal\/jam/);
 });
 
-test('public recap is read-only and excludes NIP, payroll, photo, source IDs, and individual daily records', () => {
+test('published recap is read-only and excludes NIP, payroll, source IDs, and individual daily records', () => {
   const f=fixture();payrollFixture(f);
   f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()});
   assert.equal(confirmRecap(f).status,'success');
+  publishWrap(f);
   const before=JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])), files=f.files.size;
   const report=f.call({action:'rekap_bulanan_publik',month:'2026-07'});
   assert.equal(report.status,'success',report.message);assert.equal(report.publicView,true);
@@ -838,13 +936,14 @@ test('public recap is read-only and excludes NIP, payroll, photo, source IDs, an
   assert.equal(JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])),before);
   assert.equal(f.files.size,files);
 });
-test('public recap handles empty months without creating sheets and keeps validation', () => {
+test('public recap is unpublished without creating sheets and ignores caller month/module', () => {
   const f=fixture(), count=f.master.sheets.size;
   const result=f.call({action:'rekap_bulanan_publik',month:'2026-08'});
   assert.equal(result.status,'success');assert.deepEqual(result.employees,[]);assert.deepEqual(result.daily,[]);
   assert.equal(f.master.sheets.size,count);
-  assert.equal(f.call({action:'rekap_bulanan_publik',modul:'invalid'}).status,'error');
-  assert.equal(f.call({action:'rekap_bulanan_publik',month:'2026-99'}).status,'error');
+  assert.equal(result.published,false);assert.equal(result.publicationVersion,1);
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik',modul:'invalid'}),result);
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik',month:'2026-99'}),result);
 });
 
 test('wrap reads actual clocks, all work modes, flexi boundaries and full calendar coverage', () => {
@@ -880,6 +979,7 @@ test('wrap keeps healthy employees while another source fails; retry includes ne
   other[1]='999999';other[2]='Pegawai Baru';other[9]='missing_file_999';sheet.appendRow(other);
   let result=f.call({action:'rekap_bulanan',month:'2026-07'});
   assert.equal(result.employees.length,1);assert.equal(result.coverage.unavailable,1);assert.equal(result.coverage.submitted,2);
+  publishWrap(f);
   const pub=f.call({action:'rekap_bulanan_publik',month:'2026-07'});
   assert.equal(pub.coverage.unavailable,1);assert.equal(pub.issues,undefined);assert.equal(JSON.stringify(pub).includes('999999'),false);
   sheet.rows[2][9]=f.spreadsheet.id;
@@ -901,4 +1001,187 @@ test('wrap validates full-month ranges including leap years and gets SubUnit opt
   const result=f.call({action:'rekap_bulanan',month:'2026-07'});
   assert.deepEqual(result.units,['Unit A','Unit B']);assert.equal(result.coverage.pending,1);
   assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
+});
+
+test('snapshot writes require a configured secret, never a browser role or login PIN', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);
+  const before=JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows]));
+  for(const action of ['simpan_wrap_bulanan','publikasikan_wrap_bulanan']) {
+    assert.match(f.call({action,month:'2026-07',role:'super_admin',confirmed:true}).message,/WRAP_ADMIN_KEY/);
+    f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+    assert.match(f.call({action,month:'2026-07',role:'super_admin',adminKey:'wrong',confirmed:true}).message,/tidak valid/);
+    f.properties.delete('WRAP_ADMIN_KEY');
+  }
+  assert.equal(JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])),before);
+});
+
+test('saving is idempotent, stores only server data, and does not publish a draft', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);
+  const a=saveWrap(f);assert.equal(a.status,'success',a.message);
+  const snapshot=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT'), count=snapshot.rows.length;
+  const b=saveWrap(f);assert.equal(b.draft.snapshotId,a.draft.snapshotId);assert.equal(snapshot.rows.length,count);
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).published,false);
+  const preview=f.call({action:'rekap_bulanan',month:'2026-07'});
+  const c=f.call({action:'simpan_wrap_bulanan',month:'2026-07',adminKey:wrapKey,previewRevision:preview.previewRevision,employees:[{nama:'FORGED'}]});
+  assert.equal(c.status,'success');assert.equal(JSON.stringify(snapshot.rows).includes('FORGED'),false);
+  assert.equal(JSON.stringify(snapshot.rows).includes('6349000'),false);
+  assert.equal(JSON.stringify(preview).includes(wrapKey),false);
+  assert.equal(a.publication.drafts.length,1);assert.equal(a.publication.published,null);
+});
+
+test('stale preview and empty month cannot overwrite a saved snapshot', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);const saved=saveWrap(f);
+  const preview=f.call({action:'rekap_bulanan',month:'2026-07'});
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Nama Baru';
+  assert.match(f.call({action:'simpan_wrap_bulanan',month:'2026-07',adminKey:wrapKey,previewRevision:preview.previewRevision}).message,/berubah sejak preview/);
+  assert.match(saveWrap(f,'2026-08').message,/Belum ada rekap/);
+  assert.equal(f.context.wrapCatalog_().drafts[0].snapshotId,saved.draft.snapshotId);
+});
+
+test('published snapshot is pinned across fresh source data, later drafts and public month arguments', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);const first=publishWrap(f);
+  const original=f.call({action:'rekap_bulanan_publik'});
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Nama Baru';
+  const second=saveWrap(f);assert.notEqual(second.draft.snapshotId,first.draft.snapshotId);
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik',month:'2026-08'}),original);
+  const publish={action:'publikasikan_wrap_bulanan',month:'2026-07',snapshotId:second.draft.snapshotId,adminKey:wrapKey};
+  assert.match(f.call(publish).message,/Konfirmasi/);
+  assert.match(f.call({...publish,confirmed:true,snapshotId:first.draft.snapshotId}).message,/Versi tersimpan berubah/);
+  assert.equal(f.call({...publish,confirmed:true}).status,'success');
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].nama,'Nama Baru');
+  const active=f.properties.get('WRAP_PUBLISHED_V1');
+  assert.equal(f.call({...publish,confirmed:true}).status,'success');
+  assert.equal(f.properties.get('WRAP_PUBLISHED_V1'),active);
+});
+
+test('public serving reads only persisted snapshot, never live employee data or Drive', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);publishWrap(f);
+  const expected=f.call({action:'rekap_bulanan_publik'});
+  f.context.monthlyRecap_=()=>{throw Error('Live scan forbidden');};
+  f.context.DriveApp.getFileById=()=>{throw Error('Drive forbidden');};
+  f.context.DriveApp.getFolderById=()=>{throw Error('Drive forbidden');};
+  f.context.SpreadsheetApp.openById=id=>{assert.equal(id,f.context.TARGET_SPREADSHEET_ID);return {getSheetByName:name=>{assert.equal(name,'REKAP_WRAP_SNAPSHOT');return f.master.getSheetByName(name);}};};
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik'}),expected);
+});
+
+test('admin can publish an older saved month even when live source is unavailable', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);const july=publishWrap(f);
+  const source=f.context.monthlyRecap_({month:'2026-07'});
+  f.context.monthlyRecap_=({month})=>({...source,month,months:[month]});
+  const august=publishWrap(f,'2026-08');
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).month,'2026-08');
+  f.context.monthlyRecap_=()=>{throw Error('Live source not available');};
+  assert.equal(f.call({action:'publikasikan_wrap_bulanan',month:'2026-07',adminKey:wrapKey,confirmed:true,snapshotId:july.draft.snapshotId}).status,'success');
+  assert.equal(f.call({action:'rekap_bulanan_publik',month:august.draft.month}).month,'2026-07');
+  assert.equal(f.context.wrapCatalog_().drafts.length,2);
+});
+
+test('snapshot chunking is formula-safe, validates checksums, and fails closed on corruption', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='=HYPERLINK("https://invalid.test")'.repeat(2000);
+  publishWrap(f);
+  const meta=JSON.parse(f.properties.get('WRAP_PUBLISHED_V1')), sheet=f.master.getSheetByName('REKAP_WRAP_SNAPSHOT');
+  assert.ok(meta.count>1);
+  assert.ok(sheet.rows.slice(1).every(row=>row[5].startsWith('json:')&&row[5].length<=24005));
+  sheet.rows[1][5]=sheet.rows[1][5].replace('HYPERLINK','HYPERLINX');
+  const result=f.call({action:'rekap_bulanan_publik'});
+  assert.equal(result.status,'error');assert.equal(result.employees,undefined);assert.match(result.message,/tersimpan belum dapat dibaca/);
+  assert.equal(f.call({action:'publikasikan_wrap_bulanan',month:'2026-07',adminKey:wrapKey,confirmed:true,snapshotId:meta.snapshotId}).status,'error');
+});
+
+test('failed snapshot append never changes the published or draft pointers', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);publishWrap(f);
+  const before=Object.fromEntries(f.properties);
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Changed';
+  f.context.SpreadsheetApp.flush=()=>{throw Error('Sheet write failure');};
+  assert.equal(saveWrap(f).status,'error');
+  assert.deepEqual(Object.fromEntries(f.properties),before);
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].nama,f.scope.nama);
+});
+
+test('public podium accepts only the configured profile thumbnail URL, no arbitrary image source', () => {
+  const f=fixture();
+  const data={month:'2026-07',employees:[{nip:'private',nama:'Uji',unit:'A',photo:'https://lh3.googleusercontent.com/d/profile_test_123=s200'},{nip:'other',nama:'Other',unit:'A',photo:'javascript:alert(1)'}],daily:[],documents:[],units:['A']};
+  const safe=f.context.publicWrapData_(data);
+  assert.equal(safe.employees[0].photo,data.employees[0].photo);
+  assert.equal(safe.employees[1].photo,'');assert.equal(safe.employees[0].nip,'public-0');
+});
+
+test('new submissions use authoritative Jenis_ASN; old registered folders keep their IDs', () => {
+  for(const type of ['PNS','PPPK'])for(const modul of ['uang-makan','tukin']){
+    const f=fixture(), table=f.master.getSheetByName('Data_Pegawai');
+    table.rows[0]=Array.from({length:8},(_,i)=>table.rows[0][i]||'');table.rows[1]=Array.from({length:8},(_,i)=>table.rows[1][i]||'');
+    table.rows[0][7]='Jenis_ASN';table.rows[1][7]=type;
+    const old=f.context.resolvePresensiFolder_({...f.scope,modul});assert.equal(old.getId(),f.destination.id);
+    const period=modul==='uang-makan'?'01-08-2026 s/d 31-08-2026':'11-08-2026 s/d 10-09-2026';
+    const created=f.context.resolvePresensiFolder_({...f.scope,modul,periode:period,bulanTahun:'Agustus 2026',jenisAsn:type==='PNS'?'PPPK':'PNS'});
+    assert.equal(created.getName(),'Nama Khusus Pegawai');assert.equal(created.parent.getName(),type);
+    assert.equal(created.parent.parent.getName(),modul==='uang-makan'?'Uang Makan_08_Agustus':'Tunjangan Kinerja_10_Oktober');
+  }
+});
+
+test('unknown or ambiguous Jenis_ASN fails before creating any folder', () => {
+  const f=fixture(), count=f.folders.size;
+  const input={...f.scope,periode:'01-08-2026 s/d 31-08-2026',bulanTahun:'Agustus 2026'};
+  assert.throws(()=>f.context.resolvePresensiFolder_(input),/Jenis_ASN/);
+  const sheet=f.master.getSheetByName('Data_Pegawai');sheet.rows[0][7]='Jenis_ASN';sheet.rows[1][7]='UNKNOWN';
+  assert.throws(()=>f.context.resolvePresensiFolder_(input),/PNS atau PPPK/);
+  sheet.rows[1][7]='PNS';sheet.rows.push([...sheet.rows[1]]);
+  assert.throws(()=>f.context.resolvePresensiFolder_(input),/tepat satu/);
+  assert.equal(f.folders.size,count);
+});
+
+function legacyFolderFixture(){
+  const f=fixture(), root=f.folders.get(f.context.ROOT_FOLDER_ID), records=[];
+  const employee=f.master.getSheetByName('Data_Pegawai');employee.rows[0][7]='Jenis_ASN';employee.rows[1][7]='PNS';
+  for(const [modul,category,periodName,period] of [
+    ['uang-makan','BUKTI_UANG_MAKAN','Uang Makan_08_Agustus','01-08-2026 s/d 31-08-2026'],
+    ['tukin','BUKTI_TUNJANGAN_KINERJA','Tunjangan Kinerja_10_Oktober','11-08-2026 s/d 10-09-2026'],
+  ]){
+    const parent=root.createFolder(category).createFolder(periodName), folder=parent.createFolder('Pegawai Contoh');
+    const file=new f.File(`legacy_sheet_${modul}`, 'Rekap',folder,'application/vnd.google-apps.spreadsheet');
+    const sheet=f.master.getSheetByName(modul==='tukin'?'REKAP_TUKIN':'REKAP_UANG_MAKAN');
+    sheet.rows.push(['timestamp',f.scope.nip,f.scope.nama,period,'','','','',folder.getUrl(),file.id]);
+    records.push({modul,folder,file,parent});
+  }
+  return {...f,records};
+}
+
+test('PNS migration dry run is read-only; execution preserves every existing ID, link and master row', () => {
+  const f=legacyFolderFixture(), before=JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])), count=f.folders.size;
+  const plan=f.context.previewMigrasiFolderPNS2026();
+  assert.equal(plan.ready,true,JSON.stringify(plan.errors));assert.equal(plan.items.length,2);assert.equal(f.folders.size,count);
+  assert.throws(()=>f.context.jalankanMigrasiFolderPNS2026(),/MIGRASI_PNS_2026_REVISI/);
+  assert.equal(f.folders.size,count);
+  f.properties.set('MIGRASI_PNS_2026_REVISI',plan.revision);
+  const moved=f.context.jalankanMigrasiFolderPNS2026();assert.equal(moved.moved.length,2);assert.equal(moved.failed.length,0);
+  f.records.forEach(({folder,file,parent})=>{assert.equal(folder.parent.getName(),'PNS');assert.equal(folder.parent.parent,parent);assert.equal(file.parent,folder);assert.equal(file.trashed,false);});
+  assert.equal(JSON.stringify([...f.master.sheets].map(([name,sheet])=>[name,sheet.rows])),before);
+  assert.equal(f.context.jalankanMigrasiFolderPNS2026().already.length,2);
+  assert.equal(f.call({action:'jalankanMigrasiFolderPNS2026'}).status,'error');
+});
+
+test('migration blocks PPPK, duplicate destinations, unrelated periods and foreign folders', () => {
+  for(const issue of ['type','collision','shared','foreign']){
+    const f=legacyFolderFixture(), record=f.records[0];
+    if(issue==='type')f.master.getSheetByName('Data_Pegawai').rows[1][7]='PPPK';
+    if(issue==='collision')record.parent.createFolder('PNS').createFolder(record.folder.getName());
+    if(issue==='shared') {const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN'), row=[...sheet.rows.at(-1)];row[3]='01-09-2026 s/d 30-09-2026';sheet.rows.push(row);}
+    if(issue==='foreign')record.folder.parent=f.otherDestination;
+    const plan=f.context.previewMigrasiFolderPNS2026();assert.equal(plan.ready,false,issue);assert.ok(plan.errors.length>0);
+    f.properties.set('MIGRASI_PNS_2026_REVISI',plan.revision);
+    assert.throws(()=>f.context.jalankanMigrasiFolderPNS2026(),/belum aman/);
+    assert.equal(f.records[1].folder.parent,f.records[1].parent);
+  }
+});
+
+test('partial migration can be re-previewed and resumed without duplicating moved folders', () => {
+  const f=legacyFolderFixture(), failed=f.records[1].folder, normal=failed.moveTo;
+  failed.moveTo=()=>{throw Error('Temporary Drive error');};
+  f.properties.set('MIGRASI_PNS_2026_REVISI',f.context.previewMigrasiFolderPNS2026().revision);
+  const first=f.context.jalankanMigrasiFolderPNS2026();assert.equal(first.moved.length,1);assert.equal(first.failed.length,1);
+  failed.moveTo=normal;
+  assert.throws(()=>f.context.jalankanMigrasiFolderPNS2026(),/MIGRASI_PNS_2026_REVISI/);
+  f.properties.set('MIGRASI_PNS_2026_REVISI',f.context.previewMigrasiFolderPNS2026().revision);
+  const second=f.context.jalankanMigrasiFolderPNS2026();assert.equal(second.moved.length,1);assert.equal(second.already.length,1);
 });

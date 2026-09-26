@@ -25,6 +25,16 @@ test('missing arrival cannot be treated as midnight or replaced by departure', (
   const view=monthlyView({employees:[person('a')],daily:[{nip:'a',hadir:true,arrival:null,pulang:1000}]});
   assert.equal(view.earliest,null);assert.equal(clock(view.earliest),'—');
 });
+
+test('recap separates missing punches from document-aware adjustments, preserving old snapshots', () => {
+  const employees=[person('letter',{adjusted:0,adjustmentReported:2,unadjusted:0}),person('missing',{adjusted:0,adjustmentReported:0,unadjusted:3}),person('old',{adjusted:1,unadjusted:0})];
+  for(const publicView of [false,true]) {
+    const view=monthlyView({employees},'',publicView);
+    assert.deepEqual(view.top('adjustmentReported').map(row=>[row.nip,row.adjustmentReported]),[['letter',2],['old',1]]);
+    assert.deepEqual(view.top('unadjusted').map(row=>row.nip),['missing']);
+  }
+  assert.equal(employees[2].adjustmentReported,undefined); // Never mutate saved source data.
+});
 test('period controls recognize only admin and superadmin role variants', () => {
   for(const role of ['admin','Super Admin','super_admin','super-admin','Super Administrator'])assert.equal(isRecapAdmin(role),true);
   for(const role of ['',null,'pegawai','notadmin'])assert.equal(isRecapAdmin(role),false);

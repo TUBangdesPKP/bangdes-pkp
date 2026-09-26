@@ -135,6 +135,7 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone }) {
   const calc = result.calculation;
   if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">Perbarui backend lalu lakukan perhitungan kembali di tab 4.<button onClick={onBack} className="block mt-3 underline">Kembali ke tab 4</button></div>;
   const { totals: t, amount: a } = calc, tukin = calc.modul === 'tukin';
+  const reportedAdjustments = t.adjustmentReported ?? t.adjusted ?? 0;
   return <section ref={top} aria-label={'Hasil perhitungan ' + moduleLabel} className="space-y-4 max-w-6xl mx-auto">
     <header className="bg-[#0E5B73] text-white rounded-2xl px-5 py-4"><h2 className="font-extrabold text-lg">{result.nama}</h2><p className="text-sm mt-1">NIP {result.nip}</p><p className="text-sm">{calc.jabatan || 'Jabatan belum tersedia'}</p><p className="text-xs mt-2 text-cyan-100">{result.periode} · {moduleLabel}</p></header>
     {!!calc.warnings?.length && <div role="alert" className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-sm text-amber-900"><strong>Perlu penyesuaian sebelum nominal ditetapkan</strong><ul className="list-disc pl-5 mt-2 space-y-1">{calc.warnings.map(w => <li key={w}>{w}</li>)}</ul></div>}
@@ -151,7 +152,12 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone }) {
         <div className="flex justify-between gap-3 items-center py-2"><strong className="text-sm">{tukin ? 'Tunjangan' : 'Uang Makan'} diterima</strong><strong className="text-xl text-[#0E5B73]">{rupiah(a.netto)}</strong></div>
       </div>
       <div className="space-y-4">
-        <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><AlertCircle size={18}/>Catatan Perbaikan Diri</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.flexi} label="Datang Flexi (hari)"/><SummaryStat value={t.terlambat} label="Terlambat (hari)"/><SummaryStat value={t.psw} label="Pulang Sebelum Waktunya (hari)"/><div className="rounded-2xl border border-slate-300 bg-white p-3 text-center text-xs space-y-2"><strong className="text-xl">{t.lupaAbsen ?? 0}</strong><p>Lupa Absen (kejadian)</p><p>{t.adjusted ?? 0} Adjustment Sistem</p><p>{t.unadjusted ?? 0} Tidak Absen</p>{tukin && Object.entries(t.adjustmentMonths || {}).map(([month,count]) => <p key={month} className="text-teal-700">{month}: {count} adjustment</p>)}</div></div></div>
+        <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><AlertCircle size={18}/>Catatan Perbaikan Diri</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.flexi} label="Datang Flexi (hari)"/><SummaryStat value={t.terlambat} label="Terlambat (hari)"/><SummaryStat value={t.psw} label="Pulang Sebelum Waktunya (hari)"/><div className="rounded-2xl border border-slate-300 bg-white p-3 text-center text-xs space-y-2">
+          <strong className="text-xl">{reportedAdjustments}</strong><p>Lupa Absen dengan Adjustment</p>
+          <p className="font-semibold text-red-700">{t.unadjusted ?? 0} Tidak Absen (kejadian)</p>
+          {t.adjustmentDocuments !== undefined && <p className="text-slate-600">{t.adjustmentDocuments} surat diunggah · {t.adjusted ?? 0} koreksi jam<br/>{t.adjustmentDocumentsUnclaimed ?? 0} surat tanpa koreksi jam</p>}
+          {tukin && Object.entries(t.adjustmentMonths || {}).map(([month,count]) => <p key={month} className="text-teal-700">{month}: {count} koreksi jam</p>)}
+        </div></div><p className="text-xs text-slate-500 mt-3">Surat tanpa koreksi jam tetap dihitung sebagai adjustment. Jam yang masih “-” tetap dikenai potongan; unggah surat tidak otomatis mengubah jam atau nominal.</p></div>
         <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><Clock size={18}/>Kekurangan Jam Kerja</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.menitTelat} label="Terlambat (menit)"/><SummaryStat value={t.menitPsw} label="Pulang Awal (menit)"/><SummaryStat value={t.menitTanpaPresensi} label="Tidak Presensi (menit)"/><SummaryStat value={t.totalMenit} label="Total (menit)" danger/></div></div>
       </div>
     </div>

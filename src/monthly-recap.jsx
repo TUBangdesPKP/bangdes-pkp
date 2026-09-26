@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Users, Calendar, Clock, FileText, Plane, Trophy, CheckCircle2, RefreshCw, MapPin, Sparkles, Building2, TrendingUp, Sun } from 'lucide-react';
+import { Users, Calendar, Clock, FileText, Plane, Trophy, CheckCircle2, RefreshCw, MapPin, Sparkles, Building2, TrendingUp, Sun, ArrowLeft } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
 import { monthLabel, ratio, clock, total, occurrences, isRecapAdmin, monthlyView } from './monthly-recap-model.js';
+import { PkpLogo } from './pkp-logo.jsx';
+import { WrapPublication } from './wrap-publication.jsx';
+import { EmployeePhoto } from './employee-photo.jsx';
 
 const colors = ['#204E6C', '#BCAB88', '#74B9CA', '#476879', '#819C8A'];
 const dateLabel = value => value ? new Date(`${value}T12:00:00Z`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) : '—';
@@ -18,19 +21,29 @@ function LeaderList({ title, rows, metric, suffix = 'kali' }) {
   return <div className="rounded-2xl border bg-white overflow-hidden"><h3 className="bg-[#1C465F] text-white px-5 py-4 text-xs font-bold uppercase tracking-wide">{title}</h3><div className="p-5 space-y-4">{rows.length ? rows.map(row => <div key={row.nip} className="flex justify-between gap-4 text-xs border-b border-slate-100 pb-3"><span>{row.nama}<small className="block text-slate-500 mt-1">{row.unit}</small></span><strong className="shrink-0">{row[metric]} {suffix}</strong></div>) : <p className="text-xs text-slate-500">Tidak ada catatan.</p>}</div></div>;
 }
 
+function PunctualCard({ row, index }) {
+  return <article className="rounded-2xl overflow-hidden border bg-[#1C465F] text-white">
+    <div className="h-56 relative">
+      <EmployeePhoto src={row.photo} name={row.nama} className="h-full w-full"/>
+      <span className="absolute left-3 top-3 text-xs bg-white text-[#1C465F] rounded-full px-2 py-1 font-bold">#{index + 1}</span><span className="absolute right-3 top-3 bg-[#1C465F] rounded-full px-2 py-1 text-xs font-bold">{ratio(row.onTime, row.assessed)}</span>
+    </div>
+    <div className="p-4"><h4 className="text-sm font-bold min-h-10">{row.nama}</h4><p className="text-[10px] mt-2 text-cyan-100">{row.unit}</p><p className="text-xs mt-3">{row.onTime}/{row.assessed} hari tepat waktu</p><p className="text-xs mt-1 text-cyan-100">Rata-rata datang {clock(row.avgArrival)}</p></div>
+  </article>;
+}
+
 export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
-  const wrapper = useRef(null);
+  const wrapper = useRef(null), header = useRef(null), busyRef = useRef(false);
   const [month, setMonth] = useState(''), [unit, setUnit] = useState('');
   const [data, setData] = useState(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [reload, setReload] = useState(0);
   const [activeSection, setActiveSection] = useState('ringkasan');
+  const [busy, setBusy] = useState(false);
   const canChoosePeriod = !publicView && isRecapAdmin(role);
   useEffect(() => {
-    const siteHeader = publicView && document.querySelector('[data-site-header]');
-    if (!siteHeader) return;
-    const updateOffset = () => wrapper.current?.style.setProperty('--wrap-top', `${siteHeader.getBoundingClientRect().height}px`);
+    if (!header.current) return;
+    const updateOffset = () => wrapper.current?.style.setProperty('--wrap-scroll-offset', `${header.current.getBoundingClientRect().height + 20}px`);
     updateOffset();
     const observer = new ResizeObserver(updateOffset);
-    observer.observe(siteHeader);
+    observer.observe(header.current);
     return () => observer.disconnect();
   }, [publicView]);
   useEffect(() => {
@@ -38,22 +51,22 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
     async function refresh() {
       if (cancelled || inFlight) return;
       clearTimeout(timer);
-      if (document.visibilityState === 'hidden') { timer = setTimeout(refresh, 120000); return; }
+      if (busyRef.current || (!publicView && document.visibilityState === 'hidden')) { if (!publicView) timer = setTimeout(refresh, 120000); return; }
       inFlight = true; lastAttempt = Date.now(); setLoading(true);
       try {
-        const result = await sendClaimRequest(endpoint, { action: publicView ? 'rekap_bulanan_publik' : 'rekap_bulanan', month }, fetch, { timeoutMs: 120000 });
+        const result = await sendClaimRequest(endpoint, publicView ? { action: 'rekap_bulanan_publik' } : { action: 'rekap_bulanan', month }, fetch, { timeoutMs: 120000 });
         if (result.wrapVersion !== 2 || !Array.isArray(result.employees) || !Array.isArray(result.months)) throw Error('Deploy backend terbaru untuk mengaktifkan rekap satu bulan kalender.');
-        if (publicView && result.publicView !== true) throw Error('Respons rekap publik tidak sesuai. Perbarui deployment backend.');
+        if (publicView && (result.publicView !== true || result.publicationVersion !== 1 || typeof result.published !== 'boolean')) throw Error('Backend publikasi rekap belum diperbarui. Hubungi admin; data langsung tidak ditampilkan sebagai rekap tersimpan.');
         if (!cancelled) { setData(result); setError(''); }
       } catch (err) { if (!cancelled) setError(err.message); }
       finally {
         inFlight = false;
-        if (!cancelled) { setLoading(false); timer = setTimeout(refresh, 120000); }
+        if (!cancelled) { setLoading(false); if (!publicView) timer = setTimeout(refresh, 120000); }
       }
     }
     const onVisible = () => { if (document.visibilityState !== 'hidden' && Date.now() - lastAttempt >= 120000) refresh(); };
     refresh();
-    document.addEventListener('visibilitychange', onVisible); window.addEventListener('focus', onVisible);
+    if (!publicView) { document.addEventListener('visibilitychange', onVisible); window.addEventListener('focus', onVisible); }
     return () => { cancelled = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible); };
   }, [endpoint, month, reload, publicView]);
   const view = useMemo(() => monthlyView(data, unit, publicView), [data, unit, publicView]);
@@ -69,42 +82,57 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
   const updated = data?.updatedAt ? new Date(data.updatedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' }) : '';
   const visibleGroups = groups.filter(group => !chosenUnit || group.name === chosenUnit);
   const countPeople = total(visibleGroups.map(group => ({ count: group.people.length })), 'count');
+  const setPublicationBusy = value => { busyRef.current = value; setBusy(value); };
+  const savePublication = publication => setData(current => current ? { ...current, publication } : current);
+  const periodControls = <>
+    {canChoosePeriod ? <>
+      <label className="sr-only" htmlFor="wrap-month">Bulan rekap</label><select id="wrap-month" disabled={busy} value={selectedNumber} onChange={event => chooseMonth(`${selectedYear}-${event.target.value}`)} className="border rounded-lg p-2 bg-white">{Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(value => <option key={value} value={value}>{monthLabel(`2026-${value}`).replace(' 2026', '')}</option>)}</select>
+      <label className="sr-only" htmlFor="wrap-year">Tahun rekap</label><select id="wrap-year" disabled={busy} value={selectedYear} onChange={event => chooseMonth(`${event.target.value}-${selectedNumber}`)} className="border rounded-lg p-2 bg-white">{years.map(value => <option key={value}>{value}</option>)}</select>
+    </> : data?.month ? <span className="rounded-full bg-slate-100 px-3 py-2 font-semibold">{monthLabel(data.month)}</span> : null}
+  </>;
+  const filterControls = <>
+    <select aria-label="Filter SubUnit Kerja" value={chosenUnit} onChange={event => setUnit(event.target.value)} className="border rounded-full p-2 bg-slate-50 max-w-[250px]"><option value="">Semua SubUnit Kerja</option>{units.map(value => <option key={value}>{value}</option>)}</select>
+    <button aria-label="Muat ulang rekap" title={publicView ? 'Muat ulang rekap yang dipublikasikan admin' : 'Muat ulang data terbaru'} disabled={loading || busy} onClick={() => setReload(value => value + 1)} className="p-2 border rounded-full bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''}/></button>
+  </>;
 
-  return <div ref={wrapper} className="max-w-7xl mx-auto text-slate-800" aria-label="Rekap Bulanan">
-    <header style={{top:'var(--wrap-top, 0px)'}} className="sticky z-20 bg-white/95 backdrop-blur border-b border-slate-200 rounded-t-2xl px-4 md:px-6 py-4 space-y-4">
+  return <div ref={wrapper} className={`${publicView ? 'w-full' : 'max-w-7xl mx-auto'} text-slate-800 [&_section[id]]:scroll-mt-[var(--wrap-scroll-offset,12rem)]`} aria-label="Rekap Bulanan">
+    <header ref={header} className={`sticky top-0 z-30 bg-[#F8FAFC] border-b border-slate-200 shadow-sm ${publicView ? '' : 'rounded-t-2xl'}`}>
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h1 className="text-lg font-extrabold text-[#1C465F]">Rekap Kinerja & Kedisiplinan</h1><p className="text-[11px] text-slate-500">Direktorat Pembangunan Perumahan Perdesaan</p></div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {canChoosePeriod ? <>
-            <label className="sr-only" htmlFor="wrap-month">Bulan rekap</label><select id="wrap-month" value={selectedNumber} onChange={event => chooseMonth(`${selectedYear}-${event.target.value}`)} className="border rounded-lg p-2 bg-white">{Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(value => <option key={value} value={value}>{monthLabel(`2026-${value}`).replace(' 2026', '')}</option>)}</select>
-            <label className="sr-only" htmlFor="wrap-year">Tahun rekap</label><select id="wrap-year" value={selectedYear} onChange={event => chooseMonth(`${event.target.value}-${selectedNumber}`)} className="border rounded-lg p-2 bg-white">{years.map(value => <option key={value}>{value}</option>)}</select>
-          </> : <span className="rounded-full bg-slate-100 px-3 py-2 font-semibold">{monthLabel(data?.month)}</span>}
-          <select aria-label="Filter SubUnit Kerja" value={chosenUnit} onChange={event => setUnit(event.target.value)} className="border rounded-full p-2 bg-slate-50 max-w-[250px]"><option value="">Semua SubUnit Kerja</option>{units.map(value => <option key={value}>{value}</option>)}</select>
-          <button aria-label="Muat ulang rekap" title="Muat ulang data terbaru" disabled={loading} onClick={() => setReload(value => value + 1)} className="p-2 border rounded-full bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''}/></button>
-        </div>
+        <div className="flex items-center gap-3 min-w-0">{publicView && <PkpLogo className="!h-10 !w-10"/>}<div><h1 className={`${publicView ? 'text-sm md:text-base' : 'text-lg'} font-extrabold text-[#1C465F]`}>{publicView ? 'Direktorat Pembangunan Perumahan Perdesaan' : 'Rekap Kinerja & Kedisiplinan'}</h1>{!publicView && <p className="text-[11px] text-slate-500">Direktorat Pembangunan Perumahan Perdesaan</p>}</div></div>
+        {publicView ? <a href="#/" className="flex items-center gap-2 text-xs font-medium text-slate-500 hover:text-[#0E5B73] py-2"><ArrowLeft size={14}/>Kembali ke Beranda</a> : <div className="flex flex-wrap items-center gap-2 text-xs">{periodControls}{filterControls}</div>}
       </div>
-      <nav aria-label="Bagian rekap" className="flex gap-1 overflow-auto text-xs font-semibold">{navigation.map(([id, label, Icon]) => <a key={id} href={`#rekap-${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={event => { event.preventDefault(); setActiveSection(id); document.getElementById(`rekap-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className={`flex items-center gap-2 px-3 py-2 rounded-full shrink-0 ${activeSection === id ? 'bg-cyan-50 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-50'}`}><Icon size={14}/>{label}</a>)}</nav>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <nav aria-label="Bagian rekap" className="flex gap-1 overflow-auto text-xs font-semibold max-w-full">{navigation.map(([id, label, Icon]) => <a key={id} href={`#rekap-${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={event => { event.preventDefault(); setActiveSection(id); document.getElementById(`rekap-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className={`flex items-center gap-2 px-3 py-2 rounded-full shrink-0 ${activeSection === id ? 'bg-cyan-100 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-100'}`}><Icon size={14}/>{label}</a>)}</nav>
+        {publicView && <div className="flex flex-wrap items-center gap-2 text-xs">{periodControls}{filterControls}</div>}
+      </div>
+      </div>
     </header>
     {loading && !data && <p role="status" className="p-8 text-slate-500">Memuat rekap bulanan...</p>}
-    {error && <div role="alert" className="bg-amber-50 text-amber-900 rounded-xl p-4 my-4 text-sm">{error}{data && <p className="mt-1">Hasil terakhir tetap ditampilkan. Pembaruan akan dicoba kembali.</p>}</div>}
-    {data && <>
-      <section id="rekap-ringkasan" className="scroll-mt-48 bg-gradient-to-br from-[#204E6C] via-[#183B52] to-[#0A2235] text-white px-6 py-10 md:p-12 rounded-b-3xl">
+    {error && <div role="alert" className="bg-amber-50 text-amber-900 rounded-xl p-4 my-4 text-sm max-w-7xl mx-auto">{error}{data && <p className="mt-1">Hasil terakhir tetap ditampilkan. {publicView ? 'Gunakan tombol muat ulang untuk mencoba lagi.' : 'Pembaruan akan dicoba kembali.'}</p>}</div>}
+    {canChoosePeriod && <WrapPublication endpoint={endpoint} data={data} month={selectedMonth} loading={loading} onBusy={setPublicationBusy} onSaved={savePublication}/>}
+    {data && publicView && !data.published && <p role="status" className="max-w-7xl mx-auto p-12 text-center text-slate-500">Belum ada rekap yang dipublikasikan oleh admin.</p>}
+    {data && (!publicView || data.published) && <>
+      <section id="rekap-ringkasan" className={`scroll-mt-48 bg-gradient-to-br from-[#204E6C] via-[#183B52] to-[#0A2235] text-white ${publicView ? '' : 'rounded-b-3xl'}`}>
+        <div className="max-w-7xl mx-auto px-6 py-10 md:p-12">
         <span className="inline-flex items-center gap-2 text-[11px] tracking-wider uppercase font-bold rounded-full bg-[#C4B391] text-[#17394F] px-4 py-2"><Sparkles size={14}/>{monthLabel(data.month)} WRAP</span>
         <h2 className="text-4xl md:text-5xl leading-tight font-extrabold mt-6">Rekap {monthLabel(data.month)}<br/><span className="text-[#C4B391]">{rows.length ? 'sudah tersedia!' : 'menunggu data'}</span></h2>
         <p className="text-slate-200 text-sm md:text-base max-w-xl mt-5">Melihat kembali kehadiran dan kedisiplinan sepanjang {monthLabel(data.month)}. {chosenUnit || 'Seluruh SubUnit Kerja'}.</p>
         <div className="grid sm:grid-cols-3 gap-4 mt-8">{[[Users, number(rows.length), 'Pegawai dengan rekap'], [Calendar, number(days.length), 'Hari kerja tercatat'], [CheckCircle2, ratio(total(rows, 'masuk'), total(rows, 'hariKerja')), 'Tingkat kehadiran']].map(([Icon, value, label]) => <div key={label} className="border border-white/20 bg-white/10 rounded-2xl p-5"><Icon className="bg-white/10 rounded-xl p-2" size={40}/><strong className="block text-4xl font-bold mt-3">{value}</strong><span className="text-xs text-slate-200">{label}</span></div>)}</div>
         <p className="text-xs text-slate-300 mt-5">Rasio kehadiran = masuk WFO/WFA/WFH ÷ hari kerja (termasuk Dinas, Cuti, dan TB; tanpa Libur). Jumlah pegawai mengikuti rekap yang sudah tersedia, bukan seluruh pegawai aktif.</p>
+        </div>
       </section>
-      <div className="flex flex-wrap justify-between gap-2 py-4 text-xs text-slate-500" aria-live="polite"><span>{loading ? 'Memperbarui data…' : `Diperbarui ${updated || 'baru saja'}${updated ? ' WIB' : ''}`}</span><span>Pembaruan otomatis setiap 2 menit selama halaman aktif.</span></div>
-      <div className="bg-cyan-50 border border-cyan-100 rounded-xl p-4 text-xs text-[#1C465F] mb-8" role="status">
+      <div className={publicView ? 'max-w-7xl mx-auto px-4 md:px-6 py-12' : ''}>
+      {!publicView && <div className="flex flex-wrap justify-between gap-2 py-4 text-xs text-slate-500" aria-live="polite"><span>{loading ? 'Memperbarui data…' : `Diperbarui ${updated || 'baru saja'}${updated ? ' WIB' : ''}`}</span><span>Preview diperbarui setiap 2 menit; rekap publik hanya berubah setelah publikasi admin.</span></div>}
+      {!publicView && <div className="bg-cyan-50 border border-cyan-100 rounded-xl p-4 text-xs text-[#1C465F] mb-8" role="status">
         Rekap sementara: {coverage.available || 0} dari {coverage.submitted || 0} submisi bulan ini sudah dapat dibaca. Data bertambah saat rekap pegawai disimpan.
         {coverage.pending > 0 && <span> {coverage.pending} menunggu konfirmasi/perhitungan ulang.</span>}
         {coverage.unavailable > 0 && <span> {coverage.unavailable} file belum dapat dibaca; data pegawai lainnya tetap ditampilkan.</span>}
         {coverage.incomplete > 0 && <span> {coverage.incomplete} rekap memiliki tanggal belum lengkap dan belum masuk peringkat.</span>}
         {chosenUnit && <span> Status kelengkapan ini untuk seluruh SubUnit; statistik di bawah mengikuti filter.</span>}
-      </div>
+      </div>}
       {canChoosePeriod && data.issues?.length > 0 && <details className="mb-8 border rounded-xl p-4 text-xs bg-amber-50"><summary className="cursor-pointer font-bold">Periksa sumber data ({data.issues.length})</summary><ul className="list-disc pl-5 mt-3 space-y-2">{data.issues.map((issue, i) => <li key={i}>{issue.nama}: {issue.message}</li>)}</ul></details>}
-      {!rows.length ? <p className="bg-white border rounded-2xl text-center p-10 text-sm text-slate-500">Belum ada rekap terkonfirmasi untuk bulan dan SubUnit ini. Data akan muncul setelah rekap pegawai selesai diperiksa dan disimpan.</p> : <div className="space-y-16 pb-10">
+      {!rows.length ? <p className="bg-white border rounded-2xl text-center p-10 text-sm text-slate-500">{publicView ? 'Tidak ada data untuk SubUnit ini pada rekap yang dipublikasikan.' : 'Belum ada rekap terkonfirmasi untuk bulan dan SubUnit ini. Data akan muncul setelah rekap pegawai selesai diperiksa dan disimpan.'}</p> : <div className="space-y-16 pb-10">
         <section id="rekap-kehadiran" className="scroll-mt-48">
           <SectionTitle title="Statistik Kehadiran" detail="Kehadiran dan aktivitas tim sepanjang satu bulan kalender"/>
           <div className="grid md:grid-cols-3 gap-4"><Metric icon={Sun} label="Presensi paling awal" value={clock(earliest)} detail="Jam datang pada file rekap bulan terpilih"/><Metric icon={CheckCircle2} label="Total kehadiran" value={number(total(rows, 'masuk'))} detail="Hari-orang WFO/WFA/WFH"/><Metric icon={FileText} label="Dokumen diunggah" value={number(occurrences(documents))} detail="Bukti pendukung tercatat aktif"/><Metric icon={Calendar} label="Cuti" value={number(total(rows, 'cuti'))} detail="Akumulasi hari-orang cuti"/><Metric icon={Plane} label="Perjalanan dinas" value={number(occurrences(trips))} detail="Pasangan pegawai dan surat tugas"/><Metric icon={Clock} label="Total hari dinas" value={number(total(rows, 'dinas'))} detail="Akumulasi hari-orang dinas"/></div>
@@ -117,15 +145,14 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
         </section>
         <section id="rekap-juara" className="scroll-mt-48 space-y-5">
           <SectionTitle title="Apresiasi Kehadiran & Kedisiplinan" detail={`Pencapaian tim pada ${monthLabel(data.month)}`}/>
-          <h3 className="text-lg font-bold flex items-center gap-2"><Trophy size={22}/>Peringkat Kehadiran</h3><p className="text-xs text-slate-500">Urutan: persentase masuk/hari kerja tertinggi → hari flexi paling sedikit → menit flexi paling sedikit → jumlah masuk terbanyak. Hanya rekap dengan tanggal lengkap satu bulan yang dinilai. WFO, WFA, dan WFH dihitung sebagai masuk; Dinas/Cuti/TB bukan hari masuk.</p>
-          <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-4">{discipline.map((row, i) => <article key={row.nip} className="rounded-2xl overflow-hidden border bg-[#1C465F] text-white"><div className="h-40 bg-gradient-to-br from-cyan-50 to-cyan-200 flex items-center justify-center relative">{row.photo ? <img src={row.photo} alt="" className="w-full h-full object-cover" onError={event => { event.currentTarget.hidden = true; }}/> : <Users size={48} className="text-cyan-600"/>}<span className="absolute left-3 top-3 text-xs bg-white text-[#1C465F] rounded-full px-2 py-1 font-bold">#{i + 1}</span><span className="absolute right-3 top-3 bg-[#1C465F] rounded-full px-2 py-1 text-xs font-bold">{ratio(row.masuk, row.hariKerja)}</span></div><div className="p-4"><h4 className="text-sm font-bold min-h-10">{row.nama}</h4><p className="text-[10px] mt-2 text-cyan-100">{row.unit}</p><p className="text-xs mt-3">{row.masuk}/{row.hariKerja} hari kerja</p><p className="text-xs mt-1 text-cyan-100">Flexi {row.flexi || 0} hari · {row.flexiMinutes || 0} menit</p></div></article>)}</div>
-          {!discipline.length && <p className="text-sm text-slate-500 rounded-xl bg-slate-100 p-5">Belum ada rekap dengan tanggal lengkap satu bulan untuk diperingkat.</p>}
-          <div className="border rounded-2xl bg-slate-50 p-6 space-y-4"><h3 className="text-lg font-bold">Paling Tepat Waktu</h3><p className="text-xs text-slate-500">Persentase datang paling lambat pada jam masuk normal/Ramadan, tanpa flexi, dari hari WFO/WFA/WFH. Jika sama, mengikuti peringkat kehadiran.</p>{punctual.map((row, i) => <div key={row.nip} className="border-b pb-4 text-xs flex flex-wrap justify-between gap-3"><div><strong>#{i + 1} {row.nama}</strong><span className="block text-slate-500 mt-1">{row.unit}</span></div><div className="text-right"><strong className="text-teal-700">{ratio(row.onTime, row.assessed)}</strong><p className="text-slate-500 mt-1">{row.onTime}/{row.assessed} hari · rata-rata {clock(row.avgArrival)}</p></div></div>)}</div>
+          <h3 className="text-lg font-bold flex items-center gap-2"><Trophy size={22}/>Paling Tepat Waktu</h3><p className="text-xs text-slate-500">Persentase datang paling lambat pada jam masuk normal/Ramadan, tanpa flexi, dari hari WFO/WFA/WFH. Jika sama, mengikuti peringkat kehadiran. Hanya rekap dengan tanggal lengkap satu bulan yang dinilai.</p>
+          <div aria-label="Kartu Paling Tepat Waktu" className="grid sm:grid-cols-2 xl:grid-cols-5 gap-4">{punctual.map((row, i) => <PunctualCard key={row.nip} row={row} index={i}/>)}</div>
+          {!punctual.length && <p className="text-sm text-slate-500 rounded-xl bg-slate-100 p-5">Belum ada rekap dengan tanggal lengkap satu bulan untuk diperingkat.</p>}
+          <div aria-label="Daftar Peringkat Kehadiran" className="border rounded-2xl bg-slate-50 p-6 space-y-4"><h3 className="text-lg font-bold">Peringkat Kehadiran</h3><p className="text-xs text-slate-500">Urutan: persentase masuk/hari kerja tertinggi → hari flexi paling sedikit → menit flexi paling sedikit → jumlah masuk terbanyak. Hanya rekap dengan tanggal lengkap satu bulan yang dinilai. WFO, WFA, dan WFH dihitung sebagai masuk; Dinas/Cuti/TB bukan hari masuk.</p>{discipline.map((row, i) => <div key={row.nip} className="border-b pb-4 text-xs flex flex-wrap justify-between gap-3"><div><strong>#{i + 1} {row.nama}</strong><span className="block text-slate-500 mt-1">{row.unit}</span></div><div className="text-right"><strong className="text-teal-700">{ratio(row.masuk, row.hariKerja)}</strong><p className="text-slate-500 mt-1">{row.masuk}/{row.hariKerja} hari kerja · Flexi {row.flexi || 0} hari · {row.flexiMinutes || 0} menit</p></div></div>)}{!discipline.length && <p className="text-xs text-slate-500">Belum ada rekap lengkap untuk diperingkat.</p>}</div>
         </section>
         <section id="rekap-catatan" className="scroll-mt-48">
           <SectionTitle title="Lebih Baik di Bulan Berikutnya" detail="Catatan untuk evaluasi dan peningkatan kedisiplinan"/>
-          <div className="grid md:grid-cols-3 gap-4"><LeaderList title="Terlambat" rows={top('terlambat')} metric="terlambat" suffix="hari"/><LeaderList title="Pulang sebelum waktu" rows={top('psw')} metric="psw" suffix="hari"/><LeaderList title="Lupa absen" rows={top('lupaAbsen')} metric="lupaAbsen"/></div>
-          <details className="bg-white rounded-2xl border mt-5"><summary className="cursor-pointer p-5 text-sm font-bold">Rincian lupa absen dan adjustment</summary><div className="overflow-auto"><table className="w-full min-w-[650px] text-xs"><thead><tr>{['Pegawai', 'SubUnit', 'Lupa Absen', 'Adjustment', 'Tidak Absen'].map(label => <th key={label} className="p-3 text-left bg-slate-100">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.nip} className="border-t"><td className="p-3">{row.nama}</td><td className="p-3">{row.unit}</td><td className="p-3">{row.lupaAbsen}</td><td className="p-3">{row.adjusted}</td><td className="p-3">{row.unadjusted}</td></tr>)}</tbody></table></div></details>
+          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4"><LeaderList title="Terlambat" rows={top('terlambat')} metric="terlambat" suffix="hari"/><LeaderList title="Pulang sebelum waktu" rows={top('psw')} metric="psw" suffix="hari"/><LeaderList title="Tidak Absen" rows={top('unadjusted')} metric="unadjusted" suffix="kejadian"/><LeaderList title="Lupa Absen dengan Adjustment" rows={top('adjustmentReported')} metric="adjustmentReported" suffix="catatan"/></div>
         </section>
         <section id="rekap-dinas" className="scroll-mt-48 text-center">
           <SectionTitle title="Tujuan Perjalanan Dinas" detail="Tujuan pada surat tugas yang diklaim untuk rekap bulan ini"/>
@@ -135,6 +162,7 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
         </section>
         <footer className="text-center text-sm text-slate-500 border-t pt-8">Terima kasih untuk kontribusi seluruh tim. Mari terus meningkatkan kehadiran dan kedisiplinan bersama.</footer>
       </div>}
+      </div>
     </>}
   </div>;
 }

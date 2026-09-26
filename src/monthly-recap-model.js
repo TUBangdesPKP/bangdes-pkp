@@ -15,7 +15,8 @@ export function compareAttendance(a, b) {
 }
 
 export function monthlyView(data, unit = '', publicView = false) {
-  const employees = data?.employees || [];
+  // Published snapshots from before document-aware reporting retain their saved count.
+  const employees = (data?.employees || []).map(row => ({ ...row, adjustmentReported: row.adjustmentReported ?? row.adjusted ?? 0 }));
   const units = [...new Set([...(data?.units || []), ...employees.map(row => row.unit)])].sort();
   const chosenUnit = units.includes(unit) ? unit : '';
   const rows = employees.filter(row => !chosenUnit || row.unit === chosenUnit);

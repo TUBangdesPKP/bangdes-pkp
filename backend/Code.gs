@@ -168,7 +168,7 @@ function normStr(val) {
 function doGet(e) {
   try {
     if (e.parameter && e.parameter.action === 'health') {
-      return json_({ status: 'success', service: 'kepegawaian', backendVersion: '2026-09-26-calendar-wrap' });
+      return json_({ status: 'success', service: 'kepegawaian', backendVersion: '2026-09-26-published-wrap' });
     }
     if (e.parameter && e.parameter.action === 'checkExisting') {
       return json_(existingSubmission_({ modul: e.parameter.modul, nip: e.parameter.nip,
@@ -647,12 +647,110 @@ function resolvePresensiFolder_(payload) {
       return previousFolder;
     }
   }
+  // Classify new submissions from the authoritative employee master, never browser input.
+  var jenisAsn = employeeAsnType_(payload.nip, payload.nama);
   var modul = payload.modul;
   var month = modul === 'tukin' ? getBulanTukinPlusSatu(payload.periode) : null;
   month = month || getFormattedBulan(payload.bulanTahun || payload.periode);
   var category = getOrCreateSubFolder(DriveApp.getFolderById(ROOT_FOLDER_ID), modul === 'uang-makan' ? 'BUKTI_UANG_MAKAN' : 'BUKTI_TUNJANGAN_KINERJA');
   var periodFolder = getOrCreateSubFolder(category, (modul === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja') + '_' + month);
-  return getOrCreateSubFolder(periodFolder, getNamaFolderPegawai(nip_(payload.nip), text_(payload.nama)));
+  var statusFolder = uniqueChildFolder_(periodFolder, jenisAsn, true);
+  return uniqueChildFolder_(statusFolder, getNamaFolderPegawai(nip_(payload.nip), text_(payload.nama)), true);
+}
+
+function employeeAsnType_(nip, nama) {
+  var sheet=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('Data_Pegawai');
+  if(!sheet)throw new Error('Data_Pegawai tidak tersedia untuk menentukan Jenis_ASN.');
+  var rows=sheet.getDataRange().getValues(), headers=(rows[0]||[]).map(function(v){return text_(v).toLowerCase().replace(/[^a-z0-9]/g,'');});
+  var typeCol=headers.indexOf('jenisasn'), nipCol=headers.indexOf('nip'), nameCol=headers.indexOf('nama');
+  if(typeCol<0)throw new Error('Kolom Jenis_ASN (H) belum ditemukan pada Data_Pegawai.');
+  var id=nip_(nip), name=text_(nama).toLowerCase();
+  var matches=rows.slice(1).filter(function(row){return id ? nipCol>=0&&nip_(row[nipCol])===id : name&&nameCol>=0&&text_(row[nameCol]).toLowerCase()===name;});
+  if(matches.length!==1)throw new Error('Identitas untuk Jenis_ASN harus cocok dengan tepat satu pegawai di Data_Pegawai.');
+  var type=text_(matches[0][typeCol]).toUpperCase();
+  if(type==='PEGAWAI NEGERI SIPIL')type='PNS';
+  if(type==='PEGAWAI PEMERINTAH DENGAN PERJANJIAN KERJA')type='PPPK';
+  if(type!=='PNS'&&type!=='PPPK')throw new Error('Jenis_ASN pegawai harus PNS atau PPPK; folder tidak dibuat.');
+  return type;
+}
+function uniqueChildFolder_(parent, name, create) {
+  var matches=parent.getFoldersByName(name), found=matches.hasNext()?matches.next():null;
+  if(matches.hasNext())throw new Error('Ada folder bernama ganda: '+name+'. Periksa Drive sebelum melanjutkan.');
+  if(found&&(!hasOnlyParent_(found,parent.getId())||found.isTrashed()))throw new Error('Lokasi folder tidak valid: '+name);
+  return found || (create?parent.createFolder(name):null);
+}
+
+// Owner-only migration entry points: intentionally NOT exposed by doPost/doGet.
+// Exact scope: Uang Makan Agustus 2026, and Tukin payment Oktober 2026 (11 Aug–10 Sep).
+function legacyPnsTarget_(record) {
+  var dates;try{dates=dateRangeFromPeriod_(record.periode);}catch(error){return null;}
+  if(record.modul==='uang-makan'&&dates[0]==='2026-08-01'&&dates[1]==='2026-08-31')return {category:'BUKTI_UANG_MAKAN',period:'Uang Makan_08_Agustus'};
+  if(record.modul==='tukin'&&dates[0]==='2026-08-11'&&dates[1]==='2026-09-10')return {category:'BUKTI_TUNJANGAN_KINERJA',period:'Tunjangan Kinerja_10_Oktober'};
+  return null;
+}
+function singleParent_(folder) {
+  var parents=folder.getParents();
+  if(!parents.hasNext())throw new Error('Folder tidak memiliki induk.');
+  var parent=parents.next();if(parents.hasNext())throw new Error('Folder memiliki lebih dari satu induk.');
+  return parent;
+}
+function legacyPnsPlan_() {
+  var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), records=[], items=[], errors=[], seen={};
+  ['uang-makan','tukin'].forEach(function(modul){
+    var sheet=book.getSheetByName(eventSheetName_(modul));
+    if(!sheet)return;
+    sheet.getDataRange().getValues().slice(1).forEach(function(row,i){
+      if(!nip_(row[1]))return;
+      records.push({modul:modul,nip:nip_(row[1]),nama:text_(row[2]),periode:text_(row[3]),folderId:driveId_(row[8]),spreadsheetId:driveId_(row[9]),row:i+2});
+    });
+  });
+  var claims=registryRows_();
+  records.filter(legacyPnsTarget_).forEach(function(record){
+    try {
+      var target=legacyPnsTarget_(record);
+      if(employeeAsnType_(record.nip,record.nama)!=='PNS')throw new Error('Jenis_ASN bukan PNS; tidak dipindahkan.');
+      var folder=recordedFolder_(record), parent=singleParent_(folder), already=parent.getName()==='PNS';
+      var period=already?singleParent_(parent):parent, category=singleParent_(period);
+      if(period.getName()!==target.period||category.getName()!==target.category||!hasOnlyParent_(category,ROOT_FOLDER_ID))throw new Error('Struktur folder tidak sama dengan periode/modul yang diizinkan.');
+      var others=records.filter(function(other){return other.folderId===record.folderId&&(other.nip!==record.nip||other.modul!==record.modul||other.periode!==record.periode);});
+      var otherClaims=claims.filter(function(claim){return claim.folderId===record.folderId&&(claim.nip!==record.nip||claim.modul!==record.modul||claim.periode!==record.periode);});
+      if(others.length||otherClaims.length)throw new Error('Folder juga dirujuk pegawai/periode lain; perlu pemeriksaan manual.');
+      var dest=uniqueChildFolder_(period,'PNS',false);
+      var collision=dest&&uniqueChildFolder_(dest,folder.getName(),false);
+      if(collision&&collision.getId()!==folder.getId())throw new Error('Nama folder pegawai sudah ada di PNS dengan ID berbeda; tidak digabung otomatis.');
+      if(seen[record.folderId])return;seen[record.folderId]=true;
+      items.push({modul:record.modul,periode:record.periode,nip:record.nip,nama:record.nama,folderId:folder.getId(),folderName:folder.getName(),fromParentId:parent.getId(),periodFolderId:period.getId(),destinationId:dest?dest.getId():'',already:already});
+    }catch(error){errors.push({modul:record.modul,row:record.row,nama:record.nama,message:error.message});}
+  });
+  items.sort(function(a,b){return a.folderId.localeCompare(b.folderId);});
+  return {items:items,errors:errors,revision:digest_(items),ready:errors.length===0};
+}
+function previewMigrasiFolderPNS2026() {
+  var plan=legacyPnsPlan_();Logger.log(JSON.stringify(plan));return plan;
+}
+function jalankanMigrasiFolderPNS2026() {
+  var lock=LockService.getScriptLock(), report={moved:[],already:[],failed:[]};
+  try {
+    lock.waitLock(30000);
+    var plan=legacyPnsPlan_(), properties=PropertiesService.getScriptProperties();
+    if(!plan.ready)throw new Error('Ada target migrasi yang belum aman. Jalankan preview dan periksa errors.');
+    if(!plan.items.length)return report;
+    if(plan.items.every(function(item){return item.already;})){report.already=plan.items;Logger.log(JSON.stringify(report));return report;}
+    if(properties.getProperty('MIGRASI_PNS_2026_REVISI')!==plan.revision)throw new Error('Jalankan previewMigrasiFolderPNS2026, periksa target, lalu isi Script Property MIGRASI_PNS_2026_REVISI dengan revision hasil preview.');
+    plan.items.forEach(function(item){
+      if(item.already){report.already.push(item);return;}
+      try {
+        var folder=DriveApp.getFolderById(item.folderId), period=DriveApp.getFolderById(item.periodFolderId);
+        if(!hasOnlyParent_(folder,item.fromParentId)||!folderUnder_(period,ROOT_FOLDER_ID))throw new Error('Induk folder berubah setelah preview.');
+        var destination=uniqueChildFolder_(period,'PNS',true), collision=uniqueChildFolder_(destination,item.folderName,false);
+        if(collision&&collision.getId()!==item.folderId)throw new Error('Folder tujuan berbenturan.');
+        folder.moveTo(destination); // Same folder and descendant file IDs; no copies, deletes, or link edits.
+        if(folder.getId()!==item.folderId||!hasOnlyParent_(folder,destination.getId()))throw new Error('Pemindahan belum terverifikasi. Periksa ulang preview.');
+        report.moved.push(Object.assign({},item,{destinationId:destination.getId()}));
+      } catch(error){report.failed.push({folderId:item.folderId,message:error.message});}
+    });
+    Logger.log(JSON.stringify(report));return report;
+  } finally {if(lock.hasLock())lock.releaseLock();}
 }
 function registry_(create) {
   var ss = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet = ss.getSheetByName(ATTACHMENT_SHEET);
@@ -866,9 +964,11 @@ function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
     // Read-only wrap requests must not hold the write lock while opening employee files.
-    if (payload.action === 'rekap_bulanan') return json_(monthlyRecap_(payload));
+    if (payload.action === 'rekap_bulanan') return json_(monthlyWrapPreview_(payload));
     if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
+    if (payload.action === 'simpan_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     lock.waitLock(30000);
+    if (payload.action === 'publikasikan_wrap_bulanan') return json_(publishWrapSnapshot_(payload));
     if (payload.action === 'proses_bukti') {
       var trace = text_(payload.requestId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
       var started = Date.now();
@@ -1089,6 +1189,7 @@ function saveFinal_(payload) {
   result = applyAdjustments_(result, corrections);
   // Financial inputs are read on the server, never accepted from a browser payload.
   var calculation = calculateAttendance_(result, payrollEmployee_(state.record), state.record.modul);
+  addAdjustmentEvidenceCounts_(calculation, state.documents);
   // A partially failed final save must not leave an old nominal marked current.
   invalidateCalculation_(state.record);
   // Legacy recap: capture the original before the first final write, never on preview.
@@ -1384,6 +1485,27 @@ function calculateAttendance_(rows, employee, module) {
     sources: employee.sources || {}, totals: totals, amount: amount, days: days, warnings: warnings, complete: !warnings.length };
 }
 function payrollHeader_(value) { return text_(value).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+// Reporting only: a letter may support a clock already present in the Excel.
+// Count unused letters once; a letter used for corrections is represented by
+// its corrected punch events, not counted again as an additional adjustment.
+function addAdjustmentEvidenceCounts_(calculation, documents) {
+  var letters = {}, used = {}, t = calculation.totals;
+  (documents || []).forEach(function(doc) {
+    if (doc.jenisDokumen === 'lupa_absen' && doc.fileId && (!doc.status || doc.status === 'active')) letters[doc.fileId] = true;
+  });
+  calculation.days.forEach(function(day) {
+    Object.keys(day.adjustments || {}).forEach(function(punch) {
+      var id = day.adjustments[punch].fileId;
+      if (letters[id]) used[id] = true;
+    });
+  });
+  t.adjustmentDocuments = Object.keys(letters).length;
+  t.adjustmentDocumentsUsed = Object.keys(used).length;
+  t.adjustmentDocumentsUnclaimed = t.adjustmentDocuments - t.adjustmentDocumentsUsed;
+  t.adjustmentReported = t.adjusted + t.adjustmentDocumentsUnclaimed;
+  // No inferred date, automatic clock edit, quota change, or payment adjustment.
+  return calculation;
+}
 function payrollNumber_(raw, display, percent) {
   if (raw === '' || raw === null || raw === undefined) return null;
   var number;
@@ -1435,6 +1557,7 @@ function invalidateCalculation_(record) {
   var owned = ['Hitung_Status','Hitung_Hari_Masuk','Hitung_Hari_Kerja','Hitung_Hari_Dinas','Hitung_Hari_Cuti','Hitung_Hari_TB','Hitung_Hari_Libur',
     'Hitung_Hari_Flexi','Hitung_Hari_Terlambat','Hitung_Hari_PSW','Hitung_Hari_Tidak_Masuk','Hitung_Menit_Terlambat','Hitung_Menit_PSW',
     'Hitung_Lupa_Absen','Hitung_Adjustment','Hitung_Tidak_Absen','Hitung_Adjustment_Bulanan',
+    'Hitung_Adjustment_Tercatat','Hitung_Surat_Lupa_Absen','Hitung_Surat_Terpakai','Hitung_Surat_Tanpa_Koreksi_Jam',
     'Hitung_Menit_Tanpa_Presensi','Hitung_Total_Menit','Hitung_Potongan_Absensi_Persen','Hitung_Tarif','Hitung_SKP',
     'Hitung_Bruto','Hitung_Potongan_Persen','Hitung_Potongan_Rp','Hitung_Netto'];
   target.headers.forEach(function(header, i) {
@@ -1463,12 +1586,20 @@ function saveCalculationNote_(state, calculation) {
     'Flexi maksimal 60 menit. Pengganti jam pulang maksimal 60 menit. Absen kosong dikonversi 240 menit per presensi.',
     'TL: 0,5% / 0,75% / 1,25%. PSW: 0,5% / 0,75% / 1% / 1,25%. Dinas/Cuti/TB/Libur bebas TL/PSW.',
     'Potongan rupiah dibulatkan ke rupiah terdekat. Jam asli disimpan di baseline; koreksi disertai surat.', ''];
-  calculation.days.forEach(function(day) {
+  var notedDays = calculation.days.filter(function(day) { return day.tl || day.psw || day.menitTanpaPresensi; });
+  lines.push('CATATAN TANGGAL DENGAN TL, PSW, ATAU TIDAK ABSEN');
+  if (!notedDays.length) lines.push('Tidak ada catatan TL, PSW, atau Tidak Absen.');
+  notedDays.forEach(function(day) {
     var description = day.status + ', jam ' + day.jamKerja + ', datang ' + day.datang + ', pulang ' + day.pulang;
     if (['WFO','WFA','WFH'].indexOf(day.status) >= 0) description += ', wajib pulang ' + day.wajibPulang + ', pengganti flexi ' + day.flexiMenit + ' menit';
     if (day.tl) description += ', keterlambatan TL ' + day.tl;
     if (day.psw) description += ', pulang sebelum waktunya PSW ' + day.psw;
-    if (day.menitTanpaPresensi) description += ', tanpa presensi ' + day.menitTanpaPresensi + ' menit';
+    if (day.menitTanpaPresensi) {
+      var missing = [];
+      if (attendanceMinutes_(day.datang) === null) missing.push('datang');
+      if (attendanceMinutes_(day.pulang) === null) missing.push('pulang');
+      description += ', Tidak Absen ' + missing.join(' dan ') + ' (' + day.menitTanpaPresensi + ' menit)';
+    }
     Object.keys(day.adjustments || {}).forEach(function(punch) { var correction = day.adjustments[punch]; description += ', adjustment ' + punch + ' menjadi ' + correction.time + ' (surat ' + correction.fileId + ')'; });
     lines.push('Pada tanggal ' + day.tanggal + ': ' + description + '. Potongan absensi ' + day.potongan + '%.');
   });
@@ -1479,7 +1610,9 @@ function saveCalculationNote_(state, calculation) {
     'Flexi: ' + t.flexi + ' hari; Terlambat: ' + t.terlambat + ' hari; PSW: ' + t.psw + ' hari; Tanpa kedua presensi: ' + t.tidakMasuk + ' hari.',
     'Kekurangan menit: terlambat ' + t.menitTelat + ', pulang awal ' + t.menitPsw + ', tanpa presensi ' + t.menitTanpaPresensi + ', total ' + t.totalMenit + '.',
     'Akumulasi potongan absensi: ' + t.potonganAbsensi + '%.',
-    'Lupa absen: ' + t.lupaAbsen + ' kejadian; adjustment: ' + t.adjusted + '; tidak absen: ' + t.unadjusted + '. Per bulan: ' + JSON.stringify(t.adjustmentMonths),
+    'Lupa Absen dengan Adjustment: ' + t.adjustmentReported + ' catatan; Tidak Absen: ' + t.unadjusted + ' kejadian.',
+    'Surat lupa absen: ' + t.adjustmentDocuments + ' file; koreksi jam: ' + t.adjusted + ' kejadian; surat tanpa koreksi jam: ' + t.adjustmentDocumentsUnclaimed + ' file (tetap dihitung adjustment).',
+    'Koreksi jam per bulan: ' + JSON.stringify(t.adjustmentMonths) + '. Surat tanpa koreksi jam dihitung pada periode submisi, tanpa menerka tanggal kejadian.',
     'Tarif dasar: ' + money(a.tarif), 'Bruto: ' + money(a.bruto),
     'Potongan: ' + money(a.potongan) + ' (' + (a.persenPotongan === null ? 'belum tersedia' : a.persenPotongan + '%') + ')',
     'Diterima: ' + money(a.netto));
@@ -1497,6 +1630,8 @@ function writeCalculationMaster_(record, calculation, note) {
   var target = calculationMasterTarget_(record), t = calculation.totals, a = calculation.amount;
   var entries = { Hitung_Status: calculation.complete ? 'Lengkap' : 'Perlu penyesuaian', Hitung_Hari_Masuk: t.masuk, Hitung_Hari_Kerja: t.hariKerja,
     Hitung_Lupa_Absen: t.lupaAbsen, Hitung_Adjustment: t.adjusted, Hitung_Tidak_Absen: t.unadjusted, Hitung_Adjustment_Bulanan: JSON.stringify(t.adjustmentMonths),
+    Hitung_Adjustment_Tercatat: t.adjustmentReported, Hitung_Surat_Lupa_Absen: t.adjustmentDocuments,
+    Hitung_Surat_Terpakai: t.adjustmentDocumentsUsed, Hitung_Surat_Tanpa_Koreksi_Jam: t.adjustmentDocumentsUnclaimed,
     Hitung_Hari_Dinas: t.dinas, Hitung_Hari_Cuti: t.cuti, Hitung_Hari_TB: t.tb, Hitung_Hari_Libur: t.libur,
     Hitung_Hari_Flexi: t.flexi, Hitung_Hari_Terlambat: t.terlambat, Hitung_Hari_PSW: t.psw, Hitung_Hari_Tidak_Masuk: t.tidakMasuk,
     Hitung_Menit_Terlambat: t.menitTelat, Hitung_Menit_PSW: t.menitPsw, Hitung_Menit_Tanpa_Presensi: t.menitTanpaPresensi, Hitung_Total_Menit: t.totalMenit,
@@ -1526,14 +1661,15 @@ function recapCalendarMonth_(period) {
   var last = new Date(Date.UTC(+month.slice(0,4), +month.slice(5,7), 0)).toISOString().slice(0,10);
   return range[0] === month + '-01' && range[1] === last ? month : '';
 }
-function publicMonthlyRecap_(payload) {
-  var result = monthlyRecap_(payload);
+function publicWrapData_(result) {
   var units = {}, daily = {}, documents = {};
-  var metrics = ['masuk','hariKerja','dinas','cuti','tb','terlambat','psw','lupaAbsen','adjusted','unadjusted','assessed','clean','onTime','avgArrival','flexi','flexiMinutes','recordedDays','completeMonth'];
+  var metrics = ['masuk','hariKerja','dinas','cuti','tb','terlambat','psw','lupaAbsen','adjusted','unadjusted','adjustmentReported','adjustmentDocuments','adjustmentDocumentsUsed','adjustmentDocumentsUnclaimed','assessed','clean','onTime','avgArrival','flexi','flexiMinutes','recordedDays','completeMonth'];
   var employees = result.employees.map(function(employee,index) {
     units[employee.nip] = employee.unit;
     // The UI needs a row key, not the employee's government identifier.
-    var publicEmployee = {nip:'public-'+index,nama:employee.nama,unit:employee.unit,photo:''};
+    // Profile photos are explicitly part of the public podium; other Drive URLs remain private.
+    var photo=/^https:\/\/lh3\.googleusercontent\.com\/d\/[\w-]+=s(?:200|800)$/.test(employee.photo||'')?employee.photo:'';
+    var publicEmployee = {nip:'public-'+index,nama:employee.nama,unit:employee.unit,photo:photo};
     metrics.forEach(function(key) { publicEmployee[key] = employee[key]; });
     return publicEmployee;
   });
@@ -1548,9 +1684,125 @@ function publicMonthlyRecap_(payload) {
     if (!documents[key]) documents[key]={unit:unit,type:doc.type,tujuan:doc.tujuan,count:0};
     documents[key].count++;
   });
-  return {status:'success',publicView:true,wrapVersion:result.wrapVersion,month:result.month,months:result.months,
+  return {status:'success',publicView:true,wrapVersion:result.wrapVersion,month:result.month,months:result.month?[result.month]:[],
     units:result.units,coverage:result.coverage,updatedAt:result.updatedAt,employees:employees,
     daily:Object.keys(daily).map(function(key){return daily[key];}),documents:Object.keys(documents).map(function(key){return documents[key];})};
+}
+
+// Immutable public-safe snapshots. Draft and published pointers are separate:
+// saving another draft cannot silently change the data already shown to the public.
+var WRAP_SNAPSHOT_SHEET = 'REKAP_WRAP_SNAPSHOT';
+var WRAP_SNAPSHOT_HEADERS = ['SnapshotId','Bulan','Disimpan','Bagian','JumlahBagian','DataJSON'];
+var WRAP_PUBLISHED_PROPERTY = 'WRAP_PUBLISHED_V1';
+var WRAP_DRAFT_PREFIX = 'WRAP_DRAFT_V1_';
+function wrapProperties_() { return PropertiesService.getScriptProperties(); }
+function requireWrapAdmin_(payload) {
+  var expected=wrapProperties_().getProperty('WRAP_ADMIN_KEY'), supplied=String(payload.adminKey || '');
+  if(!expected || expected.length<24) throw new Error('Atur Script Property WRAP_ADMIN_KEY (minimal 24 karakter acak) untuk mengaktifkan simpan/publikasi admin.');
+  if(!supplied || digest_(supplied)!==digest_(expected)) throw new Error('Kunci publikasi admin tidak valid.');
+  // Never trust browser role/NIP, the public login PIN, or a hard-coded master PIN.
+}
+function wrapMonth_(value) {
+  var month=text_(value);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('Pilih bulan dan tahun rekap terlebih dahulu.');
+  return month;
+}
+function wrapMeta_(key) {
+  var value=wrapProperties_().getProperty(key);
+  return value?JSON.parse(value):null;
+}
+function wrapMetaView_(meta) {
+  return meta?{snapshotId:meta.snapshotId,month:meta.month,savedAt:meta.savedAt,publishedAt:meta.publishedAt||'',employees:meta.employees}:null;
+}
+function wrapCatalog_() {
+  var properties=wrapProperties_().getProperties();
+  var drafts=Object.keys(properties).filter(function(key){return key.indexOf(WRAP_DRAFT_PREFIX)===0;}).map(function(key){return wrapMetaView_(JSON.parse(properties[key]));});
+  drafts.sort(function(a,b){return b.month.localeCompare(a.month);});
+  return {version:1,drafts:drafts,published:wrapMetaView_(wrapMeta_(WRAP_PUBLISHED_PROPERTY))};
+}
+function wrapPreviewRevision_(data) {
+  var stable=Object.assign({},data); delete stable.updatedAt;
+  return digest_(stable);
+}
+function monthlyWrapPreview_(payload) {
+  var result=monthlyRecap_(payload);
+  result.previewRevision=wrapPreviewRevision_(publicWrapData_(result));
+  result.publication=wrapCatalog_();
+  return result;
+}
+function wrapSnapshotSheet_(create) {
+  var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet=book.getSheetByName(WRAP_SNAPSHOT_SHEET);
+  if(!sheet&&create){sheet=book.insertSheet(WRAP_SNAPSHOT_SHEET);sheet.appendRow(WRAP_SNAPSHOT_HEADERS);sheet.setFrozenRows(1);}
+  if(sheet&&JSON.stringify(sheet.getRange(1,1,1,6).getValues()[0])!==JSON.stringify(WRAP_SNAPSHOT_HEADERS)) throw new Error('Header REKAP_WRAP_SNAPSHOT tidak sesuai.');
+  return sheet;
+}
+function readWrapSnapshot_(meta) {
+  var sheet=wrapSnapshotSheet_(false);
+  if(!sheet||!meta||!Number.isInteger(meta.row)||meta.row<2||!Number.isInteger(meta.count)||meta.count<1||meta.count>100) throw new Error('Snapshot rekap tidak tersedia.');
+  var parts=sheet.getRange(meta.row,1,meta.count,6).getValues();
+  var encoded=parts.map(function(row,i){
+    if(row[0]!==meta.snapshotId||row[1]!==meta.month||Number(row[3])!==i+1||Number(row[4])!==meta.count) throw new Error('Bagian snapshot rekap tidak lengkap.');
+    if(typeof row[5]!=='string'||row[5].indexOf('json:')!==0) throw new Error('Format bagian snapshot tidak sesuai.');
+    return row[5].slice(5);
+  }).join('');
+  var data=JSON.parse(encoded);
+  if(digest_(data)!==meta.checksum||data.publicView!==true||data.month!==meta.month||!Array.isArray(data.employees)) throw new Error('Integritas snapshot rekap tidak sesuai.');
+  return data;
+}
+function saveWrapSnapshot_(payload) {
+  requireWrapAdmin_(payload);
+  var month=wrapMonth_(payload.month);
+  if(!text_(payload.previewRevision)) throw new Error('Muat preview rekap sebelum menyimpan.');
+  // Compute server-side; do not accept browser-supplied employee/daily data.
+  var source=monthlyRecap_({month:month}), data=publicWrapData_(source);
+  if(!data.employees.length) throw new Error('Belum ada rekap yang dapat disimpan pada bulan ini.');
+  var revision=wrapPreviewRevision_(data);
+  if(revision!==payload.previewRevision) throw new Error('Data sumber berubah sejak preview. Muat ulang rekap, periksa, lalu simpan kembali.');
+  var lock=LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+    var old=wrapMeta_(WRAP_DRAFT_PREFIX+month);
+    if(old&&old.revision===revision) {
+      readWrapSnapshot_(old);
+      return {status:'success',draft:wrapMetaView_(old),publication:wrapCatalog_()};
+    }
+    var sheet=wrapSnapshotSheet_(true), encoded=JSON.stringify(data), parts=[];
+    // A Sheets cell is limited to 50k characters. Keep each chunk safely below it.
+    for(var i=0;i<encoded.length;i+=24000)parts.push(encoded.slice(i,i+24000));
+    if(parts.length>100)throw new Error('Snapshot melebihi batas ukuran rekap.');
+    var meta={snapshotId:Utilities.getUuid(),month:month,savedAt:new Date().toISOString(),row:sheet.getLastRow()+1,
+      count:parts.length,checksum:digest_(data),revision:revision,employees:data.employees.length};
+    var last=meta.row+meta.count-1;
+    if(last>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),last-sheet.getMaxRows());
+    // Prefix every chunk so untrusted text at a chunk boundary cannot become a Sheets formula.
+    sheet.getRange(meta.row,1,meta.count,6).setValues(parts.map(function(part,index){return [meta.snapshotId,month,meta.savedAt,index+1,meta.count,'json:'+part];}));
+    SpreadsheetApp.flush();
+    readWrapSnapshot_(meta); // Move the draft pointer only after the entire snapshot is verifiable.
+    wrapProperties_().setProperty(WRAP_DRAFT_PREFIX+month,JSON.stringify(meta));
+    return {status:'success',draft:wrapMetaView_(meta),publication:wrapCatalog_()};
+  } finally { if(lock.hasLock())lock.releaseLock(); }
+}
+function publishWrapSnapshot_(payload) {
+  requireWrapAdmin_(payload);
+  var month=wrapMonth_(payload.month), meta=wrapMeta_(WRAP_DRAFT_PREFIX+month);
+  if(payload.confirmed!==true)throw new Error('Konfirmasi menampilkan rekap ke publik diperlukan.');
+  if(!meta||meta.snapshotId!==text_(payload.snapshotId))throw new Error('Versi tersimpan berubah atau tidak tersedia. Muat ulang status rekap sebelum publikasi.');
+  readWrapSnapshot_(meta);
+  var active=wrapMeta_(WRAP_PUBLISHED_PROPERTY);
+  if(!active||active.snapshotId!==meta.snapshotId){
+    meta=Object.assign({},meta,{publishedAt:new Date().toISOString()});
+    wrapProperties_().setProperty(WRAP_PUBLISHED_PROPERTY,JSON.stringify(meta));
+  }
+  return {status:'success',publication:wrapCatalog_()};
+}
+function publicMonthlyRecap_() {
+  // Deliberately no monthlyRecap_, Drive scan, payroll lookup, or fallback to live data.
+  try {
+    var meta=wrapMeta_(WRAP_PUBLISHED_PROPERTY);
+    if(!meta)return {status:'success',publicView:true,wrapVersion:2,publicationVersion:1,published:false,month:'',months:[],units:[],employees:[],daily:[],documents:[]};
+    var data=readWrapSnapshot_(meta);
+    return Object.assign({},data,{publicationVersion:1,published:true,savedAt:meta.savedAt,publishedAt:meta.publishedAt});
+  } catch(error) { throw new Error('Rekap publik tersimpan belum dapat dibaca. Hubungi admin untuk memeriksa atau menerbitkan ulang rekap.'); }
 }
 function monthlyRecap_(payload) {
   if (payload.modul && payload.modul !== 'uang-makan') throw new Error('Wrap hanya menggunakan rekap satu bulan kalender.');
@@ -1592,12 +1844,16 @@ function monthlyRecap_(payload) {
       var rows=saved.rows.map(function(row,i){return Object.assign({},row,{keterangan:text_(saved.current[i][21]),jamKerja:schedules[row.tanggal]});});
       var corrections=saved.baseline?JSON.parse(text_(saved.baseline.getRange(5,2).getValue())||'{}'):{};
       var calculation=calculateAttendance_(applyAdjustments_(rows,corrections),{uangMakan:null,pajak:null,tukin:null,skp:null},'uang-makan');
+      var scopedDocuments=registry.filter(function(entry){return sameScope_(entry,record)&&entry.status==='active';});
+      addAdjustmentEvidenceCounts_(calculation,scopedDocuments);
       var nip=record.nip, person=byNip[nip]||[];
-      var photo=employeeField(person,['fotopegawai','foto','linkfoto']), photoId=driveId_(photo);
+      var photo=employeeField(person,['fotopegawai','foto','linkfoto','urlfoto','fotoprofil','photo','image']), photoId=driveId_(photo);
       var t=calculation.totals, employee={nip:nip,nama:employeeField(person,['nama'])||record.nama,
-        unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s200':'',
+        unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s800':'',
         masuk:t.masuk,hariKerja:t.hariKerja,dinas:t.dinas,cuti:t.cuti,tb:t.tb,terlambat:t.terlambat,psw:t.psw,
         lupaAbsen:t.lupaAbsen,adjusted:t.adjusted,unadjusted:t.unadjusted,flexi:t.flexi,flexiMinutes:0,
+        adjustmentReported:t.adjustmentReported,adjustmentDocuments:t.adjustmentDocuments,
+        adjustmentDocumentsUsed:t.adjustmentDocumentsUsed,adjustmentDocumentsUnclaimed:t.adjustmentDocumentsUnclaimed,
         assessed:0,clean:0,onTime:0,avgArrival:null,recordedDays:rows.length,
         completeMonth:rows.length===new Date(Date.UTC(+month.slice(0,4),+month.slice(5,7),0)).getUTCDate()};
       var arrivalSum=0, arrivalCount=0, personDaily=[];
@@ -1616,7 +1872,7 @@ function monthlyRecap_(payload) {
       });
       employee.avgArrival=arrivalCount?Math.round(arrivalSum/arrivalCount):null;
       var personDocs={};
-      registry.filter(function(entry){return sameScope_(entry,record)&&entry.status==='active';}).forEach(function(entry){
+      scopedDocuments.forEach(function(entry){
         var id=entry.sourceFileId||entry.fileId;
         if(id)personDocs[entry.jenisDokumen+'|'+id]={nip:nip,type:entry.jenisDokumen,id:id,tujuan:entry.jenisDokumen==='spt'?(destinations[nip+'|'+entry.sourceFileId]||''):''};
       });

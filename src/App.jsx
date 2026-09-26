@@ -1,13 +1,16 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { MonthlyRecap } from './monthly-recap.jsx';
+import { PkpLogo } from './pkp-logo.jsx';
+import { EmployeePhoto } from './employee-photo.jsx';
+import { PublishedLeaders } from './published-leaders.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  FileText, HelpCircle, MessageCircle, User, Trophy, ChevronRight, 
+  FileText, HelpCircle, MessageCircle, User, ChevronRight,
   FileBarChart, ArrowLeft, Search, Briefcase, CheckCircle2, AlertCircle, 
   Calendar, Clock, LogOut, FileCheck, KeyRound, RotateCcw, UploadCloud, 
   FileSpreadsheet, Trash2, Users, Edit3, Save, X, Eye, MapPin, 
@@ -1157,21 +1160,19 @@ const getStoredUser = () => {
 
 const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
   return (
-    <header data-site-header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300 bg-[#F2EEDF]">
+    <header data-site-header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-3 grid grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-4 gap-y-3 items-center shadow-xs bg-[#F2EEDF]">
       <div 
-        className="flex items-center gap-3 cursor-pointer group"
+        className="flex min-w-0 items-center gap-3 cursor-pointer group"
         onClick={() => navigate('home')}
       >
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold shadow-sm transition-transform group-hover:scale-105" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
-          <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pancasila_Coat_of_Arms_of_Indonesia.svg/800px-Pancasila_Coat_of_Arms_of_Indonesia.svg.png" alt="Logo" className="w-5 h-5 object-contain filter brightness-0 invert" />
-        </div>
+        <PkpLogo/>
         <div>
           <h1 className="font-extrabold text-base md:text-lg leading-tight tracking-tight text-[#084C61]">Direktorat Pembangunan Perumahan Perdesaan</h1>
           <p className="text-[10px] text-gray-500 font-medium">Support System Kementerian PKP</p>
         </div>
       </div>
       
-      <div className="hidden md:flex items-center gap-6 text-sm font-medium text-[#084C61]">
+      <nav aria-label="Navigasi utama" className="order-3 col-span-2 lg:order-none lg:col-span-1 lg:col-start-2 lg:row-start-1 flex justify-center items-center gap-6 text-sm font-medium text-[#084C61]">
         <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
@@ -1179,9 +1180,9 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <HelpCircle size={16} /> FAQ
         </button>
-      </div>
+      </nav>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center justify-self-end gap-3 lg:col-start-3 lg:row-start-1">
         {loggedInUser ? (
           <div className="flex items-center gap-3 bg-white/70 px-3 py-1.5 rounded-xl border border-gray-200 shadow-xs">
             <div className="text-right hidden sm:block">
@@ -1249,16 +1250,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
         </div>
 
         <div className="w-full lg:w-[400px] flex flex-col gap-4">
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
-            <div className="px-5 py-4 text-white font-bold text-sm flex items-center gap-2 bg-[#084C61]">
-              <Trophy size={16} /> PALING DISIPLIN • PERIODE BERKALA
-            </div>
-            <div className="p-8 text-center">
-              <p className="text-xs text-gray-400 italic">
-                Data kedisiplinan berkala akan segera diperbarui secara berkala dari sumber data resmi.
-              </p>
-            </div>
-          </div>
+          <PublishedLeaders endpoint={APPS_SCRIPT_URL}/>
 
           <a
             href="#/rekap-publik"
@@ -3429,27 +3421,27 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
         </div>
       </aside>
 
-      <main className={`flex-1 bg-[#F8FAFC] text-gray-900 h-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
-        <div className={`w-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'h-full flex flex-col' : ''}`}>
+      <main className={`flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full ${activeTab !== 'rekap' ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
+        <div className={`w-full ${activeTab !== 'rekap' ? 'h-full min-h-0 flex flex-col' : ''}`}>
           {activeTab === 'rekap' ? (
             <MonthlyRecap endpoint={APPS_SCRIPT_URL} role={loggedInUser?.Akun_Role}/>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
-            <div>
-              <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 shadow-sm">
+            <div className="flex flex-col h-full min-h-0">
+              <div data-testid="archive-banner" className="shrink-0 relative z-20 bg-[#F8FAFC] pt-3 px-6 md:px-10 border-b border-gray-200 shadow-sm">
                 {/* Header Baru Minimalis */}
-                <div className="mb-6 pl-2">
-                  <h2 className="text-2xl sm:text-3xl font-black text-gray-900 leading-tight mb-1.5">
+                <div className="mb-3 rounded-2xl bg-[#084C61] text-white px-4 py-3">
+                  <h2 className="text-base sm:text-lg font-black leading-tight mb-1.5">
                     {activeTab === 'spt' ? 'Arsip SPT' : 'Arsip Cuti'}
                   </h2>
-                  <p className="text-sm text-gray-500 font-medium">
+                  <p className="text-xs text-slate-200 font-medium">
                     {activeTab === 'spt' 
                       ? 'Arsip Surat Perintah Tugas perjalanan dinas Anda' 
                       : 'Arsip Surat Cuti dan keterangan ketidakhadiran Anda'}
                   </p>
                 </div>
 
-                <div className="border-b border-gray-200 flex overflow-x-auto custom-scrollbar pl-2">
-                  <nav className="-mb-px flex gap-8">
+                <div className="border-b border-gray-200 flex overflow-x-auto overflow-y-hidden custom-scrollbar pl-2">
+                  <nav className="flex gap-8">
                     <button 
                       onClick={() => setArsipSubTab('terdata')} 
                       className={`py-3 border-b-2 font-bold text-sm transition-colors cursor-pointer whitespace-nowrap ${arsipSubTab === 'terdata' ? 'border-[#1C3A53] text-[#1C3A53]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
@@ -3466,11 +3458,13 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
                 </div>
               </div>
 
+              <div data-testid="archive-content" className="flex-1 min-h-0 overflow-y-auto p-6 md:p-10">
               {arsipSubTab === 'terdata' ? (
                 <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
               ) : (
                 (documentModule === 'cuti' ? cutiUpload : sptUpload).render()
               )}
+              </div>
             </div>
 
           ) : (
@@ -4057,15 +4051,13 @@ const ProfileView = ({ navigate }) => {
             <div className="flex flex-col gap-6">
               {filteredPegawai.map((item, index) => {
                 const rawFoto = item.Foto_Pegawai || '';
-                const fileId = extractDriveId(rawFoto);
-                const fotoUrl = getDriveDirectUrl(rawFoto);
                 const hasTukin = item.Tukin && item.Tukin.toString().trim() !== '';
 
                 return (
                   <div key={index} className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden flex flex-col lg:flex-row items-stretch relative min-h-[220px]">
                     <div className="w-2 hidden lg:block shrink-0 relative z-20" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}></div>
                     <div className="p-6 md:p-8 flex-1 flex flex-col justify-center relative z-20">
-                      <div className="mb-5 lg:w-[70%] pr-4">
+                      <div className="mb-5 pr-4">
                         <h3 className="text-2xl font-black text-gray-900 leading-tight mb-2" style={{ color: PALETTE_PKP.midnightGreen }}>{item.Nama}</h3>
                         <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
                           <span className="text-gray-500 font-medium">NIP {item.NIP}</span>
@@ -4073,8 +4065,8 @@ const ProfileView = ({ navigate }) => {
                           {item.KelasJabatan && (<span className="px-3 py-1 rounded-full font-bold text-gray-800 shadow-xs" style={{ backgroundColor: PALETTE_PKP.krem }}>Kelas Jabatan {item.KelasJabatan}</span>)}
                         </div>
                       </div>
-                      <div className="w-full lg:w-[70%] h-px bg-gray-100 mb-5 relative z-20"></div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-10 gap-y-6 text-sm relative z-20 lg:w-[70%]">
+                      <div className="w-full h-px bg-gray-100 mb-5 relative z-20"></div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-10 gap-y-6 text-sm relative z-20">
                         <div>
                           <p className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">Jabatan</p>
                           <p className="font-bold text-gray-800 leading-snug">{item.Jabatan || '-'}</p>
@@ -4096,21 +4088,7 @@ const ProfileView = ({ navigate }) => {
                         )}
                       </div>
                     </div>
-                    {fotoUrl && (
-                      <div className="w-full lg:absolute right-0 top-0 bottom-0 lg:w-[35%] xl:w-[30%] h-64 lg:h-auto shrink-0 overflow-hidden select-none pointer-events-none z-0">
-                        <div className="hidden lg:block absolute inset-y-0 left-0 w-40 bg-gradient-to-r from-white via-white/80 to-transparent z-10"></div>
-                        <div className="lg:hidden absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-white via-white/90 to-transparent z-10"></div>
-                        <div className="absolute inset-0 z-0 mix-blend-multiply opacity-20 transition-opacity" style={{ backgroundColor: PALETTE_PKP.krem }}></div>
-                        <img 
-                          src={fotoUrl} alt={item.Nama} className="w-full h-full object-cover object-top opacity-60 relative z-0 transition-opacity" 
-                          onError={(e) => {
-                            if (fileId && !e.target.dataset.triedFallback1) { e.target.dataset.triedFallback1 = 'true'; e.target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`; } 
-                            else if (fileId && !e.target.dataset.triedFallback2) { e.target.dataset.triedFallback2 = 'true'; e.target.src = `https://drive.google.com/uc?export=view&id=${fileId}`; } 
-                            else { e.target.style.display = 'none'; }
-                          }}
-                        />
-                      </div>
-                    )}
+                    <div className="w-full lg:w-64 shrink-0 p-5 bg-slate-50 border-t lg:border-t-0 lg:border-l border-slate-100 flex items-center justify-center"><EmployeePhoto src={rawFoto} name={item.Nama} className="h-72 w-full rounded-2xl"/></div>
                   </div>
                 );
               })}
@@ -4223,7 +4201,7 @@ export default function App() {
         </div>
       )}
 
-      {!isDashboardView && currentView !== 'profile' && <Header navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
+      {!isDashboardView && !isPublicRecap && currentView !== 'profile' && <Header navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
       
       {currentView === 'profile' ? (
         <div className="flex flex-col h-screen">
@@ -4238,11 +4216,7 @@ export default function App() {
 }
 
 export function PublicRecapPage({ endpoint }) {
-  return <section className="mx-auto max-w-7xl px-4 py-6 md:px-8 space-y-4" aria-label="Rekap Kinerja dan Kedisiplinan Publik">
-    <div className="flex flex-wrap justify-between items-center gap-3">
-      <div><h1 className="text-xl font-extrabold text-[#084C61]">Rekap Kinerja &amp; Kedisiplinan</h1><p className="text-xs text-gray-500 mt-1">Halaman publik • hanya-baca • tidak memerlukan login</p></div>
-      <a href="#/home" className="inline-flex items-center gap-2 rounded-xl border bg-white px-4 py-2 text-sm text-[#084C61]"><ArrowLeft size={16}/>Kembali ke Beranda</a>
-    </div>
+  return <section className="w-full" aria-label="Rekap Direktorat Pembangunan Perumahan Perdesaan">
     <MonthlyRecap endpoint={endpoint} publicView/>
   </section>;
 }
