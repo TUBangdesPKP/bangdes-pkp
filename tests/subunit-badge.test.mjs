@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { subunitBadge, leaderComposition } from '../src/subunit-badge.js';
 
+test('unit colours match recap cards and stay fixed when winners change order', () => {
+  const palette = { Direktorat: '#204E6C', Rentek: '#74B9CA', 'Tata Usaha': '#BCAB88', 'Wilayah I': '#476879', 'Wilayah II': '#819C8A', 'Wilayah III': '#204E6C' };
+  Object.entries(palette).forEach(([unit, colour]) => assert.equal(subunitBadge(unit).background, colour));
+  const rows = Object.keys(palette).map(unit => ({ unit }));
+  assert.deepEqual(leaderComposition(rows), leaderComposition([...rows].reverse()));
+  leaderComposition(rows).forEach(group => assert.equal(group.background, palette[group.label]));
+});
+
 test('home badges abbreviate the directorate units with distinct stable colours', () => {
   const units = ['Subdirektorat Perencanaan Teknis', 'Subbagian Tata Usaha', 'Subdirektorat Wilayah I', 'Subdirektorat Wilayah II', 'Subdirektorat Wilayah III'];
   const badges = units.map(subunitBadge);
