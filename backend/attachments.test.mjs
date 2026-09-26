@@ -1188,6 +1188,51 @@ test('published snapshot is pinned across fresh source data, later drafts and pu
   assert.equal(f.properties.get('WRAP_PUBLISHED_V1'),active);
 });
 
+test('publication replaces from row 2, shrinks and grows without leading gaps', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);publishWrap(f);
+  const sheet=f.master.getSheetByName('REKAP_WRAP_PUBLIK');
+  for(const name of ['Changed', 'Large '.repeat(12000).trim(), 'Small']) {
+    f.master.getSheetByName('Data_Pegawai').rows[1][1]=name;
+    publishWrap(f);
+    const meta=JSON.parse(f.properties.get('WRAP_PUBLISHED_V1'));
+    assert.equal(meta.row,2);
+    assert.equal(sheet.rows.filter(row=>row[0]===meta.snapshotId).length,meta.count);
+    assert.ok(sheet.rows.slice(1,meta.count+1).every(row=>row[0]===meta.snapshotId));
+    assert.ok(sheet.rows.slice(meta.count+1).every(row=>row.every(value=>value==='')));
+    assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].nama,name);
+  }
+});
+
+test('republishing the same snapshot repairs legacy blank rows without changing drafts', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);const saved=publishWrap(f);
+  const sheet=f.master.getSheetByName('REKAP_WRAP_PUBLIK');
+  const draftBefore=JSON.stringify(f.master.getSheetByName('REKAP_WRAP_SNAPSHOT').rows);
+  const meta=JSON.parse(f.properties.get('WRAP_PUBLISHED_V1'));
+  sheet.rows.splice(1,0,...Array.from({length:6},()=>Array(6).fill('')));
+  meta.row=8;f.properties.set('WRAP_PUBLISHED_V1',JSON.stringify(meta));
+  const before=f.call({action:'rekap_bulanan_publik'});
+  assert.equal(f.call({action:'publikasikan_wrap_bulanan',month:meta.month,snapshotId:saved.draft.snapshotId,adminKey:wrapKey,confirmed:true}).status,'success');
+  assert.equal(JSON.parse(f.properties.get('WRAP_PUBLISHED_V1')).row,2);
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik'}),before);
+  assert.equal(JSON.stringify(f.master.getSheetByName('REKAP_WRAP_SNAPSHOT').rows),draftBefore);
+});
+
+test('failed public verification restores previous rows and publication pointer', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);publishWrap(f);
+  const before=f.call({action:'rekap_bulanan_publik'}), pointer=f.properties.get('WRAP_PUBLISHED_V1');
+  f.master.getSheetByName('Data_Pegawai').rows[1][1]='Replacement '.repeat(5000);
+  const saved=saveWrap(f);
+  const original=f.context.readWrapSnapshot_;let fail=true;
+  f.context.readWrapSnapshot_=meta=>{
+    if(meta.sheet==='REKAP_WRAP_PUBLIK'&&fail){fail=false;throw Error('Injected verification failure');}
+    return original(meta);
+  };
+  const result=f.call({action:'publikasikan_wrap_bulanan',month:'2026-07',snapshotId:saved.draft.snapshotId,adminKey:wrapKey,confirmed:true});
+  assert.equal(result.status,'error');
+  assert.equal(f.properties.get('WRAP_PUBLISHED_V1'),pointer);
+  assert.deepEqual(f.call({action:'rekap_bulanan_publik'}),before);
+});
+
 test('public serving reads only persisted snapshot, never live employee data or Drive', () => {
   const f=fixture();payrollFixture(f);confirmRecap(f);publishWrap(f);
   const expected=f.call({action:'rekap_bulanan_publik'});

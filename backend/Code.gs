@@ -1941,11 +1941,24 @@ function publishWrapSnapshot_(payload) {
   if(!meta||meta.snapshotId!==text_(payload.snapshotId))throw new Error('Versi tersimpan berubah atau tidak tersedia. Muat ulang status rekap sebelum publikasi.');
   var data=readWrapSnapshot_(meta);
   var active=wrapMeta_(WRAP_PUBLISHED_PROPERTY);
-  if(!active||active.snapshotId!==meta.snapshotId){
-    meta=writeWrapSnapshot_(data,Object.assign({},meta,{publishedAt:new Date().toISOString()}),'REKAP_WRAP_PUBLIK');
+  // This sheet holds only the active publication; monthly archives stay in SNAPSHOT.
+  // Always rewrite from row 2, including repeated publication of an old gapped layout.
+  // doPost holds the script lock. Keep a backup until verification and pointer update succeed.
+  var sheet=wrapSnapshotSheet_(true,'REKAP_WRAP_PUBLIK'), previous=sheet.getDataRange().getValues().slice(1).map(function(row){return row.slice(0,6);});
+  var previousProperty=wrapProperties_().getProperty(WRAP_PUBLISHED_PROPERTY);
+  var publishedAt=active&&active.snapshotId===meta.snapshotId?active.publishedAt:new Date().toISOString();
+  try {
+    meta=writeWrapSnapshot_(data,Object.assign({},meta,{publishedAt:publishedAt}),'REKAP_WRAP_PUBLIK',2);
+    if(previous.length>meta.count)sheet.getRange(meta.count+2,1,previous.length-meta.count,6).setValues(Array.from({length:previous.length-meta.count},function(){return ['','','','','',''];}));
+    SpreadsheetApp.flush();
     wrapProperties_().setProperty(WRAP_PUBLISHED_PROPERTY,JSON.stringify(meta));
-    var sheet=wrapSnapshotSheet_(false,'REKAP_WRAP_PUBLIK');
-    sheet.getDataRange().getValues().slice(1).forEach(function(row,index){if(row[0]&&row[0]!==meta.snapshotId)sheet.getRange(index+2,1,1,6).setValues([['','','','','','']]);});
+  } catch(error) {
+    var restoreCount=Math.max(previous.length,sheet.getLastRow()-1);
+    if(restoreCount)sheet.getRange(2,1,restoreCount,6).setNumberFormat('@').setValues(Array.from({length:restoreCount},function(_,index){return previous[index]||['','','','','',''];}));
+    SpreadsheetApp.flush();
+    if(previousProperty)wrapProperties_().setProperty(WRAP_PUBLISHED_PROPERTY,previousProperty);
+    else wrapProperties_().deleteProperty(WRAP_PUBLISHED_PROPERTY);
+    throw error;
   }
   return {status:'success',publication:wrapCatalog_()};
 }
