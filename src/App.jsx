@@ -3,6 +3,7 @@ import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
+import { recognizeCutiImage } from './cuti-ocr.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -469,7 +470,7 @@ const isValidSptLocation = (tujuan) => {
   return false;
 };
 
-const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') => {
+const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', cutiPeriod = null) => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
@@ -605,7 +606,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
   let cutiDuration = null;
 
   if (modul === 'cuti') {
-    found = extractCutiPeriod(fullText);
+    found = cutiPeriod || extractCutiPeriod(fullText);
     cutiDuration = found.duration;
   }
 
@@ -757,7 +758,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt') 
     }
   });
 
-  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, cutiDuration, tujuan: finalTujuan };
+  return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, cutiDuration, cutiWarning: found?.warning || '', tujuan: finalTujuan };
 };
 
 const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = null, onProgress = null) => {
@@ -766,6 +767,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   let fullText = '';
   let lines = [];
   let excelRows = [];
+  let cutiPeriod = null;
 
   if (isExcel) {
     if (!window.XLSX) {
@@ -864,7 +866,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     const isTooShort = fullText.trim().length < 50;
     let needsCutiOcr = false;
     if (activeTab === 'cuti') {
-      try { extractCutiPeriod(fullText); } catch { needsCutiOcr = true; }
+      try { needsCutiOcr = !!extractCutiPeriod(fullText).warning; } catch { needsCutiOcr = true; }
     }
 
     if (!hasNip || isTooShort || needsCutiOcr) {
@@ -892,7 +894,9 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
         canvas.height = viewport.height;
         await page.render({ canvasContext: ctx, viewport: viewport }).promise;
 
-        const { data: { text } } = await window.Tesseract.recognize(canvas, 'eng');
+        const cutiRead = activeTab === 'cuti' ? await recognizeCutiImage(canvas, window.Tesseract, onProgress) : null;
+        if (cutiRead?.period && (!cutiPeriod || cutiPeriod.warning)) cutiPeriod = cutiRead.period;
+        const text = cutiRead ? cutiRead.text : (await window.Tesseract.recognize(canvas, 'eng')).data.text;
         const pageLines = text.split('\n').map(l => l.trim()).filter(l => l);
         lines = lines.concat(pageLines);
       }
@@ -909,7 +913,17 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
         document.head.appendChild(script);
       });
     }
-    const { data: { text } } = await window.Tesseract.recognize(file, 'eng');
+    let text;
+    if (activeTab === 'cuti') {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      const scale = Math.max(1, Math.min(2, 1800 / bitmap.width));
+      canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
+      bitmap.close();
+      const result = await recognizeCutiImage(canvas,window.Tesseract,onProgress);
+      text = result.text; cutiPeriod = result.period;
+    } else text = (await window.Tesseract.recognize(file, 'eng')).data.text;
     fullText = text;
     lines = text.split('\n').map(line => line.trim()).filter(Boolean);
   } else {
@@ -927,12 +941,12 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   }
 
   if (activeTab === 'spt' || activeTab === 'cuti') {
-    const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab);
+    const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab, cutiPeriod);
     
     let finalNames = arsipData.pegawaiList;
     if (activeTab === 'cuti') {
       const calculatedDays = hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang));
-      if (calculatedDays === 0 || arsipData.tujuan === 'Cuti / Alasan Lainnya') {
+      if (calculatedDays === 0 || arsipData.tujuan === 'Cuti / Alasan Lainnya' || arsipData.cutiWarning) {
         finalNames = finalNames.map(p => ({ ...p, selected: false }));
       }
     } else if (activeTab === 'spt') {
@@ -949,6 +963,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       arsipTanggalSurat: arsipData.tanggalSurat,
       arsipTujuan: arsipData.tujuan,
       arsipJumlahHariCuti: arsipData.cutiDuration,
+      arsipCutiWarning: arsipData.cutiWarning,
       arsipNames: finalNames,
       nip: '-',
       nama: 'Berbagai Pegawai',
@@ -1142,7 +1157,7 @@ const getStoredUser = () => {
 
 const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
   return (
-    <header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300 bg-[#F2EEDF]">
+    <header data-site-header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-4 flex justify-between items-center shadow-xs transition-colors duration-300 bg-[#F2EEDF]">
       <div 
         className="flex items-center gap-3 cursor-pointer group"
         onClick={() => navigate('home')}
@@ -2042,6 +2057,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         arsipDatePulang: editArsipForm.pulang,
         arsipTanggalSurat: editArsipForm.tanggalSurat,
         arsipJumlahHariCuti: documentModule === 'cuti' ? Number(editArsipForm.jumlahHariCuti) : pd.arsipJumlahHariCuti,
+        arsipCutiWarning: '',
         arsipTujuan: newTujuan,
         arsipNames: newNames
       };
@@ -2052,7 +2068,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   const handleUploadSubmitArsip = async (e) => {
     e.preventDefault();
     if (isSubmittingArsip || isReadingArsip || (isPeriodSpt && !submissionReady)) return;
-    const filesToUpload = arsipFiles.filter(f => f.status === 'success' && f.parsedData.arsipNames.some(p => p.selected));
+    const filesToUpload = arsipFiles.filter(f => f.status === 'success' && !f.parsedData.arsipCutiWarning && f.parsedData.arsipNames.some(p => p.selected));
     if (filesToUpload.length === 0) return;
 
     setIsSubmittingArsip(true);
@@ -2620,6 +2636,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                               {pd.arsipJumlahHariCuti !== hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah berbeda dari kalender kerja. Periksa tanggal, hari libur, dan jumlah pada surat sebelum klaim.</span>}
                                             </p>
                                           )}
+                                          {pd.arsipCutiWarning && <p role="alert" className="text-xs text-amber-700">{pd.arsipCutiWarning}</p>}
                                           {documentModule !== 'cuti' && (
                                             <div className="flex items-center gap-2 pl-[22px]">
                                               <FileText size={12} className="text-gray-400 shrink-0" />
@@ -2646,7 +2663,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                       const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
                                       const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
                                       const isInvalidCutiType = documentModule === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                      const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState;
+                                      const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState || !!pd.arsipCutiWarning;
                                       
                                       return (
                                         <div key={idx} className={`flex items-center gap-3 p-3 rounded-xl transition-colors border group ${isErrorState ? 'bg-red-50/30 border-red-100 hover:border-red-200' : 'hover:bg-gray-50 border-transparent hover:border-gray-200'}`}>
@@ -2738,7 +2755,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                                   if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
                                                     const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
                                                     const isInvalidCutiType = documentModule === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
-                                                    const currentErrorState = isZeroDays || isInvalidCutiType || (documentModule === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
+                                                    const currentErrorState = isZeroDays || isInvalidCutiType || !!oldData.arsipCutiWarning || (documentModule === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
                                                     return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !currentErrorState }] };
                                                   }
                                                   return oldData;
@@ -3415,7 +3432,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, navigate, cur
       <main className={`flex-1 bg-[#F8FAFC] text-gray-900 h-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
         <div className={`w-full ${(activeTab === 'uang-makan' || activeTab === 'tukin') ? 'h-full flex flex-col' : ''}`}>
           {activeTab === 'rekap' ? (
-            <MonthlyRecap endpoint={APPS_SCRIPT_URL}/>
+            <MonthlyRecap endpoint={APPS_SCRIPT_URL} role={loggedInUser?.Akun_Role}/>
           ) : (activeTab === 'spt' || activeTab === 'cuti') ? (
             <div>
               <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-0 pt-6 md:pt-10 px-6 md:px-10 -mx-6 -mt-6 md:-mx-10 md:-mt-10 mb-8 shadow-sm">

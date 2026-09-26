@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { attendanceExcelClocks, extractCutiPeriod } from '../src/document-parsers.js';
+import { recognizeCutiImage, cutiOcrRegions } from '../src/cuti-ocr.js';
 
 const letter = `Jakarta, 21 Agustus 2026
 I. DATA PEGAWAI
@@ -53,7 +54,7 @@ test('Excel D and E stay independent, including absent arrival, absent departure
 const appSource=fs.readFileSync(new URL('../src/App.jsx',import.meta.url),'utf8');
 function reader(sheets, ocrText=letter, digitalText='') {
   const context=vm.createContext({
-    attendanceExcelClocks,extractCutiPeriod,console,
+    attendanceExcelClocks,extractCutiPeriod,recognizeCutiImage,console,
     DAFTAR_LIBUR_NASIONAL:['2026-08-17','2026-08-25'],
     localStorage:{getItem:()=>JSON.stringify([{NIP:'199001012020011001',Nama:'Pegawai Uji'}])},
     parseIndoDate:value=>{const parts=value.split(' '), months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];return new Date(+parts[2],months.indexOf(parts[1].slice(0,3)),+parts[0]);},
@@ -61,7 +62,7 @@ function reader(sheets, ocrText=letter, digitalText='') {
     document:{createElement:()=>({getContext:()=>({})})},
     window:{XLSX:{read:()=>({SheetNames:Object.keys(sheets),Sheets:sheets}),utils:{sheet_to_json:(sheet,options)=>{
       assert.equal(options.header,1);assert.equal(options.raw,false);assert.equal(options.range,0);return sheet;
-    }}},pdfjsLib:{getDocument:()=>({promise:Promise.resolve({numPages:1,getPage:async()=>({getTextContent:async()=>({items:digitalText?[{str:digitalText,transform:[0,0,0,0,0,0]}]:[]}),getViewport:()=>({width:100,height:100}),render:()=>({promise:Promise.resolve()})})})})},Tesseract:{recognize:async()=>({data:{text:ocrText}})}},
+    }}},pdfjsLib:{getDocument:()=>({promise:Promise.resolve({numPages:1,getPage:async()=>({getTextContent:async()=>({items:digitalText?[{str:digitalText,transform:[0,0,0,0,0,0]}]:[]}),getViewport:()=>({width:100,height:100}),render:()=>({promise:Promise.resolve()})})})})},Tesseract:{recognize:async()=>({data:{text:ocrText}}),createWorker:async()=>({recognize:async()=>({data:{text:ocrText}}),setParameters:async()=>{},terminate:async()=>{}})}},
   });
   vm.runInContext(appSource.slice(appSource.indexOf('const extractArsipData ='),appSource.indexOf('const getStoredUser ='))+'\nglobalThis.readFile = parseDocumentPresensi;',context);
   return (name, module='uang-makan')=>context.readFile({name,arrayBuffer:async()=>new ArrayBuffer(0)},null,module);
@@ -84,6 +85,55 @@ test('partial PDF text with a valid NIP still uses OCR when Bab IV is missing',a
   const result=await reader({},letter.replace('Cuti Tahunan v','Cuti Tahunan √'),header)('hybrid.pdf','cuti');
   assert.equal(result.arsipDateBerangkat,'3 September 2026');assert.equal(result.arsipJumlahHariCuti,2);
   assert.equal(result.arsipTujuan,'Cuti Tahunan');
+});
+
+// Anonymized section excerpts from the five supplied scans, not fabricated clean OCR.
+test('observed OCR accepts missing Selama, CUT without I, border noise and shared year',()=>{
+  const samples=[
+    ['IV._LAMANYA CUTI\n[Selama J 1 ~~ (haribulan#tahun) | tanggal [26 Agustus s/d 27 Agustus 2026\nV._CATATAN CUTF', '26 Agustus 2026','27 Agustus 2026',1],
+    ['LAMANYA CUTI\n2 (HarifBulanfFahun)* Mulai Tanggal 3 September 2026 4 September 2026','3 September 2026','4 September 2026',2],
+    ['IV. LAMANYA CUTI\n1 (Hari/BulanfFahun)* Mulai Tanggal 21 Agustus 2026 | dan | 21 Agustus 2026\nV. CATATAN CUT','21 Agustus 2026','21 Agustus 2026',1],
+    ['V_LAMANYA CUT\n[Selama | 1 Satu (haribulanfahun) tanggal 24Agustus2026 |\nVI. ALAMAT SELAMA','24 Agustus 2026','24 Agustus 2026',1],
+    ['LAMANYA CUTI\n[Seema | 3 (harikeray mi\nMulai Tanggal\nmilal tanggal 21Agustus 2026 | sid | 26 Agustus 2026','21 Agustus 2026','26 Agustus 2026',3],
+  ];
+  for(const [text,berangkat,pulang,duration] of samples) assert.deepEqual(extractCutiPeriod(text),{berangkat,pulang,duration});
+  for(const sep of ['s/d','s.d','s.d.','s / d','-']) assert.equal(extractCutiPeriod(`LAMANYA CUTI Selama 2 hari tanggal 26 Agustus ${sep} 27 Agustus 2026`).berangkat,'26 Agustus 2026');
+});
+
+test('missing duration keeps incomplete dates for review, never silently asserts one day',()=>{
+  const result=extractCutiPeriod('Jakarta 21 Agustus 2026\nIV. LAMANYA CUTI\n4 September 2026\nV. CATATAN CUTI');
+  assert.equal(result.duration,null);assert.match(result.warning,/Jumlah hari belum terbaca/);
+});
+
+function mockOcr(responses) {
+  let calls=0,closed=0; const options=[];
+  return {Tesseract:{createWorker:async()=>({recognize:async(_,o)=>{options.push(o);const data=responses[calls++];if(data instanceof Error)throw data;return {data};},setParameters:async()=>{},terminate:async()=>{closed++;}})},stats:()=>({calls,closed,options})};
+}
+test('Ayu regression: retry the actual date row when whole-page OCR only sees the end date',async()=>{
+  const mock=mockOcr([{text:'IV. LAMANYA CUTI\n4 September 2026\nV. CATATAN CUTI',lines:[
+    {text:'IV. LAMANYA CUTI',bbox:{x0:155,y0:632,x1:326,y1:646}},
+    {text:'4 September 2026',bbox:{x0:957,y0:656,x1:1110,y1:674}},
+    {text:'V. CATATAN CUTI',bbox:{x0:155,y0:701,x1:345,y1:722}},
+  ]},{text:'2 (HarifBulanfFahun)* Mulai Tanggal 3 September 2026 4 September 2026'}]);
+  const result=await recognizeCutiImage({width:1191,height:1684},mock.Tesseract);
+  assert.deepEqual(result.period,{berangkat:'3 September 2026',pulang:'4 September 2026',duration:2});
+  assert.equal(mock.stats().calls,2);assert.equal(mock.stats().closed,1);
+  assert.ok(mock.stats().options[1].rectangle.top>646);
+});
+test('skewed photo recovers missing duration from the left-hand cells of the same row',async()=>{
+  const mock=mockOcr([{text:'mula tanggal 21Agustus 2026 | sia | 26 Agustus 2026',lines:[
+    {text:'FORMULIR CUTI',bbox:{x0:90,y0:450,x1:1300,y1:480}},
+    {text:'mula tanggal 21Agustus 2026 | sia | 26 Agustus 2026',bbox:{x0:728,y0:891,x1:1649,y1:922}}
+  ]},{text:'milal tanggal 21Agustus 2026 | sid | 26 Agustus 2026'},{text:'[Seema | 3 (harikeray mi'}]);
+  const result=await recognizeCutiImage({width:1800,height:2560},mock.Tesseract);
+  assert.equal(result.period.duration,3);assert.equal(result.period.pulang,'26 Agustus 2026');
+  assert.equal(mock.stats().calls,3);assert.equal(mock.stats().closed,1);
+});
+test('OCR worker is released on failure and a letter date alone cannot become a leave date',async()=>{
+  const mock=mockOcr([new Error('OCR failed')]);
+  await assert.rejects(recognizeCutiImage({width:100,height:100},mock.Tesseract),/OCR failed/);
+  assert.equal(mock.stats().closed,1);
+  assert.equal(cutiOcrRegions([{text:'Jakarta 21 Agustus 2026',bbox:{x0:1,y0:1,x1:90,y1:10}}],100,100),null);
 });
 test('optional supplied Excel reproducer: August 24 retains D dash and E 18:04', {skip:!process.env.PRESENSI_EXAMPLE_XLSX}, async()=>{
   const code="import openpyxl,json,sys; w=openpyxl.load_workbook(sys.argv[1],data_only=True); print(json.dumps({s.title:[[str(c) if c is not None else '' for c in r] for r in s.values] for s in w.worksheets}))";

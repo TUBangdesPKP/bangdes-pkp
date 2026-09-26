@@ -27,21 +27,21 @@ Perubahan ini belum dipasang otomatis ke produksi. Tidak perlu membuat sheet bar
 
 - `DOKUMEN_PENDUKUNG`: file tambahan menggunakan jenis `lupa_absen`, `tugas_belajar`, atau `lainnya`. Tidak mengubah kolom O+ yang dipakai tanggal SPT/Cuti.
 - `ADJUSTMENT_PRESENSI`: NIP, modul, periode, tanggal, datang/pulang, jam koreksi, FileId surat, status, dan waktu pembaruan. Digunakan untuk validasi kuota lintas modul. Jangan menghapus barisnya untuk mengubah kuota; batalkan koreksi lewat tab 4 lalu simpan.
-- `REKAP_HARIAN`: tidak lagi dibuat, dibaca, atau ditulis. Data lama tidak dihapus otomatis. Dashboard membaca spreadsheet hasil final per pegawai pada bulan/modul yang dipilih.
+- `REKAP_HARIAN`: tidak lagi dibuat, dibaca, atau ditulis. Data lama tidak dihapus otomatis. Dashboard membaca spreadsheet hasil final per pegawai pada bulan kalender terpilih dari `REKAP_UANG_MAKAN` saja.
 - `REKAP_UANG_MAKAN` / `REKAP_TUKIN`: kolom tambahan `Hitung_Lupa_Absen`, `Hitung_Adjustment`, `Hitung_Tidak_Absen`, dan `Hitung_Adjustment_Bulanan`. Kolom lama tidak dipindah.
 - Spreadsheet per pegawai: jam hasil koreksi ditulis pada D/E. Snapshot tab 2 tetap menyimpan jam asli; data koreksi disimpan terpisah pada sheet internal. Catatan perhitungan TXT mencatat tanggal, jam koreksi, dan ID surat.
 
 ## Rekap Bulanan
 
-Pilih sumber Uang Makan atau Tukin, bulan kalender, dan SubUnit Kerja. Filter SubUnit mengikuti `Data_Pegawai`. Dashboard menampilkan hasil yang sudah dikonfirmasi di tab 4 (`Hitung_Status` Lengkap / Perlu penyesuaian), bukan seluruh pegawai yang belum mengirim data. Tidak diperlukan migrasi dari `REKAP_HARIAN`; spreadsheet per pegawai dan snapshot internalnya harus tetap tersedia. Waktu konfirmasi terbaru disimpan pada C1 snapshot internal untuk memilih hasil terbaru pada periode bertumpuk.
+Ketentuan terbaru ada di `README-WRAP-BULANAN.md`. Admin memilih bulan/tahun dan SubUnit Kerja; publik melihat bulan terbaru. Sumber hanya `REKAP_UANG_MAKAN` untuk rentang penuh 1–akhir bulan. Filter SubUnit mengikuti `Data_Pegawai`. Dashboard menampilkan hasil yang sudah dikonfirmasi di tab 4 (`Hitung_Status` Lengkap / Perlu penyesuaian), bukan seluruh pegawai yang belum mengirim data. Tidak diperlukan migrasi dari `REKAP_HARIAN`; spreadsheet per pegawai dan snapshot internalnya harus tetap tersedia.
 
-- Pilihan bulan berdasarkan rentang presensi submisi yang sudah dikonfirmasi, bukan bulan pembayaran Tukin. Angka hanya memakai tanggal yang benar-benar tercatat pada bulan tersebut.
-- Sumber modul dipisahkan untuk menghindari penghitungan ganda; pasangan NIP/tanggal yang berulang menggunakan hasil terbaru.
+- Bulan berdasarkan periode kalender lengkap, bukan bulan pembayaran Tukin. Angka hanya memakai tanggal yang benar-benar tercatat pada bulan tersebut.
+- Sumber Tukin/periode parsial tidak disertakan; baris terbaru untuk NIP/bulan yang sama menggantikan baris lama.
 - Tingkat masuk = hari WFO/WFA/WFH yang hadir ÷ seluruh hari kerja tercatat. Dinas/Cuti/TB tidak masuk pembilang ini; bukan ukuran menyeluruh kepatuhan pegawai.
 - Perjalanan dihitung per pasangan pegawai/surat tugas; satu surat untuk beberapa pegawai berarti beberapa perjalanan pegawai. Total hari dinas adalah hari-orang, bukan jumlah surat.
-- Bukti tambahan berkaitan dengan periode submisi; bukti tanpa tanggal spesifik dapat muncul pada kedua bulan dalam periode Tukin.
-- Ranking bersifat ringkasan mekanis, bukan keputusan kepegawaian. Minimal 5 hari WFO; ranking disiplin memakai proporsi hari tanpa TL/PSW/lupa absen, lalu jumlah hari dinilai. Ranking tepat waktu memakai kedatangan tanpa flexi.
-- Perubahan klaim melalui aplikasi membuat rekap menunggu konfirmasi ulang dan sementara tidak ditampilkan. Sumber/berkas yang hilang atau tidak dapat dibaca akan dilaporkan sebagai kesalahan, bukan diam-diam dianggap nol. Membaca banyak spreadsheet per pegawai bisa lebih lambat daripada tabel harian terpusat; hanya submisi yang melintasi bulan pilihan yang dibaca.
+- Bukti tambahan berkaitan dengan periode submisi satu bulan kalender, berdasarkan registrasi aktif.
+- Ranking bersifat ringkasan mekanis, bukan keputusan kepegawaian. Ranking memakai persentase masuk/hari kerja, hari flexi paling sedikit, lalu menit flexi paling sedikit; hanya tanggal lengkap satu bulan yang diperingkat. Ranking tepat waktu memakai kedatangan tanpa flexi.
+- Perubahan klaim melalui aplikasi membuat rekap menunggu konfirmasi ulang dan sementara tidak ditampilkan. Sumber/berkas yang hilang dilaporkan sebagai belum terbaca tanpa menggagalkan pegawai lainnya atau dianggap nol hadir. Hanya file pada bulan terpilih yang dibaca.
 
 ## Pengujian lokal
 

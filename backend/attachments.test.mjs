@@ -125,7 +125,7 @@ test('health probe returns deployment version without reading employee data or c
   const f=fixture(), count=f.files.size;
   const response=JSON.parse(f.context.doGet({parameter:{action:'health'}}).getContent());
   assert.equal(response.status,'success');
-  assert.equal(response.backendVersion,'2026-09-25-recap-source');
+  assert.equal(response.backendVersion,'2026-09-26-calendar-wrap');
   assert.equal(response.nip,undefined); assert.equal(f.files.size,count);
 });
 
@@ -757,7 +757,7 @@ test('monthly report uses calendar dates, current saved results, employee unit, 
   assert.equal(confirmRecap(f).status,'success');
   const report=f.call({action:'rekap_bulanan',month:'2026-07'});
   assert.equal(report.employees.length,1);assert.equal(report.employees[0].unit,'Subbagian Tata Usaha');assert.equal(report.daily.length,6);
-  assert.equal(f.call({action:'rekap_bulanan',modul:'tukin',month:'2026-07'}).employees.length,0);
+  assert.equal(f.call({action:'rekap_bulanan',modul:'tukin',month:'2026-07'}).status,'error');
   assert.equal(f.call({action:'rekap_bulanan',month:'2026-08'}).employees.length,0);
   f.master.getSheetByName('REKAP_UANG_MAKAN').rows.splice(1,1);
   assert.equal(f.call({action:'rekap_bulanan',month:'2026-07'}).employees.length,0);
@@ -776,7 +776,7 @@ test('Tukin allows eight adjustments split four per month, but not five in one c
   adjustments['2026-07-07']={datang:{fileId:doc.fileId,time:'07:30'}};
   assert.throws(()=>f.context.validateAdjustments_(state,rows,adjustments),/Kuota 4/);
 });
-test('report deduplicates overlapping periods by employee/date using latest calculation', () => {
+test('wrap excludes partial-month records even when they have a newer calculation', () => {
   const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
   const copyBook=new f.Book(), copyFile=new f.File('overlap_spreadsheet', 'Second recap',f.destination,'application/vnd.google-apps.spreadsheet');
   f.books.set(copyFile.id,copyBook);
@@ -791,7 +791,8 @@ test('report deduplicates overlapping periods by employee/date using latest calc
   const report=f.call({action:'rekap_bulanan',month:'2026-07'});
   assert.equal(report.status,'success',report.message);
   assert.equal(report.daily.length,6);
-  assert.equal(report.daily.find(r=>r.tanggal==='2026-07-06').arrival,420);
+  assert.equal(report.daily.find(r=>r.tanggal==='2026-07-06').arrival,490);
+  assert.equal(report.coverage.submitted,1);
   assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
 });
 
@@ -813,7 +814,8 @@ test('monthly reads only selected month and reports unavailable source instead o
   f.books.delete(f.spreadsheet.id);
   assert.equal(f.call({action:'rekap_bulanan',month:'2026-08'}).status,'success');
   const result=f.call({action:'rekap_bulanan',month:'2026-07'});
-  assert.equal(result.status,'error');assert.match(result.message,/belum dapat dibaca/);
+  assert.equal(result.status,'success');assert.equal(result.coverage.unavailable,1);
+  assert.equal(result.employees.length,0);assert.match(result.issues[0].message,/belum dapat dibaca/);
 });
 test('manual clock tampering remains rejected even when a valid correction exists', () => {
   const f=fixture();f.working.rows[7][3]='-';const doc=uploadExtra(f).document;
@@ -843,4 +845,60 @@ test('public recap handles empty months without creating sheets and keeps valida
   assert.equal(f.master.sheets.size,count);
   assert.equal(f.call({action:'rekap_bulanan_publik',modul:'invalid'}).status,'error');
   assert.equal(f.call({action:'rekap_bulanan_publik',month:'2026-99'}).status,'error');
+});
+
+test('wrap reads actual clocks, all work modes, flexi boundaries and full calendar coverage', () => {
+  const f=fixture();payrollFixture(f);
+  f.working.rows=Array.from({length:5},()=>[]);
+  for(let day=1;day<=31;day++){
+    const date=`2026-07-${String(day).padStart(2,'0')}`, weekday=new Date(date+'T12:00:00Z').getUTCDay();
+    const row=Array(22).fill('');row[0]=day;row[1]='Hari';row[2]=date;row[3]='07:30';row[4]='18:00';row[21]=[0,6].includes(weekday)?'Libur':'WFO';
+    if(day===1)row[3]='05:45';
+    if(day===6){row[3]='07:45';row[21]='WFA';}
+    if(day===7){row[3]='08:30';row[21]='WFH';}
+    if(day===8)row[3]='08:31';
+    if(day===9)row[3]='-';
+    f.working.rows.push(row);
+  }
+  f.working.rows.push(['TOTAL']);
+  assert.equal(confirmRecap(f).status,'success');
+  // Reading wrap must not revalidate claims or use master summary clock guesses.
+  f.context.finalState_=()=>{throw Error('Should read the saved recap directly');};
+  const result=f.call({action:'rekap_bulanan',month:'2026-07'}), person=result.employees[0];
+  assert.equal(result.wrapVersion,2);assert.equal(person.completeMonth,true);assert.equal(person.recordedDays,31);
+  assert.equal(person.masuk,23);assert.equal(person.hariKerja,23);assert.equal(person.assessed,23);
+  assert.equal(person.flexi,2);assert.equal(person.flexiMinutes,75);assert.equal(person.terlambat,2);
+  assert.equal(Math.min(...result.daily.filter(r=>r.arrival!==null).map(r=>r.arrival)),345);
+  assert.equal(result.daily.find(r=>r.tanggal==='2026-07-09').arrival,null);
+  assert.equal(result.daily.find(r=>r.tanggal==='2026-07-09').hadir,true);
+  assert.equal(result.coverage.incomplete,0);
+});
+
+test('wrap keeps healthy employees while another source fails; retry includes newly available data', () => {
+  const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
+  const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN'), other=[...sheet.rows[1]];
+  other[1]='999999';other[2]='Pegawai Baru';other[9]='missing_file_999';sheet.appendRow(other);
+  let result=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(result.employees.length,1);assert.equal(result.coverage.unavailable,1);assert.equal(result.coverage.submitted,2);
+  const pub=f.call({action:'rekap_bulanan_publik',month:'2026-07'});
+  assert.equal(pub.coverage.unavailable,1);assert.equal(pub.issues,undefined);assert.equal(JSON.stringify(pub).includes('999999'),false);
+  sheet.rows[2][9]=f.spreadsheet.id;
+  result=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(result.employees.length,2);assert.equal(result.coverage.unavailable,0);
+  // Newest record suppresses the old completed record, not a fallback to stale data.
+  const pending=[...sheet.rows[1]];pending[sheet.rows[0].indexOf('Hitung_Status')]='Perlu hitung ulang';sheet.appendRow(pending);
+  result=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.equal(result.employees.length,1);assert.equal(result.coverage.pending,1);assert.equal(result.coverage.submitted,2);
+});
+
+test('wrap validates full-month ranges including leap years and gets SubUnit options from employee master', () => {
+  const f=fixture();
+  assert.equal(f.context.recapCalendarMonth_('01-02-2024 s/d 29-02-2024'),'2024-02');
+  assert.equal(f.context.recapCalendarMonth_('01-02-2026 s/d 28-02-2026'),'2026-02');
+  assert.equal(f.context.recapCalendarMonth_('11-07-2026 s/d 10-08-2026'),'');
+  assert.equal(f.context.recapCalendarMonth_('01-07-2026 s/d 30-07-2026'),'');
+  f.master.getSheetByName('Data_Pegawai').rows=[['NIP','Nama','SubUnitKerja'],['123456','Pegawai','Unit A'],['999','Belum Upload','Unit B']];
+  const result=f.call({action:'rekap_bulanan',month:'2026-07'});
+  assert.deepEqual(result.units,['Unit A','Unit B']);assert.equal(result.coverage.pending,1);
+  assert.equal(f.master.getSheetByName('REKAP_HARIAN'),null);
 });

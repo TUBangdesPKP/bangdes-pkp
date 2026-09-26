@@ -168,7 +168,7 @@ function normStr(val) {
 function doGet(e) {
   try {
     if (e.parameter && e.parameter.action === 'health') {
-      return json_({ status: 'success', service: 'kepegawaian', backendVersion: '2026-09-25-recap-source' });
+      return json_({ status: 'success', service: 'kepegawaian', backendVersion: '2026-09-26-calendar-wrap' });
     }
     if (e.parameter && e.parameter.action === 'checkExisting') {
       return json_(existingSubmission_({ modul: e.parameter.modul, nip: e.parameter.nip,
@@ -865,6 +865,9 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var payload = JSON.parse(e.postData.contents);
+    // Read-only wrap requests must not hold the write lock while opening employee files.
+    if (payload.action === 'rekap_bulanan') return json_(monthlyRecap_(payload));
+    if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
     lock.waitLock(30000);
     if (payload.action === 'proses_bukti') {
       var trace = text_(payload.requestId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -877,8 +880,6 @@ function doPost(e) {
     if (payload.action === 'preview_rekap_final') return json_(previewFinal_(payload));
     if (payload.action === 'simpan_rekap_final') return json_(saveFinal_(payload));
     if (payload.action === 'list_pendukung') return json_(listAttachments_(payload));
-    if (payload.action === 'rekap_bulanan') return json_(monthlyRecap_(payload));
-    if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
     if (['klaim_dokumen', 'klaim_spt', 'klaim_cuti'].indexOf(payload.action) !== -1) return json_(claimAttachment_(payload));
     if (payload.action === 'upload_pendukung') return json_(uploadAttachment_(payload));
     if (payload.action === 'upload_pendukung_lain') return json_(uploadExtraAttachment_(payload));
@@ -1519,33 +1520,16 @@ function writeCalculationMaster_(record, calculation, note) {
   });
 }
 
-// Build transient dashboard facts from the existing employee recap; never create/read/write REKAP_HARIAN.
-function recapFacts_(state, calculation) {
-  var record = state.record;
-  var archive = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('REKAP_SPT');
-  var archiveRows = archive ? archive.getDataRange().getValues().slice(1) : [];
-  var registry = registryRows_();
-  var stamp = state.saved.baseline ? text_(state.saved.baseline.getRange(1,3).getValue()) : '';
-  return calculation.days.map(function(day) {
-    var sourceRow = state.rows.filter(function(row) { return row.tanggal === day.tanggal; })[0];
-    var docs = (sourceRow.dokumen || []).concat(state.documents.filter(function(doc) { return ['spt','cuti'].indexOf(doc.jenisDokumen) < 0; })).map(function(doc) {
-      var entry = registry.filter(function(e) { return e.fileId === doc.fileId && sameScope_(e,record); })[0];
-      if (!entry) return null;
-      var original = archiveRows.filter(function(row) { return nip_(row[1]) === record.nip && driveId_(row[9]) === entry.sourceFileId; })[0];
-      return { id: entry.sourceFileId || entry.fileId, fileId:entry.fileId, type:entry.jenisDokumen, tujuan: entry.jenisDokumen === 'spt' && original ? text_(original[3]) : '' };
-    }).filter(function(doc) { return !!doc; });
-    var arrival = attendanceMinutes_(day.datang), departure = attendanceMinutes_(day.pulang);
-    var isWork = ['WFO','WFA','WFH'].indexOf(day.status) >= 0;
-    var missing = day.lupaAbsen || 0;
-    return [record.modul,record.nip,record.nama,record.periode,record.spreadsheetId,day.tanggal,
-      day.status,day.jamKerja,day.datang,day.pulang,day.tl,day.psw,day.flexiMenit,missing,day.adjusted || 0,Math.max(0,missing-(day.adjusted||0)),day.menitTanpaPresensi,
-      isWork && (arrival !== null || departure !== null || day.adjusted > 0),JSON.stringify(docs),stamp];
-  });
+// Calendar wrap reads the generated employee recaps, never REKAP_HARIAN.
+function recapCalendarMonth_(period) {
+  var range = dateRangeFromPeriod_(period), month = range[0].slice(0,7);
+  var last = new Date(Date.UTC(+month.slice(0,4), +month.slice(5,7), 0)).toISOString().slice(0,10);
+  return range[0] === month + '-01' && range[1] === last ? month : '';
 }
 function publicMonthlyRecap_(payload) {
-  var result = monthlyRecap_({modul:payload.modul,month:payload.month});
+  var result = monthlyRecap_(payload);
   var units = {}, daily = {}, documents = {};
-  var metrics = ['masuk','hariKerja','dinas','cuti','tb','terlambat','psw','lupaAbsen','adjusted','unadjusted','assessed','clean','onTime','avgArrival'];
+  var metrics = ['masuk','hariKerja','dinas','cuti','tb','terlambat','psw','lupaAbsen','adjusted','unadjusted','assessed','clean','onTime','avgArrival','flexi','flexiMinutes','recordedDays','completeMonth'];
   var employees = result.employees.map(function(employee,index) {
     units[employee.nip] = employee.unit;
     // The UI needs a row key, not the employee's government identifier.
@@ -1564,73 +1548,89 @@ function publicMonthlyRecap_(payload) {
     if (!documents[key]) documents[key]={unit:unit,type:doc.type,tujuan:doc.tujuan,count:0};
     documents[key].count++;
   });
-  return {status:'success',publicView:true,month:result.month,months:result.months,employees:employees,
+  return {status:'success',publicView:true,wrapVersion:result.wrapVersion,month:result.month,months:result.months,
+    units:result.units,coverage:result.coverage,updatedAt:result.updatedAt,employees:employees,
     daily:Object.keys(daily).map(function(key){return daily[key];}),documents:Object.keys(documents).map(function(key){return documents[key];})};
 }
 function monthlyRecap_(payload) {
-  eventSheetName_(payload.modul);
+  if (payload.modul && payload.modul !== 'uang-makan') throw new Error('Wrap hanya menggunakan rekap satu bulan kalender.');
   var wanted = text_(payload.month);
   if (wanted && !/^\d{4}-(0[1-9]|1[0-2])$/.test(wanted)) throw new Error('Bulan rekap harus yyyy-mm.');
-  var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), master = book.getSheetByName(eventSheetName_(payload.modul));
+  var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), master = book.getSheetByName('REKAP_UANG_MAKAN');
   var masterRows = master ? master.getDataRange().getValues() : [], headers = masterRows[0] || [], statusCol = headers.indexOf('Hitung_Status');
   var current = {};
   masterRows.slice(1).forEach(function(row) {
-    // Only the latest master record for a NIP/period is authoritative.
-    current[nip_(row[1])+'|'+text_(row[3])] = { nip:nip_(row[1]),nama:text_(row[2]),periode:text_(row[3]),modul:payload.modul,
-      id:driveId_(row[9]),status:statusCol>=0?row[statusCol]:'' };
+    // The last row for each NIP/calendar month wins, even when replaced or invalidated.
+    var calendarMonth;
+    try { calendarMonth = recapCalendarMonth_(row[3]); } catch (error) { return; }
+    if (!calendarMonth || !nip_(row[1])) return;
+    current[nip_(row[1])+'|'+calendarMonth] = { nip:nip_(row[1]),nama:text_(row[2]),periode:text_(row[3]),modul:'uang-makan',
+      folderId:driveId_(row[8]),spreadsheetId:driveId_(row[9]),month:calendarMonth,status:statusCol>=0?row[statusCol]:'' };
   });
-  var records = Object.keys(current).map(function(key){return current[key];}).filter(function(record){return record.id && ['Lengkap','Perlu penyesuaian'].indexOf(record.status)>=0;});
+  var records = Object.keys(current).map(function(key){return current[key];});
   var available = {};
-  records.forEach(function(record) {
-    record.range = dateRangeFromPeriod_(record.periode);
-    var cursor = parseDate_(record.range[0].slice(0,7)+'-01'), end = record.range[1].slice(0,7);
-    for (var i=0;i<120 && cursor.toISOString().slice(0,7)<=end;i++) { available[cursor.toISOString().slice(0,7)]=true; cursor.setUTCMonth(cursor.getUTCMonth()+1); }
-  });
-  var months = Object.keys(available).sort().reverse(), month = wanted || months[0] || '', chosen = {}, valid = [];
-  records.filter(function(record){return record.range[0].slice(0,7)<=month && record.range[1].slice(0,7)>=month;}).forEach(function(record) {
-    try {
-      var state = finalState_(record), saved = state.saved, schedules = savedSchedules_(saved,state.rows);
-      var rows = state.rows.map(function(row,i){return Object.assign({},row,{keterangan:text_(saved.current[i][21]),jamKerja:schedules[row.tanggal]});});
-      var corrections = saved.baseline ? JSON.parse(text_(saved.baseline.getRange(5,2).getValue()) || '{}') : {};
-      // No payroll lookup or financial write: only attendance metrics are needed here.
-      var calculation = calculateAttendance_(applyAdjustments_(rows,corrections),{uangMakan:null,pajak:null,tukin:null,skp:null},record.modul);
-      valid = valid.concat(recapFacts_(state,calculation));
-    } catch(error) { throw new Error('Rekap '+record.nama+' ('+record.periode+') belum dapat dibaca: '+error.message); }
-  });
-  valid.filter(function(row) { return text_(row[5]).slice(0,7)===month; }).forEach(function(row) {
-    var key=nip_(row[1])+'|'+row[5];
-    if (!chosen[key] || text_(row[19])>text_(chosen[key][19])) chosen[key]=row;
-  });
+  records.forEach(function(record) { available[record.month]=true; });
+  var months = Object.keys(available).sort().reverse(), month = wanted || months[0] || '';
+  var selected = records.filter(function(record){return record.month===month;});
   var peopleSheet=book.getSheetByName('Data_Pegawai'), people=peopleSheet?peopleSheet.getDataRange().getValues():[], ph=(people[0]||[]).map(payrollHeader_);
   var byNip={}, nipCol=ph.indexOf('nip');
   people.slice(1).forEach(function(row) { var key=nip_(row[nipCol]); if(key) { if(byNip[key]) throw new Error('NIP ganda pada Data_Pegawai. Periksa sumber filter SubUnit.'); byNip[key]=row; } });
   function employeeField(person,names) { for(var i=0;i<names.length;i++){var col=ph.indexOf(names[i]);if(col>=0)return text_(person[col]);}return ''; }
-  var employees={}, daily=[], documents={};
-  Object.keys(chosen).forEach(function(key) {
-    var row=chosen[key], nip=nip_(row[1]), person=byNip[nip]||[], status=text_(row[6]);
-    if(!employees[nip]) {
+  var unitNames = {};
+  Object.keys(byNip).forEach(function(key){unitNames[employeeField(byNip[key],['subunitkerja','subunit'])||'SubUnit belum diisi']=true;});
+  var archive = book.getSheetByName('REKAP_SPT') || book.getSheetByName('REKAP _SPT');
+  var archiveRows = archive ? archive.getDataRange().getValues().slice(1) : [], destinations = {};
+  archiveRows.forEach(function(row){destinations[nip_(row[1])+'|'+driveId_(row[9])]=text_(row[3]);});
+  var registry = registryRows_(), employees=[], daily=[], documents=[], issues=[];
+  var coverage = {submitted:selected.length,available:0,pending:0,unavailable:0,incomplete:0};
+  selected.forEach(function(record) {
+    if (!record.spreadsheetId || ['Lengkap','Perlu penyesuaian'].indexOf(record.status)<0) { coverage.pending++; return; }
+    try {
+      // Read saved results, without re-running OCR/claim validation or payroll writes.
+      recordedFolder_(record);
+      var saved=savedPresensi_(record), schedules=savedSchedules_(saved,saved.rows);
+      var rows=saved.rows.map(function(row,i){return Object.assign({},row,{keterangan:text_(saved.current[i][21]),jamKerja:schedules[row.tanggal]});});
+      var corrections=saved.baseline?JSON.parse(text_(saved.baseline.getRange(5,2).getValue())||'{}'):{};
+      var calculation=calculateAttendance_(applyAdjustments_(rows,corrections),{uangMakan:null,pajak:null,tukin:null,skp:null},'uang-makan');
+      var nip=record.nip, person=byNip[nip]||[];
       var photo=employeeField(person,['fotopegawai','foto','linkfoto']), photoId=driveId_(photo);
-      employees[nip]={nip:nip,nama:employeeField(person,['nama'])||row[2],unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s200':'',
-        masuk:0,hariKerja:0,dinas:0,cuti:0,tb:0,terlambat:0,psw:0,lupaAbsen:0,adjusted:0,unadjusted:0,assessed:0,clean:0,onTime:0,arrivalSum:0,arrivalCount:0};
+      var t=calculation.totals, employee={nip:nip,nama:employeeField(person,['nama'])||record.nama,
+        unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s200':'',
+        masuk:t.masuk,hariKerja:t.hariKerja,dinas:t.dinas,cuti:t.cuti,tb:t.tb,terlambat:t.terlambat,psw:t.psw,
+        lupaAbsen:t.lupaAbsen,adjusted:t.adjusted,unadjusted:t.unadjusted,flexi:t.flexi,flexiMinutes:0,
+        assessed:0,clean:0,onTime:0,avgArrival:null,recordedDays:rows.length,
+        completeMonth:rows.length===new Date(Date.UTC(+month.slice(0,4),+month.slice(5,7),0)).getUTCDate()};
+      var arrivalSum=0, arrivalCount=0, personDaily=[];
+      calculation.days.forEach(function(day){
+        var work=['WFO','WFA','WFH'].indexOf(day.status)>=0, arrival=work?attendanceMinutes_(day.datang):null;
+        var present=work&&(arrival!==null||attendanceMinutes_(day.pulang)!==null), delay=arrival===null?null:arrival-(day.jamKerja==='ramadan'?480:450);
+        if(work){
+          employee.assessed++;
+          if(!day.tl&&!day.psw&&!day.lupaAbsen&&present)employee.clean++;
+          if(delay!==null&&delay<=0)employee.onTime++;
+          // Late arrivals above the 60-minute allowance are TL, not flexi days.
+          if(delay>0&&delay<=60)employee.flexiMinutes+=delay;
+          if(arrival!==null){arrivalSum+=arrival;arrivalCount++;}
+        }
+        personDaily.push({nip:nip,tanggal:day.tanggal,status:day.status,libur:day.status==='Libur',hadir:present,arrival:arrival});
+      });
+      employee.avgArrival=arrivalCount?Math.round(arrivalSum/arrivalCount):null;
+      var personDocs={};
+      registry.filter(function(entry){return sameScope_(entry,record)&&entry.status==='active';}).forEach(function(entry){
+        var id=entry.sourceFileId||entry.fileId;
+        if(id)personDocs[entry.jenisDokumen+'|'+id]={nip:nip,type:entry.jenisDokumen,id:id,tujuan:entry.jenisDokumen==='spt'?(destinations[nip+'|'+entry.sourceFileId]||''):''};
+      });
+      employees.push(employee); daily=daily.concat(personDaily);
+      documents=documents.concat(Object.keys(personDocs).map(function(key){return personDocs[key];}));
+      unitNames[employee.unit]=true; coverage.available++;
+      if(!employee.completeMonth)coverage.incomplete++;
+    } catch(error) {
+      coverage.unavailable++;
+      issues.push({nama:record.nama,message:'Rekap belum dapat dibaca: '+error.message});
     }
-    var employee=employees[nip], work=['WFO','WFA','WFH'].indexOf(status)>=0, holiday=status==='Libur';
-    var arrival=work?attendanceMinutes_(row[8]):null, present=work&&(row[17]===true||row[17]==='TRUE'||row[17]==='true');
-    if(!holiday)employee.hariKerja++; if(present)employee.masuk++;
-    if(status==='Dinas')employee.dinas++; if(status==='Cuti')employee.cuti++; if(status==='TB')employee.tb++;
-    employee.terlambat+=Number(row[10])>0?1:0;employee.psw+=Number(row[11])>0?1:0;
-    employee.lupaAbsen+=Number(row[13])||0;employee.adjusted+=Number(row[14])||0;employee.unadjusted+=Number(row[15])||0;
-    if(status==='WFO'){
-      employee.assessed++;
-      if(!Number(row[10])&&!Number(row[11])&&!Number(row[13])&&present)employee.clean++;
-      if(arrival!==null&&arrival<=(row[7]==='ramadan'?480:450))employee.onTime++;
-      if(arrival!==null){employee.arrivalSum+=arrival;employee.arrivalCount++;}
-    }
-    daily.push({nip:nip,tanggal:text_(row[5]),status:status,libur:holiday,hadir:present,arrival:arrival});
-    var docs;
-    try{docs=JSON.parse(text_(row[18])||'[]');}catch(error){throw new Error('Rincian dokumen rekap tidak valid.');}
-    docs.forEach(function(doc){documents[nip+'|'+doc.type+'|'+doc.id]={nip:nip,type:doc.type,id:doc.id,tujuan:doc.tujuan};});
   });
-  return {status:'success',month:month,months:months,employees:Object.keys(employees).map(function(nip){var employee=employees[nip];employee.avgArrival=employee.arrivalCount?Math.round(employee.arrivalSum/employee.arrivalCount):null;delete employee.arrivalSum;delete employee.arrivalCount;return employee;}),daily:daily,documents:Object.keys(documents).map(function(key){return documents[key];})};
+  return {status:'success',wrapVersion:2,month:month,months:months,units:Object.keys(unitNames).sort(),
+    updatedAt:new Date().toISOString(),coverage:coverage,issues:issues,employees:employees,daily:daily,documents:documents};
 }
 
 // Optional, run manually in Apps Script once to populate dates for older records.

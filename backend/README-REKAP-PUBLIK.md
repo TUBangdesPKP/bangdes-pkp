@@ -7,7 +7,7 @@ Halaman dapat dibuka langsung, di-refresh, dan dibagikan tanpa login. Ada tombol
 
 ## Data publik
 
-Halaman hanya-baca: tidak menyediakan upload, hapus, edit presensi, atau perhitungan pembayaran. Nama, SubUnit, statistik, dan peringkat kedisiplinan akan terlihat oleh pengunjung tanpa login. Respons khusus `rekap_bulanan_publik` tidak menyertakan NIP asli, foto, PIN, nominal gaji, ID/tautan berkas, atau rincian harian yang dihubungkan ke individu. Statistik harian dan dokumen diagregasi per SubUnit. Filter bulan, modul, dan SubUnit tetap tersedia.
+Halaman hanya-baca: tidak menyediakan upload, hapus, edit presensi, atau perhitungan pembayaran. Nama, SubUnit, statistik, dan peringkat kedisiplinan akan terlihat oleh pengunjung tanpa login. Respons khusus `rekap_bulanan_publik` tidak menyertakan NIP asli, foto, PIN, nominal gaji, ID/tautan berkas, atau rincian harian yang dihubungkan ke individu. Statistik harian dan dokumen diagregasi per SubUnit. Publik melihat bulan kalender terbaru dan dapat memfilter SubUnit. Pemilih bulan/tahun tersedia pada tampilan admin/super admin; sumber wrap selalu rekap satu bulan penuh, tanpa pemilih modul. Lihat `README-WRAP-BULANAN.md` untuk definisi dan pemasangan terbaru.
 
 Perubahan ini membatasi respons halaman publik, bukan mengganti sistem autentikasi seluruh API lama. Rute upload/edit pada frontend tetap meminta login seperti sebelumnya.
 
@@ -15,7 +15,7 @@ Perubahan ini membatasi respons halaman publik, bukan mengganti sistem autentika
 
 1. Cadangkan Apps Script, lalu ganti seluruh kode backend dengan `backend/Code.gs` terbaru.
 2. **Deploy → Manage deployments → Edit (pensil) → New version → Deploy**, pada deployment web app yang sama.
-3. Deploy perubahan frontend `src/App.jsx` dan `src/monthly-recap.jsx` melalui alur Git/Railway biasa. Jangan melewatkan backend karena ada action publik baru.
+3. Deploy perubahan frontend `src/App.jsx`, `src/monthly-recap.jsx`, dan `src/monthly-recap-model.js` melalui alur Git/Railway biasa. Jangan melewatkan backend karena ada perubahan respons wrap.
 4. Setelah deployment selesai, uji dengan jendela privat/incognito: buka beranda, klik kartu rekap, ubah filter, lalu refresh halaman. Tidak boleh muncul formulir login.
 5. Periksa rute absensi/upload pada jendela privat tetap meminta login.
 
