@@ -980,6 +980,7 @@ function doPost(e) {
     if (payload.action === 'proses_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     lock.waitLock(30000);
     if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
+    if (payload.action === 'aktivasi_akun') return json_(activateEmployee_(payload));
     if (payload.action === 'profil_saya') return json_({status:'success',user:profileUser_(requireProfileSession_(payload))});
     if (payload.action === 'ubah_foto_profil') return json_(updateProfilePhoto_(payload));
     if (payload.action === 'ubah_pin') return json_(updateProfilePin_(payload));
@@ -1026,14 +1027,32 @@ function employeeAccount_(nip) {
   return matches[0];
 }
 function accountPin_(account) {
-  var value=text_(account.values[4]).replace(/^'/,'');
+  var value=String(account.values[4]==null?'':account.values[4]).trim().replace(/^'/,'');
   return /^\d{1,6}$/.test(value)?('000000'+value).slice(-6):'';
 }
 function profileUser_(account) {
   function field(names){for(var i=0;i<names.length;i++){var c=account.headers.indexOf(names[i]);if(c>=0)return text_(account.values[c]);}return '';}
-  return {NIP:account.nip,Nama:field(['nama']),Jabatan:field(['jabatan']),SubUnitKerja:field(['subunitkerja','subunit']),
-    Foto_Pegawai:text_(account.values[43]),Akun_Role:field(['akunrole','role'])||'pegawai',KelasJabatan:field(['kelasjabatan','kelas']),
+  return {NIP:account.nip,Nama:field(['nama']),Jabatan:masterJobTitle_(account.headers,account.values),SubUnitKerja:field(['subunitkerja','subunit']),
+    Foto_Pegawai:text_(account.values[43]),Akun_Role:(['role','akunrole'].indexOf(account.headers[3])>=0?text_(account.values[3]):field(['role','akunrole']))||'pegawai',KelasJabatan:field(['kelasjabatan','kelas']),
     EmailDinas:field(['emaildinas','email']),AtasanLangsung:field(['atasanlangsung','atasan']),JabatanAtasan:field(['jabatanatasanlangsung','jabatanatasan']),Tukin:field(['tunjangankinerja','tukin'])};
+}
+function masterJobTitle_(headers,row) {
+  // M is authoritative when present, including when other columns also say Jabatan.
+  var col=headers[12]==='jabatan'?12:headers.indexOf('jabatan');
+  return col>=0?text_(row[col]):'';
+}
+function activateEmployee_(payload) {
+  // doPost holds the script lock across the check and write: never reset an active PIN.
+  var nip=nip_(payload.nip);
+  if(!/^\d{18}$/.test(nip))throw new Error('NIP harus terdiri dari 18 angka.');
+  var account=employeeAccount_(nip);
+  if(String(account.values[4]==null?'':account.values[4]).trim()!=='')return {status:'success',activated:false,alreadyActive:true,message:'Akun Sudah Aktif, Konfirmasi kepada Admin untuk akses login'};
+  if(!/^\d{6}$/.test(String(payload.newPin||'')))throw new Error('PIN harus terdiri dari 6 angka.');
+  if(payload.newPin!==payload.confirmPin)throw new Error('Konfirmasi PIN tidak sama.');
+  // Do not accept role, name, or other employee fields from the activation form.
+  account.sheet.getRange(account.row,5).setNumberFormat('@').setValue(payload.newPin);
+  SpreadsheetApp.flush();
+  return {status:'success',activated:true,message:'Aktivasi berhasil. Silakan masuk menggunakan NIP dan PIN yang baru dibuat.'};
 }
 function checkProfilePin_(account,pin) {
   var props=PropertiesService.getScriptProperties(), key='PROFILE_ATTEMPTS_'+digest_(account.nip), now=Date.now();
@@ -1984,7 +2003,7 @@ function monthlyRecap_(payload) {
       var nip=record.nip, person=byNip[nip]||[];
       var photo=employeeField(person,['fotopegawai','foto','linkfoto','urlfoto','fotoprofil','photo','image']), photoId=driveId_(photo);
       var t=calculation.totals, employee={nip:nip,nama:employeeField(person,['nama'])||record.nama,
-        jabatan:employeeField(person,['jabatan']),
+        jabatan:masterJobTitle_(ph,person),
         unit:employeeField(person,['subunitkerja','subunit'])||'SubUnit belum diisi',photo:photoId?'https://lh3.googleusercontent.com/d/'+photoId+'=s800':'',
         masuk:t.masuk,hariKerja:t.hariKerja,dinas:t.dinas,cuti:t.cuti,tb:t.tb,terlambat:t.terlambat,psw:t.psw,
         lupaAbsen:t.lupaAbsen,adjusted:t.adjusted,unadjusted:t.unadjusted,flexi:t.flexi,flexiMinutes:0,

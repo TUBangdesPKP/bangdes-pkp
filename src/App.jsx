@@ -1,6 +1,8 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { MonthlyRecap } from './monthly-recap.jsx';
+import { isRecapAdmin } from './monthly-recap-model.js';
+import { AccountActivation } from './account-activation.jsx';
 import { MyProfile } from './my-profile.jsx';
 import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
@@ -1192,7 +1194,7 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
               <p className="text-[10px] text-teal-700 font-semibold">{loggedInUser.Akun_Role === 'admin' ? 'Super Admin' : 'Pegawai'}</p>
             </div>
             <button 
-              onClick={() => navigate('rekap')}
+              onClick={() => navigate(isRecapAdmin(loggedInUser.Akun_Role) ? 'rekap' : 'profil-saya')}
               className="px-3 py-1.5 text-xs font-bold bg-teal-50 text-teal-800 rounded-lg hover:bg-teal-100 transition-colors cursor-pointer"
             >
               Panel Utama
@@ -1276,6 +1278,7 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
 };
 
 const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
+  const [mode, setMode] = useState('login'), [activating, setActivating] = useState(false);
   const [step, setStep] = useState(1);
   const [loginNip, setLoginNip] = useState('');
   const [targetUser, setTargetUser] = useState(null);
@@ -1309,7 +1312,7 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
       const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'login_pegawai', nip: targetUser?.NIP, pin: pinToVerify });
       if (!result.sessionToken || !result.user) throw Error('Backend login perlu diperbarui. Hubungi pengelola.');
       onLoginSuccess({ ...result.user, sessionToken: result.sessionToken });
-      navigate('rekap');
+      navigate(isRecapAdmin(result.user.Akun_Role) ? 'rekap' : 'profil-saya');
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
       setPinDigits(['', '', '', '', '', '']);
@@ -1392,7 +1395,8 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
   return (
     <div className="min-h-[85vh] flex items-center justify-center p-4 md:p-8">
       <div className="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-100 p-8">
-        {step === 1 ? (
+        <div role="group" aria-label="Masuk atau aktivasi" className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-slate-100 mb-6">{[['login', 'Masuk'], ['activation', 'Aktivasi Akun']].map(([value, label]) => <button key={value} type="button" disabled={activating || loading} aria-pressed={mode === value} onClick={() => { setMode(value); setStep(1); setMessage({ type: '', text: '' }); setPinDigits(['', '', '', '', '', '']); }} className={`rounded-xl py-3 text-xs font-bold text-[#084C61] ${mode === value ? 'bg-white shadow-sm' : ''}`}>{label}</button>)}</div>
+        {mode === 'activation' ? <AccountActivation endpoint={APPS_SCRIPT_URL} onBusy={setActivating} onActivated={nip => { setLoginNip(nip); setStep(1); setMode('login'); setMessage({ type: 'success', text: 'Aktivasi berhasil. Silakan login menggunakan NIP dan PIN yang baru dibuat.' }); }}/> : step === 1 ? (
           <div>
             <div className="text-center mb-8">
               <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center mb-4 text-white shadow-sm bg-[#084C61]">
@@ -1402,7 +1406,7 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
               <p className="text-xs text-gray-500">Masukkan NIP Anda untuk masuk ke sistem.</p>
             </div>
             {message.text && (
-              <div className="p-4 rounded-2xl text-xs mb-6 flex items-center gap-3 bg-red-50 text-red-800 border border-red-100">
+              <div role="status" className={`p-4 rounded-2xl text-xs mb-6 flex items-center gap-3 border ${message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-100' : 'bg-red-50 text-red-800 border-red-100'}`}>
                 <AlertCircle size={18} className="text-red-600 shrink-0" />
                 <span>{message.text}</span>
               </div>
@@ -3393,9 +3397,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
           <nav className="space-y-1">
             <button onClick={() => handleTabClick('profil-saya')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'profil-saya' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`}><User size={16}/>Profil Saya</button>
-            <button onClick={() => handleTabClick('rekap')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'rekap' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+            {isRecapAdmin(loggedInUser?.Akun_Role) && <button onClick={() => handleTabClick('rekap')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'rekap' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <FileBarChart size={16} /> Rekap Bulanan
-            </button>
+            </button>}
             <button onClick={() => handleTabClick('absensi-uang-makan')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
               <Calendar size={16} /> Absensi Uang Makan
             </button>
@@ -3422,7 +3426,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
       <main className={`flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full ${activeTab !== 'rekap' ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
         <div className={`w-full ${activeTab !== 'rekap' ? 'h-full min-h-0 flex flex-col' : ''}`}>
-          {activeTab === 'profil-saya' ? (
+          {activeTab === 'profil-saya' || (activeTab === 'rekap' && !isRecapAdmin(loggedInUser?.Akun_Role)) ? (
             <div className="overflow-y-auto h-full"><MyProfile endpoint={APPS_SCRIPT_URL} user={loggedInUser} onUpdate={onProfileUpdate} onRelogin={() => navigate('login')}/></div>
           ) : activeTab === 'rekap' ? (
             <MonthlyRecap endpoint={APPS_SCRIPT_URL} role={loggedInUser?.Akun_Role}/>

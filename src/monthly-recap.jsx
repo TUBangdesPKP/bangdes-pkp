@@ -5,6 +5,7 @@ import { monthLabel, ratio, clock, total, occurrences, isRecapAdmin, monthlyView
 import { PkpLogo } from './pkp-logo.jsx';
 import { WrapPublication } from './wrap-publication.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
+import { subunitBadge, recapUnitLabels } from './subunit-badge.js';
 
 const colors = ['#204E6C', '#BCAB88', '#74B9CA', '#476879', '#819C8A'];
 const dateLabel = value => value ? new Date(`${value}T12:00:00Z`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) : '—';
@@ -84,7 +85,9 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
     </> : data?.month ? <span className="rounded-full bg-slate-100 px-3 py-2 font-semibold">{monthLabel(data.month)}</span> : null}
   </>;
   const filterControls = <>
-    <select aria-label="Filter SubUnit Kerja" value={chosenUnit} onChange={event => setUnit(event.target.value)} className="border rounded-full p-2 bg-slate-50 max-w-[250px]"><option value="">Semua SubUnit Kerja</option>{units.map(value => <option key={value}>{value}</option>)}</select>
+    <div role="group" aria-label="Filter SubUnit Kerja" className="flex flex-wrap gap-1 text-xs font-semibold">
+      {[{ label: 'Direktorat', value: '' }, ...recapUnitLabels.map(label => ({ label, value: units.find(name => subunitBadge(name).label === label) }))].map(item => <button key={item.label} type="button" disabled={item.value === undefined} aria-pressed={item.value !== undefined && chosenUnit === item.value} title={item.label === 'Direktorat' ? 'Seluruh SubUnit Direktorat' : item.value || 'Belum ada unit pada rekap ini'} onClick={() => setUnit(item.value)} className={`px-3 py-2 rounded-full shrink-0 disabled:opacity-40 ${item.value !== undefined && chosenUnit === item.value ? 'bg-cyan-100 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-100'}`}>{item.label}</button>)}
+    </div>
     <button aria-label="Muat ulang rekap" title={publicView ? 'Muat ulang rekap yang dipublikasikan admin' : 'Muat ulang data terbaru'} disabled={loading || busy} onClick={() => setReload(value => value + 1)} className="p-2 border rounded-full bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''}/></button>
   </>;
 
@@ -97,7 +100,7 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Bagian rekap" className="flex gap-1 overflow-auto text-xs font-semibold max-w-full">{navigation.map(([id, label, Icon]) => <a key={id} href={`#rekap-${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={event => { event.preventDefault(); setActiveSection(id); document.getElementById(`rekap-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className={`flex items-center gap-2 px-3 py-2 rounded-full shrink-0 ${activeSection === id ? 'bg-cyan-100 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-100'}`}><Icon size={14}/>{label}</a>)}</nav>
-        {publicView && <div className="flex flex-wrap items-center gap-2 text-xs">{periodControls}{filterControls}</div>}
+        {publicView && <div className="flex flex-wrap items-center gap-2 text-xs">{filterControls}</div>}
       </div>
       </div>
     </header>

@@ -138,6 +138,13 @@ test('published leaders retain the job title from the employee master, not brows
   people.rows[1][column]='Perubahan belum diproses';
   assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].jabatan,result.employees[0].jabatan);
 });
+test('column M Jabatan is authoritative over duplicate headers and persists through publication', () => {
+  const f=fixture();payrollFixture(f);confirmRecap(f);
+  const people=f.master.getSheetByName('Data_Pegawai');
+  people.rows[0][12]='Jabatan';people.rows[1][12]='Jabatan Resmi Kolom M';
+  publishWrap(f);
+  assert.equal(f.call({action:'rekap_bulanan_publik'}).employees[0].jabatan,'Jabatan Resmi Kolom M');
+});
 function profileFixture() {
   const f=fixture(), sheet=f.master.getSheetByName('Data_Pegawai');
   sheet.rows=[Array(44).fill(''),Array(44).fill(''),Array(44).fill('')];
@@ -149,6 +156,40 @@ function profileFixture() {
   new folder(f.context.PROFILE_PHOTO_FOLDER_ID,'Foto Profil');
   return {...f,people:sheet};
 }
+test('login uses authoritative Role D and Jabatan M rather than conflicting earlier aliases',()=>{
+  const f=profileFixture();
+  f.people.rows[0][3]='Role';f.people.rows[1][3]='pegawai';
+  f.people.rows[0][6]='Akun_Role';f.people.rows[1][6]='admin';
+  f.people.rows[0][12]='Jabatan';f.people.rows[1][12]='Jabatan Kolom M';
+  const result=f.call({action:'login_pegawai',nip:'123456',pin:'012345'});
+  assert.equal(result.user.Akun_Role,'pegawai');assert.equal(result.user.Jabatan,'Jabatan Kolom M');
+  f.people.rows[1][3]='Admin';
+  assert.equal(f.call({action:'login_pegawai',nip:'123456',pin:'012345'}).user.Akun_Role,'Admin');
+});
+test('activation writes only E for an existing unactivated NIP, preserving leading zeros and role',()=>{
+  const f=profileFixture(), nip='000000000000000001';
+  f.people.rows[1][0]=nip;f.people.rows[1][4]='';
+  const before=f.people.rows.map(row=>[...row]);
+  const input={action:'aktivasi_akun',nip,newPin:'001234',confirmPin:'001234',role:'superadmin'};
+  assert.equal(f.call({...input,nip:'000000000000000099'}).status,'error');
+  assert.equal(f.call({...input,newPin:'123'}).status,'error');
+  assert.equal(f.call({...input,confirmPin:'000000'}).status,'error');
+  assert.deepEqual(f.people.rows,before);
+  const result=f.call(input);assert.equal(result.activated,true);assert.equal(result.sessionToken,undefined);
+  before[1][4]='001234';assert.deepEqual(f.people.rows,before);
+  assert.equal(f.call({action:'login_pegawai',nip,pin:'001234'}).status,'success');
+  const repeat=f.call({...input,newPin:'999999',confirmPin:'999999'});
+  assert.equal(repeat.alreadyActive,true);assert.equal(repeat.message,'Akun Sudah Aktif, Konfirmasi kepada Admin untuk akses login');
+  assert.equal(f.people.rows[1][4],'001234');
+});
+test('activation never treats an invalid nonempty PIN as permission to reset it',()=>{
+  const f=profileFixture(), nip='000000000000000001';f.people.rows[1][0]=nip;
+  for(const existing of ['123456','invalid','0',0]){
+    f.people.rows[1][4]=existing;
+    assert.equal(f.call({action:'aktivasi_akun',nip,newPin:'222222',confirmPin:'222222'}).alreadyActive,true);
+    assert.equal(f.people.rows[1][4],existing);
+  }
+});
 
 test('profile login verifies server PIN, never returns PIN, and rejects a forged identity',()=>{
   const f=profileFixture();

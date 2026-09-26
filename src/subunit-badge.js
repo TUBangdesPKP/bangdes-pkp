@@ -2,6 +2,7 @@
 export function subunitBadge(value) {
   const fullName = String(value || '').trim().replace(/\s+/g, ' ');
   const name = fullName.toLowerCase();
+  if (name === 'direktorat pembangunan perumahan perdesaan' || name === 'direktorat') return { label: 'Direktorat', background: '#204E6C', color: '#FFFFFF' };
   if (name === 'subdirektorat perencanaan teknis' || name === 'rentek') return { label: 'Rentek', background: '#D5C58A', color: '#243746' };
   if (name === 'subbagian tata usaha' || name === 'tata usaha') return { label: 'Tata Usaha', background: '#084C61', color: '#FFFFFF' };
   const wilayah = name.match(/^(?:subdirektorat |subdit )?wilayah ([ivx]+)$/);
@@ -12,4 +13,18 @@ export function subunitBadge(value) {
     return { label: `Wilayah ${numeral}`, background, color };
   }
   return { label: fullName || 'SubUnit belum diisi', background: '#E2E8F0', color: '#334155' };
+}
+
+export const recapUnitLabels = ['Rentek', 'Wilayah I', 'Wilayah II', 'Wilayah III', 'Tata Usaha'];
+
+export function leaderComposition(leaders) {
+  const groups = new Map();
+  leaders.forEach(row => {
+    const badge = subunitBadge(row.unit);
+    const group = groups.get(badge.label) || { ...badge, count: 0 };
+    group.count++; groups.set(badge.label, group);
+  });
+  const order = ['Direktorat', ...recapUnitLabels];
+  return [...groups.values()].map(group => ({ ...group, percentage: group.count / leaders.length * 100 }))
+    .sort((a, b) => (order.indexOf(a.label) < 0 ? 99 : order.indexOf(a.label)) - (order.indexOf(b.label) < 0 ? 99 : order.indexOf(b.label)) || a.label.localeCompare(b.label));
 }
