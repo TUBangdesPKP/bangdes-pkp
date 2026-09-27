@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, RefreshCw, CheckCircle2, ArrowLeft, Wallet, Clock } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
+import { displayAttendanceTime, sameFinalReview } from './recap-review.js';
 
-export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, cachedReview, onPreviewLoaded, onReviewChange, onInvalidated }) {
+export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, cachedReview, savedResult, onPreviewLoaded, onReviewChange, onInvalidated }) {
   const initialCache = useRef({ key: JSON.stringify(context), preview: cachedPreview, review: cachedReview });
   const callbacks = useRef({ onPreviewLoaded, onReviewChange, onInvalidated });
   callbacks.current = { onPreviewLoaded, onReviewChange, onInvalidated };
@@ -51,7 +52,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     const other = punch === 'datang' ? 'pulang' : 'datang';
     const missing = !original || original === '-';
     const correction = adjustments[row.tanggal]?.[punch];
-    if (!missing || row.libur || !['WFO','WFA','WFH'].includes(status.toUpperCase())) return original;
+    if (!missing || row.libur || !['WFO','WFA','WFH'].includes(status.toUpperCase())) return displayAttendanceTime(original);
     return <div className="space-y-2 min-w-[170px]">
       <span className="text-gray-500">Asli: {original || '-'}</span>
       <label className="flex gap-2 items-center"><input type="checkbox" aria-label={`Koreksi ${punch} ${row.tanggal}`} checked={!!correction} disabled={saving || !preview?.adjustmentDocuments?.length || (!correction && !!adjustments[row.tanggal]?.[other])} onChange={e => changeCorrection(row.tanggal,punch,e.target.checked ? {time:'',fileId:preview.adjustmentDocuments[0].fileId} : null)}/>Koreksi {punch}</label>
@@ -67,7 +68,10 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   const conflicts = rows.filter(row => row.konflik);
   const unresolved = conflicts.filter(row => !row.libur && !resolutions[row.tanggal]);
   const moduleLabel = context.modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan';
+  const previousResult = savedResult || preview?.savedResult;
+  const unchanged = previousResult?.revision === preview?.revision && sameFinalReview(previousResult, { schedules, resolutions, adjustments });
   const save = async () => {
+    if (unchanged && !saving && !loading) { onSaved(previousResult); return; }
     if (!checked || !preview || unresolved.length || saving || loading) return;
     setSaving(true); setError('');
     try {
@@ -113,11 +117,11 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
         </div>
         <div className="p-5 border-t text-xs text-gray-500 flex flex-wrap gap-5"><span>Total Hari: <strong className="text-gray-900">{rows.length} Hari</strong></span><span>Hari Masuk (WFO/WFA/WFH): <strong className="text-teal-700">{presentCount} Hari</strong></span><a href={preview.spreadsheetUrl} target="_blank" rel="noreferrer" className="ml-auto underline text-[#084C61]">Lihat spreadsheet rekap</a></div>
       </div>
-      <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700"><input type="checkbox" checked={checked} disabled={saving || unresolved.length > 0} onChange={e => setChecked(e.target.checked)} className="mt-1"/>Saya telah memeriksa preview dan menyetujui hasil akhir pada spreadsheet rekap.</label>
+      {unchanged ? <p role="status" className="rounded-xl bg-teal-50 p-4 text-sm text-teal-800">Data belum berubah. Hasil tersimpan bisa langsung dibuka tanpa menyimpan ulang.</p> : <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700"><input type="checkbox" checked={checked} disabled={saving || unresolved.length > 0} onChange={e => setChecked(e.target.checked)} className="mt-1"/>Saya telah memeriksa preview dan menyetujui hasil akhir pada spreadsheet rekap.</label>}
     </>}
     <div className="flex flex-wrap gap-3 justify-between">
       <button disabled={saving} onClick={onBack} className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gray-100 text-sm"><ArrowLeft size={16}/>Kembali ke Dokumen</button>
-      <button disabled={!preview || !checked || loading || saving || unresolved.length > 0} onClick={save} className="px-5 py-3 rounded-xl text-white bg-[#084C61] text-sm font-bold disabled:opacity-40">{saving ? 'Memperbarui rekap...' : 'Lanjutkan Perhitungan ' + moduleLabel}</button>
+      <button disabled={!preview || (!checked && !unchanged) || loading || saving || unresolved.length > 0} onClick={save} className="px-5 py-3 rounded-xl text-white bg-[#084C61] text-sm font-bold disabled:opacity-40">{saving ? 'Memperbarui rekap...' : unchanged ? 'Lihat Hasil Tersimpan' : 'Lanjutkan Perhitungan ' + moduleLabel}</button>
     </div>
   </section>;
 }
@@ -127,8 +131,9 @@ const percent = value => value === null || value === undefined ? 'Belum tersedia
 function SummaryStat({ value, label, danger = false }) {
   return <div className="bg-white rounded-2xl border border-slate-300 px-3 py-4 text-center"><div className={`text-xl font-extrabold ${danger ? 'text-red-600' : 'text-slate-900'}`}>{value}</div><div className="text-xs text-slate-600 mt-2">{label}</div></div>;
 }
-export function FinalRecapSaved({ result, moduleLabel, onBack, onDone }) {
+export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadAnother }) {
   const [done, setDone] = useState(false);
+  const [showNext, setShowNext] = useState(false);
   const top = useRef(null);
   useEffect(() => { top.current?.scrollIntoView({ block: 'start' }); }, [result]);
   if (!result) return <div className="bg-white rounded-2xl p-6 space-y-4"><p>Periksa dan konfirmasi preview tab 4 sebelum melanjutkan.</p><button onClick={onBack} className="text-[#084C61] underline">Kembali ke tab 4</button></div>;
@@ -165,6 +170,7 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone }) {
     <details className="rounded-xl border bg-white p-4 text-sm"><summary className="cursor-pointer font-bold">Rincian per tanggal dan sumber tarif</summary><div className="overflow-auto mt-3"><table className="w-full min-w-[720px] text-xs text-left"><thead><tr>{['Tanggal','Keterangan','Jam kerja','Wajib pulang','TL','PSW','Potongan absensi'].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{calc.days.map(day => <tr key={day.tanggal}><td className="p-2 border-b">{day.tanggal}</td><td className="p-2 border-b">{day.status}</td><td className="p-2 border-b">{day.jamKerja === 'ramadan' ? 'Ramadan' : 'Biasa'}</td><td className="p-2 border-b">{['WFO','WFA','WFH'].includes(day.status) ? day.wajibPulang : '—'}</td><td className="p-2 border-b">{day.tl ? 'TL ' + day.tl : '—'}</td><td className="p-2 border-b">{day.psw ? 'PSW ' + day.psw : '—'}</td><td className="p-2 border-b">{percent(day.potongan)}</td></tr>)}</tbody></table></div><p className="text-xs text-slate-500 mt-3">{Object.values(calc.sources || {}).join(' · ')}</p></details>
     <div className="flex flex-wrap gap-5 text-sm text-[#084C61] underline"><a href={result.spreadsheetUrl} target="_blank" rel="noreferrer">Buka spreadsheet rekap</a>{result.note?.url && <a href={result.note.url} target="_blank" rel="noreferrer">Buka catatan perhitungan</a>}</div>
     {done && <p role="status" className="bg-teal-50 text-teal-800 p-4 rounded-xl flex gap-2 items-center"><CheckCircle2 size={18}/>Selesai. Rekap dan catatan perhitungan sudah tersimpan.</p>}
-    <div className="grid grid-cols-2 gap-4"><button onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={!calc.complete} onClick={() => { setDone(true); onDone?.(); }} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">Selesai</button></div>
+    <div className="grid grid-cols-2 gap-4"><button onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={!calc.complete} onClick={() => { setDone(true); setShowNext(true); onDone?.(); }} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">Selesai</button></div>
+    {showNext && <div role="dialog" aria-modal="true" aria-label="Rekap sudah disimpan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl max-w-md p-6 space-y-4 shadow-xl"><h3 className="font-bold text-[#084C61]">Rekap sudah disimpan</h3><p className="text-sm">Ingin mengunggah data pegawai lain?</p><div className="flex flex-wrap gap-3"><button autoFocus onClick={() => setShowNext(false)} className="border rounded-xl px-4 py-2 text-sm">Tetap di sini</button>{onUploadAnother && <button onClick={() => { setShowNext(false); onUploadAnother(); }} className="bg-[#084C61] text-white rounded-xl px-4 py-2 text-sm">Upload data lain</button>}</div></div></div>}
   </section>;
 }

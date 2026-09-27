@@ -1,5 +1,7 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
+import { SubmissionSummary } from './submission-summary.jsx';
+import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
 import { AccountActivation } from './account-activation.jsx';
@@ -141,12 +143,18 @@ const fetchPegawaiData = async (forceRefresh = false) => {
   return { data: [], source: 'empty' };
 };
 
-const fetchLiveSptData = async ({ throwOnError = false } = {}) => {
+const fetchLiveSptData = async ({ throwOnError = false, loggedInUser } = {}) => {
   try {
     const rawCsvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSZg0RHcCXIRjoKsdZKKZAjUdPwo7eLGf6vSes38wDqcMX5yt97OqBPLRIwXglDoDGlbdb9Hb1Nqe_T/pub?gid=1964926388&single=true&output=csv";
-    const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
-    if (!res.ok) throw new Error("Gagal mengambil data SPT dari CSV");
-    const text = await res.text();
+    let text;
+    if (loggedInUser && !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'arsip_saya', modul: 'spt', sessionToken: loggedInUser.sessionToken });
+      text = ownArchiveCsv(result.items || []);
+    } else {
+      const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
+      if (!res.ok) throw new Error("Gagal mengambil data SPT dari CSV");
+      text = await res.text();
+    }
     
     const lines = text.replace(/\r/g, '').split('\n');
     if (lines.length < 2) return [];
@@ -227,12 +235,15 @@ const standardizeDate = (dateStr) => {
   return dateStr;
 };
 
-const fetchLiveCutiData = async ({ throwOnError = false } = {}) => {
+const fetchLiveCutiData = async ({ throwOnError = false, loggedInUser } = {}) => {
   try {
     const rawCsvUrl = "https://docs.google.com/spreadsheets/d/1bIQbiWAQ67TYFmvb3WZkvjJaN1moP1fQlmegsFZJWfI/export?format=csv&gid=185022342";
     
     let text = '';
-    try {
+    if (loggedInUser && !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'arsip_saya', modul: 'cuti', sessionToken: loggedInUser.sessionToken });
+      text = ownArchiveCsv(result.items || []);
+    } else try {
       const res = await fetch(`${rawCsvUrl}&cb=${Date.now()}`);
       if (!res.ok) throw new Error("Gagal direct fetch");
       text = await res.text();
@@ -1569,7 +1580,7 @@ const getPeriodEvents = () => {
   };
 };
 
-const ArsipRekapitulasiList = ({ modul }) => {
+const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const isSpt = modul === 'spt';
   const labelTujuan = isSpt ? 'kota tujuan' : 'keterangan cuti';
   const labelSatuan = isSpt ? 'SPT' : 'Cuti';
@@ -1582,16 +1593,20 @@ const ArsipRekapitulasiList = ({ modul }) => {
   const [filterYear, setFilterYear] = useState('Semua');
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
+  const [archiveError, setArchiveError] = useState('');
 
   const loadData = async (manual = false) => {
     if (manual) setIsRefreshing(true);
     else setIsLoading(true);
     
     try {
-      const data = isSpt ? await fetchLiveSptData() : await fetchLiveCutiData();
+      setArchiveError('');
+      const options = { loggedInUser, throwOnError: true };
+      const data = isSpt ? await fetchLiveSptData(options) : await fetchLiveCutiData(options);
       setSptDataList(data);
     } catch (e) {
       console.error(`Gagal memuat data ${labelSatuan}:`, e);
+      setSptDataList([]); setArchiveError(e.message);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -1600,7 +1615,7 @@ const ArsipRekapitulasiList = ({ modul }) => {
 
   useEffect(() => {
     loadData();
-  }, [modul]); 
+  }, [modul, loggedInUser?.NIP]);
 
   const availableYears = useMemo(() => {
     const years = new Set(sptDataList.map(item => item.tahun).filter(y => y && y !== '-'));
@@ -1705,6 +1720,7 @@ const ArsipRekapitulasiList = ({ modul }) => {
 
   return (
     <div className="pt-4">
+      {archiveError && <p role="alert" className="p-3 mb-4 bg-red-50 text-red-700 rounded-xl text-sm">{archiveError}</p>}
       {/* Kolom Pencarian dan Filter Terpadu (Unified Bar) */}
       <div className="flex flex-col md:flex-row items-center gap-3 mb-8 relative z-10 bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
         <div className="relative flex-1 w-full flex items-center">
@@ -2963,6 +2979,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
 
 export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [submissionAdminKey, setSubmissionAdminKey] = useState('');
   
   const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
     try {
@@ -3076,6 +3093,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     const fileInput = document.getElementById('pdf-upload-input');
     if (fileInput) fileInput.value = '';
     resetUploadState();
+    setFinalRecap(null);
+    previewSession.current = { key: '', data: null, review: null };
   };
 
   const handleFileChange = async (e) => {
@@ -3085,6 +3104,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       const requestId = ++referenceRequest.current;
       setExistingCheckError(''); setIsCheckingExisting(false);
       setSelectedFile(file);
+      setFinalRecap(null);
+      previewSession.current = { key: '', data: null, review: null };
       setSubmitResult(null);
       setIsParsing(true);
       setParseStatus('Mengekstrak teks dokumen...');
@@ -3165,17 +3186,20 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const sptUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'spt' });
   const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
   const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy || extraUploadBusy;
-  const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence;
+  const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence && !isParsing && !isSubmitting;
+  useEffect(() => {
+    if (documents.savedResult && documents.processed) {
+      setFinalRecap(documents.savedResult);
+      previewSession.current = { key: submissionKey, data: null, review: null };
+    }
+  }, [documents.savedResult]);
   useEffect(() => {
     if (!documents.processed) {
       setFinalRecap(null);
       previewSession.current = { key: submissionKey, data: null, review: null };
     }
   }, [documents.processed, submissionKey, archiveRevision]);
-  useEffect(() => {
-    previewSession.current = { key: submissionKey, data: null, review: null };
-    setFinalRecap(null);
-  }, [documents.refreshVersion]);
+  // Reloading an unchanged document list is read-only. Actual edits invalidate via processed=false.
   const processEvidence = async () => {
     if (!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence) return;
     setIsProcessingEvidence(true); setProcessError(''); setProcessStatus('Memperbarui rekap...');
@@ -3465,7 +3489,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
               <div data-testid="archive-content" className="flex-1 min-h-0 overflow-y-auto p-6 md:p-10">
               {arsipSubTab === 'terdata' ? (
-                <ArsipRekapitulasiList key={activeTab} modul={activeTab} />
+                <ArsipRekapitulasiList key={activeTab + loggedInUser.NIP} modul={activeTab} loggedInUser={loggedInUser} />
               ) : (
                 (documentModule === 'cuti' ? cutiUpload : sptUpload).render()
               )}
@@ -3639,6 +3663,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   )}
                 </div>
               ) : activeStep === 2 && selectedPeriod ? (
+                <div className="space-y-5">
+                {isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role) && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey}/>}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
                       <>
@@ -3898,6 +3924,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                     </div>
                   </div>
                 </div>
+                </div>
               ) : activeStep === 3 && selectedPeriod ? (
                 <fieldset disabled={isProcessingEvidence} className="max-w-7xl mx-auto space-y-6 min-w-0">
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
@@ -3931,19 +3958,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                 !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses di tab 3 untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab 3</button></div> :
                 <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
                   cachedPreview={previewSession.current.data} cachedReview={previewSession.current.review}
-                  onPreviewLoaded={data => { previewSession.current = { key: submissionKey, data, review: null }; }}
+                  savedResult={finalRecap}
+                  onPreviewLoaded={data => { previewSession.current = { key: submissionKey, data, review: null }; if (data) setFinalRecap(data.savedResult || null); }}
                   onReviewChange={review => {
                     if (previewSession.current.key === submissionKey) previewSession.current.review = review;
-                    if (finalRecap && (JSON.stringify(review.adjustments || {}) !== JSON.stringify(finalRecap.adjustments || {}) || finalRecap.rows.some(row =>
-                      (review.schedules?.[row.tanggal] || 'biasa') !== (row.jamKerja || 'biasa') ||
-                      (review.resolutions?.[row.tanggal] || '') !== (row.penyelesaian || '')
-                    ))) setFinalRecap(null);
+                    if (finalRecap && !sameFinalReview(finalRecap, review)) setFinalRecap(null);
                   }}
                   onInvalidated={() => documents.markProcessed(false)}
                   onBack={() => navigate(currentView, 3)}
                   onSaved={result => { previewSession.current = { key: submissionKey, data: result.revision ? result : null, review: null }; setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
-                <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} />
+                <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} onUploadAnother={() => { handleClearFile(); navigate(currentView, 2); }} />
               ) : (
                 <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>

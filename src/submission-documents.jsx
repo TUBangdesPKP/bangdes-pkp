@@ -14,6 +14,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [processed, setProcessed] = useState(false);
+  const [savedResult, setSavedResult] = useState(null);
   const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(true);
@@ -23,7 +24,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
 
   useEffect(() => {
     loadedRequest.current = '';
-    setFiles([]); setReady(false); setProcessed(false); setError(''); setRemoving(null); setConfirmDelete(null);
+    setFiles([]); setReady(false); setProcessed(false); setSavedResult(null); setError(''); setRemoving(null); setConfirmDelete(null);
   }, [key]);
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
         setFiles(result.documents);
         setReady(!result.requiresTab2);
         setProcessed(result.processed === true);
+        setSavedResult(result.processed ? result.savedResult || null : null);
         loadedRequest.current = requestKey;
       })
       .catch(err => { if (!cancelled && currentKey.current === key && requestVersion.current === version) { setError(err.message); setReady(false); setProcessed(false); } })
@@ -134,5 +136,5 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     setLoading(false);
     setProcessed(value);
   };
-  return { files, ready, loading, processed, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
+  return { files, ready, loading, processed, savedResult, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
 }

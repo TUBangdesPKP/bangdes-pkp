@@ -15,10 +15,11 @@ function fixture() {
     constructor(rows = []) { this.rows = rows.map(row => [...row]); this.id = ++sequence; this.backgrounds = []; }
     getSheetId() { return this.id; }
     getName() { return this.name || 'Rekap'; }
+    setName(name) { if(this.book.sheets.has(name)&&this.book.sheets.get(name)!==this)throw Error('Duplicate sheet name');this.book.sheets.delete(this.name);this.name=name;this.book.sheets.set(name,this);return this; }
     hideSheet() { this.hidden = true; return this; }
     getMaxColumns() { return 1000; }
     insertColumnsAfter() { return this; }
-    getDataRange() { return { getValues: () => this.rows.map(row => [...row]) }; }
+    getDataRange() { return { getValues: () => this.rows.map(row => [...row]), getDisplayValues: () => this.rows.map(row => row.map(value => String(value ?? ''))) }; }
     getLastRow() { return this.rows.length; }
     getLastColumn() { return Math.max(1, ...this.rows.map(row => row.length)); }
     getMaxRows() { return Math.max(100, this.rows.length); }
@@ -37,10 +38,14 @@ function fixture() {
         getValues() { return Array.from({length:height}, (_,i) => Array.from({length:width}, (_,j) => sheet.rows[row-1+i]?.[col-1+j] ?? '')); },
         getDisplayValues() { return range.getValues().map(line => line.map(value => Object.prototype.toString.call(value) === '[object Date]' ? `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}` : String(value))); },
         getValue() { return range.getValues()[0][0]; },
+        getFormulas() { return range.getValues().map(row => row.map(value => typeof value === 'string' && value.startsWith('=') ? value : '')); },
+        getBackgrounds() { return Array.from({length:height}, (_,i) => Array.from({length:width}, (_,j) => sheet.cellBackgrounds?.[row-1+i]?.[col-1+j] || '#ffffff')); },
+        getNumberFormats() { return Array.from({length:height}, () => Array(width).fill('General')); },
+        setNumberFormats() { return range; },
         setNumberFormat() { return range; },
         setValues(values) { values.forEach((line, i) => line.forEach((value, j) => { sheet.rows[row - 1 + i] ||= []; sheet.rows[row - 1 + i][col - 1 + j] = value; })); return range; },
         setValue(value) { return range.setValues([[value]]); },
-        setFontWeight() { return range; }, setBackground() { return range; }, setFontColor() { return range; }, setBackgrounds(values) { sheet.backgrounds = values; return range; }, sort() { return range; },
+        setFontWeight() { return range; }, setBackground() { return range; }, setFontColor() { return range; }, setBackgrounds(values) { sheet.backgrounds = values; sheet.cellBackgrounds ||= []; values.forEach((line,i) => line.forEach((value,j) => { sheet.cellBackgrounds[row-1+i] ||= []; sheet.cellBackgrounds[row-1+i][col-1+j]=value; })); return range; }, sort() { return range; },
       };
       return range;
     }
@@ -49,7 +54,7 @@ function fixture() {
     constructor() { this.sheets = new Map(); }
     getSpreadsheetTimeZone() { return this.timeZone || 'Asia/Jakarta'; }
     getSheetByName(name) { return this.sheets.get(name) || null; }
-    insertSheet(name) { const sheet = new Sheet(); sheet.name = name; this.sheets.set(name, sheet); return sheet; }
+    insertSheet(name) { const sheet = new Sheet(); sheet.name = name; sheet.book = this; this.sheets.set(name, sheet); return sheet; }
     getSheets() { return [...this.sheets.values()]; }
   }
   class File {
@@ -61,7 +66,7 @@ function fixture() {
     setTrashed(value) { this.trashed = value; return this; } setSharing() { return this; }
     makeCopy(name, parent) {
       const copy = new File(`copy_document_${++sequence}`, name, parent, this.mime);
-      if (this.mime === 'application/vnd.google-apps.spreadsheet') { const book = new Book(); book.insertSheet('Rekap'); books.set(copy.id, book); }
+      if (this.mime === 'application/vnd.google-apps.spreadsheet') { const book = new Book(), original=books.get(this.id); if(original)original.getSheets().forEach(sheet=>{book.insertSheet(sheet.getName()).rows=sheet.rows.map(row=>[...row]);});else book.insertSheet('Rekap'); books.set(copy.id, book); }
       return copy;
     }
   }
@@ -677,6 +682,169 @@ test('preview recomputes original dates rather than using shifted legacy date co
 });
 
 const employeeRate = { uangMakan:37000, pajak:5, tukin:6349000, skp:100, jabatan:'Analis', golongan:'III', warnings:[] };
+test('saved final result and legacy summaries reopen read-only even if master rates change', () => {
+  for(const legacy of [false,true]){
+    const f=fixture();payrollFixture(f);const saved=confirmRecap(f);assert.equal(saved.status,'success');
+    if(legacy)f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
+    f.master.getSheetByName('Data_Pegawai').rows[1][19]=999999;
+    const before=JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])]));
+    const result=f.call({action:'preview_rekap_final'});
+    assert.equal(result.savedResult.calculation.amount.netto,saved.calculation.amount.netto);
+    assert.equal(f.call({action:'list_pendukung'}).savedResult.calculation.amount.netto,saved.calculation.amount.netto);
+    assert.equal(JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])])),before);
+    f.working.rows[7][3]='09:01';
+    assert.equal(f.call({action:'preview_rekap_final'}).status,'error');
+  }
+});
+test('legacy unpadded clocks normalize through processing and saving without confusing adjustments', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='7:30';
+  const saved=confirmRecap(f);assert.equal(saved.status,'success',saved.message);
+  assert.equal(saved.rows[2].datang,'07:30');assert.equal(f.working.rows[7][3],'07:30');
+  assert.equal(f.call({action:'preview_rekap_final'}).savedResult.rows[2].datang,'07:30');
+});
+test('personal archives are filtered server-side by authenticated NIP, not names or forged payload', () => {
+  const f=profileFixture(), session=f.call({action:'login_pegawai',pin:'012345'});
+  f.master.getSheetByName('REKAP_SPT').rows.push(['today','654321','Pegawai Uji','Other']);
+  const result=f.call({action:'arsip_saya',modul:'spt',sessionToken:session.sessionToken});
+  assert.equal(result.status,'success');assert.equal(result.items.length,1);assert.equal(result.items[0].NIP,'123456');
+  assert.equal(f.call({action:'arsip_saya',modul:'spt',sessionToken:session.sessionToken,nip:'654321'}).status,'error');
+  assert.equal(f.call({action:'arsip_saya',modul:'cuti'}).status,'error');
+});
+
+function consolidatedFixture() {
+  const f=fixture(), id='199001012025011001';f.scope.nip=id;
+  for(const name of ['REKAP_UANG_MAKAN','REKAP_TUKIN','REKAP_SPT','REKAP_CUTI'])f.master.getSheetByName(name).rows[1][1]=id;
+  payrollFixture(f);const people=f.master.getSheetByName('Data_Pegawai');people.rows[0][7]='Jenis_ASN';people.rows[1][7]='PNS';people.rows[0][6]='SubUnitKerja';people.rows[1][6]='Subbagian Tata Usaha';
+  const Folder=f.destination.constructor, period=new Folder('period_folder','Uang Makan_07_Juli',f.folders.get(f.context.ROOT_FOLDER_ID)), pns=new Folder('pns_folder','PNS',period);f.destination.moveTo(pns);
+  f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  for(const modul of ['uang-makan','tukin'])for(const type of ['PNS','PPPK']){
+    const templateId=f.context.SUBMISSION_TEMPLATES[modul][type], book=new f.Book(), sheet=book.insertSheet(modul==='uang-makan'?'UM_BULAN':'TUKIN_BULAN');
+    new f.File(templateId,'Template '+type,null,'application/vnd.google-apps.spreadsheet');f.books.set(templateId,book);
+    const meal=modul==='uang-makan', first=meal?5:10;
+    sheet.rows=Array.from({length:first+1},()=>Array(meal?39:15).fill(''));
+    if(meal){sheet.rows[3]=['No','NIP','Nama',...Array.from({length:31},(_,i)=>i+1),'Jumlah'];sheet.rows[4]=[1,type==='PNS'?id:'199001012025011002',type==='PNS'?f.scope.nama:'Belum dihitung',...Array(31).fill(''), '=SUM(D5:AH5)'];sheet.rows[5]=[2,'199001012025011003','Belum ada data',...Array(31).fill(''), '=SUM(D6:AH6)'];}
+    else{sheet.rows[8]=['No','','','','','NIP','','','','','','','','Nama'];sheet.rows[9]=[1,'','','','',type==='PNS'?id:'199001012025011002',100,'',9,'=100-G10','=I10*30%+J10*70%','','',type==='PNS'?f.scope.nama:'Belum dihitung'];}
+  }
+  assert.equal(confirmRecap(f).status,'success');
+  return {...f,period};
+}
+test('submission list is complete-only and uses latest row, authoritative ASN and subunit', () => {
+  const f=consolidatedFixture();
+  assert.equal(f.call({action:'list_submisi_terhitung'}).status,'error');
+  const payload={action:'list_submisi_terhitung',adminKey:wrapKey};
+  const result=f.call(payload);assert.equal(result.employees.length,1);assert.equal(result.employees[0].jenisAsn,'PNS');assert.equal(result.employees[0].unit,'Subbagian Tata Usaha');
+  const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN');const last=[...sheet.rows[1]];last[sheet.rows[0].indexOf('Hitung_Status')]='Menunggu perhitungan ulang';sheet.rows.push(last);
+  assert.equal(f.call(payload).employees.length,0);
+});
+test('meal recap generates PNS and PPPK siblings and overwrites owned cells with stable file IDs', () => {
+  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const result=f.call(payload);assert.equal(result.status,'success',result.message);assert.equal(result.files.length,2);
+  const pns=result.files[0], file=f.files.get(pns.fileId), sheet=f.books.get(pns.fileId).getSheetByName('Uang Makan Juli 2026');
+  for(const output of result.files){
+    const tab=f.books.get(output.fileId).getSheetByName('Uang Makan Juli 2026');
+    assert.equal(tab.rows[1][1],2026);assert.equal(tab.rows[2][1],'Juli');assert.equal(tab.rows[1][2],'Uang Makan Juli 2026');
+    assert.equal(f.books.get(output.fileId).getSheetByName('UM_BULAN'),null);
+  }
+  assert.equal(file.parent.getName(),'REKAP');assert.equal(file.parent.parent.getId(),f.period.getId());
+  assert.equal(pns.name,'Rekap Uang Makan Juli 2026 PNS Dit Bangdes');
+  assert.equal(sheet.rows[4][8],1); // July 6 attendance
+  assert.equal(sheet.rows[5][8],''); // unknown employee
+  assert.equal(sheet.cellBackgrounds[5][6],'#f4cccc'); // July 4 weekend, including unknown employee
+  assert.equal(sheet.rows[4][34],'=SUM(D5:AH5)');
+  sheet.rows[4][8]=99;
+  const again=f.call(payload);assert.equal(again.status,'success',again.message);assert.equal(again.files[0].fileId,pns.fileId);assert.equal(sheet.rows[4][8],1);
+  assert.equal([...f.files.values()].filter(file=>file.parent?.getName()==='REKAP'&&!file.trashed).length,2);
+});
+test('template plan handles holiday, approved dinas/cuti, missing punches and month boundaries', () => {
+  const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES['uang-makan'].PNS).getSheetByName('UM_BULAN');
+  const period=f.context.submissionPeriod_({modul:'uang-makan',periode:'01-02-2024 s/d 29-02-2024'});
+  const person={nip:f.scope.nip,nama:f.scope.nama,days:{'2024-02-01':{status:'Dinas'},'2024-02-02':{status:'Cuti'},'2024-02-05':{status:'WFO',datang:'-',pulang:'-'},'2024-02-06':{status:'WFO',datang:'-',pulang:'16:00'}}};
+  const plan=f.context.templateRecapPlan_(sheet,[person],{modul:'uang-makan'},period,['2024-02-07']);
+  const cell=(row,col)=>plan.find(x=>x.row===row&&x.col===col);
+  assert.equal(cell(5,4).background,'#c9efbc');assert.equal(cell(5,5).background,'#affdfd');
+  assert.equal(cell(5,8).value,'');assert.equal(cell(5,9).value,1);assert.equal(cell(6,10).background,'#f4cccc');
+  assert.equal(cell(5,33).background,'#eeeeee');assert.equal(cell(5,33).value,'');
+  assert.ok(f.context.recapWriteBlocks_(plan).length<10);
+});
+
+test('meal headers migrate legacy sheets without changing IDs and roll back names on failure', () => {
+  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const first=f.call(payload);assert.equal(first.status,'success',first.message);
+  const tabs=first.files.map(file=>f.books.get(file.fileId).getSheetByName('Uang Makan Juli 2026'));
+  tabs.forEach(tab=>{tab.setName('UM_BULAN');tab.getRange(1,3).setValue('Uang Makan Juli 2026');tab.getRange(2,3).setValue('Judul lama');tab.getRange(3,2).setValue(7);});
+  const ids=tabs.map(tab=>tab.getSheetId()), before=tabs.map(tab=>JSON.stringify(tab.rows));
+  const original=tabs[1].getRange.bind(tabs[1]);let fail=true;
+  tabs[1].getRange=(...args)=>{const range=original(...args), write=range.setValues;range.setValues=values=>{if(fail){fail=false;throw Error('Injected title failure');}return write(values);};return range;};
+  assert.equal(f.call(payload).status,'error');
+  tabs.forEach((tab,i)=>{assert.equal(tab.getName(),'UM_BULAN');assert.equal(JSON.stringify(tab.rows),before[i]);});
+  const again=f.call(payload);assert.equal(again.status,'success',again.message);
+  tabs.forEach((tab,i)=>{assert.equal(tab.getSheetId(),ids[i]);assert.equal(tab.getName(),'Uang Makan Juli 2026');assert.equal(tab.rows[0][2],'');assert.equal(tab.rows[1][2],'Uang Makan Juli 2026');assert.equal(tab.rows[2][1],'Juli');assert.equal(again.files[i].fileId,first.files[i].fileId);});
+  for(const type of ['PNS','PPPK'])assert.ok(f.books.get(f.context.SUBMISSION_TEMPLATES['uang-makan'][type]).getSheetByName('UM_BULAN'));
+});
+test('tukin template uses percentage points in I, preserves formulas and rolls payment year', () => {
+  const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');
+  const payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'}, period=f.context.submissionPeriod_(payload);
+  assert.equal(period.label,'Januari 2027');
+  const plan=f.context.templateRecapPlan_(sheet,[{nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5}],payload,period,[]);
+  assert.equal(plan.find(x=>x.row===10&&x.col===9).value,2.5);
+  assert.equal(plan.some(x=>x.col===10||x.col===11),false);
+  assert.equal(plan.find(x=>x.row===10&&x.col===5).value,2027);
+  assert.equal(plan.find(x=>x.row===10&&x.col===4).value,'Januari');
+  assert.equal(plan.find(x=>x.row===3&&x.col===4).value,'Januari 2027');
+  assert.equal(plan.find(x=>x.row===4&&x.col===4).value,payload.periode);
+  assert.equal(f.context.templateRecapPlan_(sheet,[],payload,period,[]).find(x=>x.row===10&&x.col===9).value,'');
+  assert.throws(()=>f.context.submissionPeriod_({modul:'tukin',periode:'01-11-2026 s/d 30-11-2026'}),/11 sampai 10/);
+});
+test('aggregate export restores existing spreadsheets after a second-file write failure', () => {
+  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const first=f.call(payload);assert.equal(first.status,'success');
+  const firstSheet=f.books.get(first.files[0].fileId).getSheetByName('Uang Makan Juli 2026');
+  firstSheet.rows[4][8]=88;
+  const before=JSON.stringify(firstSheet.rows), secondSheet=f.books.get(first.files[1].fileId).getSheetByName('Uang Makan Juli 2026');
+  const original=secondSheet.getRange.bind(secondSheet);let fail=true;
+  secondSheet.getRange=(...args)=>{const range=original(...args), write=range.setValues;range.setValues=values=>{if(fail){fail=false;throw Error('Injected second-file write failure');}return write(values);};return range;};
+  assert.equal(f.call(payload).status,'error');assert.equal(JSON.stringify(firstSheet.rows),before);
+  assert.equal(f.files.get(first.files[0].fileId).trashed,false);
+});
+test('aggregate generation refuses stale sources and ambiguous template identities without writes', () => {
+  const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES['uang-makan'].PNS).getSheetByName('UM_BULAN');
+  sheet.rows[5][1]=f.scope.nip;
+  assert.match(f.call({action:'buat_rekap_submisi',adminKey:wrapKey}).message,/duplikat/);
+  assert.equal([...f.folders.values()].some(folder=>folder.name==='REKAP'),false);
+  sheet.rows[5][1]='199001012025011003';f.working.rows[7][3]='12:00';
+  assert.equal(f.call({action:'buat_rekap_submisi',adminKey:wrapKey}).status,'error');
+});
+test('non-admin employee session cannot access the all-employee submission list', () => {
+  const f=profileFixture(), session=f.call({action:'login_pegawai',pin:'012345'});
+  assert.match(f.call({action:'list_submisi_terhitung',sessionToken:session.sessionToken,role:'admin'}).message,/Hanya Admin/);
+});
+test('Tukin export writes saved deduction to I and retains K formula on repeated generation', () => {
+  const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
+  f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+  const saved=confirmRecap(f);assert.equal(saved.status,'success',saved.message);
+  const payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const result=f.call(payload);assert.equal(result.status,'success',result.message);
+  assert.equal(result.files[0].name,'Rekap Potongan Tunjangan Kinerja Agustus 2026 PNS Dit Bangdes');
+  const sheet=f.books.get(result.files[0].fileId).getSheetByName('TUKIN_BULAN');
+  assert.equal(sheet.rows[9][8],saved.calculation.totals.potonganAbsensi);
+  assert.equal(sheet.rows[9][10],'=I10*30%+J10*70%');
+  for(const output of result.files){
+    const tab=f.books.get(output.fileId).getSheetByName('TUKIN_BULAN');
+    assert.equal(tab.rows[2][3],'Agustus 2026');assert.equal(tab.rows[3][3],f.scope.periode);
+    assert.equal(tab.rows[9][3],'Agustus');assert.equal(tab.rows[9][4],2026);
+  }
+  assert.equal(f.books.get(result.files[1].fileId).getSheetByName('TUKIN_BULAN').rows[9][8],'');
+  assert.equal(f.call(payload).files[0].fileId,result.files[0].fileId);
+});
+test('normalizing presentation does not invalidate a legacy saved revision with unpadded clocks', () => {
+  const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
+  f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
+  const baseline=f.recapBook.getSheetByName(f.context.BASELINE_SHEET);
+  f.working.rows[7][3]='8:10';baseline.rows[7][3]='8:10';
+  const legacyState=f.context.finalState_(f.scope);baseline.getRange(1,2).setValue(legacyState.revision);
+  const result=f.call({action:'preview_rekap_final'});
+  assert.equal(result.status,'success',result.message);assert.equal(result.rows[2].datang,'08:10');assert.ok(result.savedResult);
+});
 const attendanceDay = extra => ({tanggal:'2026-07-06',keterangan:'WFO',datang:'07:30',pulang:'16:00',jamKerja:'biasa',...extra});
 function payrollFixture(f) {
   const headers=Array(21).fill(''), row=Array(21).fill('');
