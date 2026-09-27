@@ -132,6 +132,46 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+test('period status persists centrally, requires admin, rejects stale updates and isolates module/year', () => {
+  const f=fixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  const read=(modul,year)=>f.call({action:'list_periode_submisi',modul,year});
+  assert.equal(read('uang-makan',2027).periods.every(p=>p.status==='DITUTUP'),true);
+  const command={action:'set_periode_submisi',modul:'uang-makan',year:2027,month:2,periodStatus:'DIBUKA',expectedStatus:'DITUTUP'};
+  assert.equal(f.call(command).status,'error');
+  assert.equal(f.call({...command,adminKey:wrapKey}).status,'success');
+  assert.equal(read('uang-makan',2027).periods[1].status,'DIBUKA');
+  assert.equal(read('tukin',2027).periods[1].status,'DITUTUP');
+  assert.equal(read('uang-makan',2028).periods[1].status,'DITUTUP');
+  assert.match(f.call({...command,adminKey:wrapKey}).message,/sudah berubah/);
+  assert.equal(f.call({...command,adminKey:wrapKey,expectedStatus:'DIBUKA',periodStatus:'DITUTUP'}).status,'success');
+  assert.equal(read('uang-makan',2027).periods[1].status,'DITUTUP');
+  assert.equal(read('spt',2027).status,'error');assert.equal(read('uang-makan',2027.5).status,'error');
+  assert.equal(f.call({...command,adminKey:wrapKey,month:13}).status,'error');
+});
+test('closed submission blocks all attendance mutations without changing files, but keeps reads available',()=>{
+  const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
+  f.properties.set('SUBMISI_STATUS_uang-makan_2026_07','DITUTUP');
+  const before=JSON.stringify(f.working.rows),count=f.files.size;
+  for(const action of [undefined,'proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'])assert.match(f.call({action}).message,/submisi ditutup/);
+  assert.equal(JSON.stringify(f.working.rows),before);assert.equal(f.files.size,count);
+  assert.equal(f.call({action:'preview_rekap_final'}).status,'success');
+  assert.equal(f.call({action:'list_pendukung'}).status,'success');
+});
+test('server gates Tukin by payment month across year boundary, not attendance month',()=>{
+  const f=fixture(),payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'};
+  assert.throws(()=>f.context.requireOpenSubmission_(payload),/ditutup/);
+  f.properties.set('SUBMISI_STATUS_tukin_2027_01','DIBUKA');
+  assert.doesNotThrow(()=>f.context.requireOpenSubmission_(payload));
+  assert.throws(()=>f.context.requireOpenSubmission_({...payload,periode:'11-12-2026 s/d 10-01-2027'}),/ditutup/);
+});
+test('period status cannot be changed by a forged admin role from employee session',()=>{
+  const f=profileFixture(),session=f.call({action:'login_pegawai',pin:'012345'});
+  const command={action:'set_periode_submisi',year:2027,month:1,periodStatus:'DIBUKA',expectedStatus:'DITUTUP',sessionToken:session.sessionToken,role:'admin'};
+  assert.match(f.call(command).message,/Hanya Admin/);
+  f.master.getSheetByName('Data_Pegawai').rows[0][3]='Role';
+  f.master.getSheetByName('Data_Pegawai').rows[1][3]='Admin';
+  assert.equal(f.call(command).status,'success');
+});
 test('published leaders retain the job title from the employee master, not browser data', () => {
   const f=fixture();payrollFixture(f);confirmRecap(f);
   const people=f.master.getSheetByName('Data_Pegawai');
@@ -1477,6 +1517,17 @@ test('unknown or ambiguous Jenis_ASN fails before creating any folder', () => {
   sheet.rows[1][7]='PNS';sheet.rows.push([...sheet.rows[1]]);
   assert.throws(()=>f.context.resolvePresensiFolder_(input),/tepat satu/);
   assert.equal(f.folders.size,count);
+});
+
+test('future submission folders include payment year and never reuse another year employee folder',()=>{
+  const f=fixture(),table=f.master.getSheetByName('Data_Pegawai');table.rows[0][7]='Jenis_ASN';table.rows[1][7]='PNS';
+  const meal=year=>({...f.scope,periode:`01-08-${year} s/d 31-08-${year}`,bulanTahun:`Agustus ${year}`});
+  const old=f.context.resolvePresensiFolder_(meal(2026)),future=f.context.resolvePresensiFolder_(meal(2027));
+  assert.notEqual(old.getId(),future.getId());assert.equal(future.parent.parent.getName(),'Uang Makan_08_Agustus_2027');
+  assert.equal(f.context.resolvePresensiFolder_(meal(2027)).getId(),future.getId());
+  const tukin=f.context.resolvePresensiFolder_({...f.scope,modul:'tukin',periode:'11-11-2026 s/d 10-12-2026',bulanTahun:'Januari 2027'});
+  assert.equal(tukin.parent.parent.getName(),'Tunjangan Kinerja_01_Januari_2027');
+  assert.equal(f.context.resolvePresensiFolder_(f.scope).getId(),f.destination.id);
 });
 
 function legacyFolderFixture(){

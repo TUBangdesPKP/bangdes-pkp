@@ -9,6 +9,18 @@
 
 Admin berdasarkan Role pada Data_Pegawai memakai sesi login server. Akun Super Admin sintetis/lama yang belum mempunyai sesi memakai `WRAP_ADMIN_KEY` yang sama dengan publikasi wrap, bukan PIN login. Kunci tidak disimpan ke localStorage. Sesi yang kedaluwarsa memerlukan login ulang.
 
+## Pilihan bulan/tahun dan akses submisi
+
+Pada tab 1 pilih bulan (atau Semua bulan), ketik tahun, lalu klik **Tampilkan**. Tahun tidak lagi dibatasi 2026. Uang Makan mengikuti bulan kalender; Tukin memakai bulan pembayaran (Januari 2027 = presensi 11 November–10 Desember 2026). Tahun kabisat dan pergantian tahun dihitung otomatis.
+
+Admin membuka/menutup kartu dengan sakelar **Akses**. Role diverifikasi dari sesi server; Super Admin lama memakai kunci publikasi rekap. Status tersimpan bersama di Script Properties project asli (`SUBMISI_STATUS_<modul>_<tahun>_<bulan>`), bukan localStorage. Tidak perlu mengisi properti secara manual. Akun lain melihat status saat membuka halaman, kembali ke jendela, atau klik **Muat ulang status**. Sebelum kartu dibuka, status diperiksa sekali lagi.
+
+Periode baru tertutup sampai Admin membukanya. Untuk kompatibilitas, default 2026 tetap Januari–Juni tertutup dan Juli–Desember terbuka. Perubahan sakelar lama yang hanya tersimpan di browser tidak dimigrasikan otomatis; Admin perlu menetapkan ulang status yang diinginkan setelah deployment. Penutupan tidak menghapus data. Backend menolak unggahan, klaim/hapus bukti, proses dan simpan final untuk periode tertutup, termasuk dari tab yang sudah telanjur terbuka. Pembacaan data tersimpan tidak ditolak.
+
+Deploy backend sebelum frontend. Jika backend belum mendukung daftar periode atau sedang gagal diakses, kartu tidak bisa dipilih; halaman menampilkan kesalahan dan tombol muat ulang, bukan menganggap periode terbuka.
+
+Folder baru selain tahun 2026 diberi akhiran tahun, misalnya `Uang Makan_08_Agustus_2027`, agar pegawai/bukti bulan yang sama tidak bercampur antar-tahun. Folder yang sudah terdaftar tetap memakai ID/lokasi lamanya. Kalender libur nasional tahun berikutnya tetap perlu diisi pada sumber `HARI_LIBUR`; pemilihan tahun tidak otomatis mengunduh kalender libur atau mengubah aturan perhitungan.
+
 ## Folder dan template
 
 Folder tujuan ditentukan dari folder presensi yang tercatat pada master. `REKAP` dibuat pada induk submisi yang sama dengan `PNS` dan `PPPK`. Bila lokasi pegawai berbeda-beda atau folder/file hasil bernama ganda, proses berhenti untuk diperiksa, bukan memilih secara acak.

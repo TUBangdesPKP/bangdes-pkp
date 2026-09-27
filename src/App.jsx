@@ -1,6 +1,7 @@
 import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { SubmissionSummary } from './submission-summary.jsx';
+import { SubmissionPeriods } from './submission-periods.jsx';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
@@ -1483,102 +1484,6 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
   );
 };
 
-const getPeriodEvents = () => {
-  const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-  
-  const uangMakanPeriods = [];
-  for (let i = 0; i < 12; i++) {
-    const year = 2026;
-    const month = i + 1;
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const strMonth = String(month).padStart(2, '0');
-    
-    uangMakanPeriods.push({
-      id: `um-${year}-${strMonth}`,
-      status: i < 6 ? 'DITUTUP' : 'DIBUKA',
-      title: `Bukti Dukung Uang Makan Bulan ${monthNames[i]} ${year}`,
-      periodeLabel: `1 ${monthNames[i].substring(0,3)} ${year} – ${daysInMonth} ${monthNames[i].substring(0,3)} ${year}`,
-      periodeEvent: `01-${strMonth}-${year} s/d ${daysInMonth}-${strMonth}-${year}`,
-      startDate: `01-${strMonth}-${year}`,
-      endDate: `${daysInMonth}-${strMonth}-${year}`,
-      periodeFolder: `Periode_${year}-${strMonth}`,
-      tipe: 'Uang Makan',
-      expectedDays: daysInMonth
-    });
-  }
-
-  const tukinPeriods = [];
-  for (let i = 0; i < 12; i++) {
-    const year = 2026;
-    const paymentMonthIndex = i;
-
-    const startDate = new Date(year, paymentMonthIndex - 2, 11);
-    const endDate = new Date(year, paymentMonthIndex - 1, 10);
-
-    const startDay = startDate.getDate();
-    const startMonthName = monthNames[startDate.getMonth()];
-    const startYear = startDate.getFullYear();
-    const startStrMonth = String(startDate.getMonth() + 1).padStart(2, '0');
-    
-    const endDay = endDate.getDate();
-    const endMonthName = monthNames[endDate.getMonth()];
-    const endYear = endDate.getFullYear();
-    const endStrMonth = String(endDate.getMonth() + 1).padStart(2, '0');
-
-    const strMonth = String(i + 1).padStart(2, '0');
-
-    tukinPeriods.push({
-      id: `tukin-${year}-${strMonth}`,
-      status: i < 6 ? 'DITUTUP' : 'DIBUKA',
-      title: `Bukti Dukung Tukin Bulan ${monthNames[i]} ${year}`,
-      periodeLabel: `${startDay} ${startMonthName.substring(0,3)} ${startYear} – ${endDay} ${endMonthName.substring(0,3)} ${endYear}`,
-      periodeEvent: `${String(startDay).padStart(2, '0')}-${startStrMonth}-${startYear} s/d ${String(endDay).padStart(2, '0')}-${endStrMonth}-${endYear}`,
-      periodeFolder: `Periode_${year}-${strMonth}`,
-      tipe: 'Tunjangan Kinerja'
-    });
-  }
-
-  const sptPeriods = [];
-  for (let i = 0; i < 12; i++) {
-    const year = 2026;
-    const month = i + 1;
-    const strMonth = String(month).padStart(2, '0');
-    
-    sptPeriods.push({
-      id: `spt-${year}-${strMonth}`,
-      status: 'DIBUKA',
-      title: `Arsip SPT Bulan ${monthNames[i]} ${year}`,
-      periodeLabel: `Periode ${monthNames[i]} ${year}`,
-      periodeEvent: `01-${strMonth}-${year} s/d 31-${strMonth}-${year}`, 
-      periodeFolder: `Periode_SPT_${year}-${strMonth}`,
-      tipe: 'Surat Tugas'
-    });
-  }
-
-  const cutiPeriods = [];
-  for (let i = 0; i < 12; i++) {
-    const year = 2026;
-    const month = i + 1;
-    const strMonth = String(month).padStart(2, '0');
-    
-    cutiPeriods.push({
-      id: `cuti-${year}-${strMonth}`,
-      status: 'DIBUKA',
-      title: `Arsip Surat Cuti Bulan ${monthNames[i]} ${year}`,
-      periodeLabel: `Periode ${monthNames[i]} ${year}`,
-      periodeEvent: `01-${strMonth}-${year} s/d 31-${strMonth}-${year}`, 
-      periodeFolder: `Periode_Cuti_${year}-${strMonth}`,
-      tipe: 'Surat Cuti'
-    });
-  }
-
-  return {
-    'uang-makan': uangMakanPeriods,
-    'tukin': tukinPeriods,
-    'spt': sptPeriods,
-    'cuti': cutiPeriods
-  };
-};
 
 const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const isSpt = modul === 'spt';
@@ -2981,20 +2886,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [submissionAdminKey, setSubmissionAdminKey] = useState('');
   
-  const [periodStatusOverrides, setPeriodStatusOverrides] = useState(() => {
-    try {
-      const saved = localStorage.getItem('pkp_period_status');
-      return saved ? JSON.parse(saved) : {};
-    } catch(e) { return {}; }
-  });
-  
-  const togglePeriodStatus = (periodId, currentStatus, e) => {
-    e.stopPropagation();
-    const newStatus = currentStatus === 'DIBUKA' ? 'DITUTUP' : 'DIBUKA';
-    const newOverrides = { ...periodStatusOverrides, [periodId]: newStatus };
-    setPeriodStatusOverrides(newOverrides);
-    localStorage.setItem('pkp_period_status', JSON.stringify(newOverrides));
-  };
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);
@@ -3042,7 +2933,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const activeTab = getModuleKey(currentView);
   const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
-  const PERIOD_EVENTS = getPeriodEvents();
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
@@ -3315,24 +3205,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     }
   };
 
-  const PERIOD_EVENTS_DATA = PERIOD_EVENTS[activeTab] || [];
-  const currentPeriodList = useMemo(() => {
-    const mappedList = PERIOD_EVENTS_DATA.map(p => ({
-      ...p,
-      status: periodStatusOverrides[p.id] !== undefined ? periodStatusOverrides[p.id] : p.status
-    }));
-
-    return mappedList.sort((a, b) => {
-      // 1. Urutkan berdasarkan Status (DIBUKA di atas DITUTUP)
-      if (a.status === 'DIBUKA' && b.status === 'DITUTUP') return -1;
-      if (a.status === 'DITUTUP' && b.status === 'DIBUKA') return 1;
-      
-      // 2. Urutkan berdasarkan urutan Bulan (Ascending: Jan -> Des)
-      const monthA = parseInt(a.id.split('-').pop(), 10);
-      const monthB = parseInt(b.id.split('-').pop(), 10);
-      return monthA - monthB;
-    });
-  }, [PERIOD_EVENTS_DATA, periodStatusOverrides]);
 
   const firstName = loggedInUser?.Nama?.split(/[\s,]+/)[0] || 'Rekan';
 
@@ -3585,83 +3457,10 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
             {/* KONTEN: ini saja yang scroll */}
             <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
-                <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentPeriodList.filter(p => loggedInUser?.Akun_Role === 'admin' || p.status !== 'DITUTUP').length === 0 ? (
-                    <div className="text-center py-20 bg-white rounded-3xl border border-gray-200 shadow-sm p-8">
-                      <Calendar size={48} className="mx-auto mb-4 text-gray-300" />
-                      <h3 className="text-xl font-black text-gray-800 mb-2">Belum Ada Periode Dibuka</h3>
-                      <p className="text-sm text-gray-500">Saat ini tidak ada periode pengumpulan yang sedang dibuka untuk Anda.</p>
-                    </div>
-                  ) : (
-                    currentPeriodList
-                      .filter((period) => loggedInUser?.Akun_Role === 'admin' || period.status !== 'DITUTUP')
-                      .map((period) => {
-                      const isSelected = selectedPeriod?.id === period.id;
-                      const isClosed = period.status === 'DITUTUP';
-                      const isAdmin = loggedInUser?.Akun_Role === 'admin';
-                      
-                      return (
-                        <div 
-                          key={period.id}
-                          onClick={() => {
-                            if (isClosed && !isAdmin) return;
-                            if (selectedPeriod?.id !== period.id) {
-                              setSelectedPeriod(period);
-                              resetUploadState();
-                            }
-                            navigate(currentView, 2);
-                          }}
-                          className={`group rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300 ${isClosed ? 'bg-gray-50 opacity-70 border-gray-200' : 'bg-white cursor-pointer hover:shadow-lg hover:-translate-y-1 hover:border-[#084C61]'} ${isSelected ? `border-[#084C61] ring-1 ring-[#084C61] shadow-md` : 'border-gray-200 shadow-xs'}`}
-                        >
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-3">
-                              <span className={`inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${isClosed ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                                {!isClosed && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
-                                {isClosed && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
-                                {period.status}
-                              </span>
-
-                              {isAdmin && (
-                                <div 
-                                  onClick={(e) => togglePeriodStatus(period.id, period.status, e)}
-                                  className="flex items-center gap-2 cursor-pointer"
-                                  title={isClosed ? "Klik untuk membuka periode ini" : "Klik untuk menutup periode ini"}
-                                >
-                                  <div className={`w-9 h-5 rounded-full relative transition-colors ${isClosed ? 'bg-gray-300' : 'bg-emerald-500'}`}>
-                                    <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all ${isClosed ? 'left-0.5' : 'left-[18px]'}`}></div>
-                                  </div>
-                                  <span className={`text-[10px] font-bold ${isClosed ? 'text-gray-400' : 'text-emerald-700'}`}>
-                                    {isClosed ? 'Akses Ditutup' : 'Akses Dibuka'}
-                                  </span>
-                                </div>
-                              )}
-
-                              {isSelected && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                  <CheckCircle2 size={10} /> Dipilih
-                                </span>
-                              )}
-                            </div>
-                            <h3 className={`text-lg font-black transition-colors ${isClosed ? 'text-gray-500' : 'text-gray-900 group-hover:text-[#084C61]'}`}>{period.title}</h3>
-                            <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
-                              <span className="flex items-center gap-1.5">
-                                <Calendar size={14} className="text-gray-400" />
-                                {period.periodeLabel}
-                              </span>
-                              <span>•</span>
-                              <span>{period.tipe}</span>
-                            </div>
-                          </div>
-
-                          <div className={`px-6 py-3 rounded-2xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition-transform ${isClosed && !isAdmin ? 'bg-gray-400 cursor-not-allowed' : 'group-active:scale-95 bg-[#143E50] cursor-pointer'}`}>
-                            {isClosed ? <X size={16} /> : <UploadCloud size={16} />}
-                            <span>{isClosed ? 'Ditutup' : 'Pilih & Lanjut'}</span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                <SubmissionPeriods key={activeTab} endpoint={APPS_SCRIPT_URL} modul={activeTab} user={loggedInUser} initialPeriod={selectedPeriod} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelect={period => {
+                  if (selectedPeriod?.id !== period.id) { setSelectedPeriod(period); resetUploadState(); }
+                  navigate(currentView, 2);
+                }}/>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="space-y-5">
                 {isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role) && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey}/>}

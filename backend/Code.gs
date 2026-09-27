@@ -653,6 +653,9 @@ function resolvePresensiFolder_(payload) {
   var modul = payload.modul;
   var month = modul === 'tukin' ? getBulanTukinPlusSatu(payload.periode) : null;
   month = month || getFormattedBulan(payload.bulanTahun || payload.periode);
+  var paymentYear=submissionPaymentMonth_(payload).getUTCFullYear();
+  // Keep the legacy 2026 location; later years must not share its employee folders.
+  if(paymentYear!==2026)month+='_'+paymentYear;
   var category = getOrCreateSubFolder(DriveApp.getFolderById(ROOT_FOLDER_ID), modul === 'uang-makan' ? 'BUKTI_UANG_MAKAN' : 'BUKTI_TUNJANGAN_KINERJA');
   var periodFolder = getOrCreateSubFolder(category, (modul === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja') + '_' + month);
   var statusFolder = uniqueChildFolder_(periodFolder, jenisAsn, true);
@@ -979,7 +982,10 @@ function doPost(e) {
     if (payload.action === 'rekap_bulanan_publik') return json_(publicMonthlyRecap_(payload));
     if (payload.action === 'simpan_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     if (payload.action === 'proses_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
+    if (payload.action === 'list_periode_submisi') return json_(listSubmissionPeriods_(payload));
     lock.waitLock(30000);
+    if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
+    if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) requireOpenSubmission_(payload);
     if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
     if (payload.action === 'aktivasi_akun') return json_(activateEmployee_(payload));
     if (payload.action === 'profil_saya') return json_({status:'success',user:profileUser_(requireProfileSession_(payload))});
@@ -1489,6 +1495,36 @@ function submissionAdmin_(payload) {
   }
   // Legacy synthetic super-admin has no employee session: use the existing server admin key.
   requireWrapAdmin_(payload);
+}
+function submissionPeriodStatus_(modul, year, month) {
+  if(['uang-makan','tukin'].indexOf(modul)===-1||!Number.isInteger(year)||year<2000||year>9999||!Number.isInteger(month)||month<1||month>12)throw new Error('Bulan atau tahun submisi tidak valid.');
+  var key='SUBMISI_STATUS_'+modul+'_'+year+'_'+('0'+month).slice(-2);
+  var stored=PropertiesService.getScriptProperties().getProperty(key);
+  if(stored!==null&&stored!==undefined&&stored!=='DIBUKA'&&stored!=='DITUTUP')throw new Error('Status periode tidak valid. Hubungi Admin.');
+  // Preserve the former 2026 defaults; future periods require explicit activation.
+  return {key:key,status:stored||(year===2026&&month>=7?'DIBUKA':'DITUTUP')};
+}
+function listSubmissionPeriods_(payload) {
+  var year=Number(payload.year), periods=[];
+  for(var month=1;month<=12;month++)periods.push({month:month,status:submissionPeriodStatus_(payload.modul,year,month).status});
+  return {status:'success',modul:payload.modul,year:year,periods:periods};
+}
+function setSubmissionPeriod_(payload) {
+  submissionAdmin_(payload);
+  var current=submissionPeriodStatus_(payload.modul,Number(payload.year),Number(payload.month));
+  if(['DIBUKA','DITUTUP'].indexOf(payload.periodStatus)===-1)throw new Error('Status periode tidak valid.');
+  if(payload.expectedStatus!==current.status)throw new Error('Status sudah berubah oleh Admin lain. Muat ulang status sebelum mencoba lagi.');
+  PropertiesService.getScriptProperties().setProperty(current.key,payload.periodStatus);
+  return listSubmissionPeriods_(payload);
+}
+function submissionPaymentMonth_(payload) {
+  var range=dateRangeFromPeriod_(payload.periode), end=parseDate_(range[1]);
+  if(!end)throw new Error('Periode submisi tidak valid.');
+  return new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+(payload.modul==='tukin'?1:0),1));
+}
+function requireOpenSubmission_(payload) {
+  var month=submissionPaymentMonth_(payload);
+  if(submissionPeriodStatus_(payload.modul,month.getUTCFullYear(),month.getUTCMonth()+1).status!=='DIBUKA')throw new Error('Periode submisi ditutup. Hubungi Admin untuk membuka akses sebelum mengubah data.');
 }
 function ownArchive_(payload) {
   var account=requireProfileSession_(payload), type=payload.modul;
