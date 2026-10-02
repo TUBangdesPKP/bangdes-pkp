@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CalendarDays, Download, RefreshCw } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
-import { agendaDateLabel, agendaFileUrl, agendaToday } from './dashboard-agenda-model.js';
+import { agendaDateLabel, agendaFileUrl, agendaLocationParts, agendaToday } from './dashboard-agenda-model.js';
 
 export function DashboardAgenda({ endpoint }) {
   const [date, setDate] = useState(() => agendaToday());
@@ -49,7 +49,7 @@ export function DashboardAgenda({ endpoint }) {
               <td className={`${cell} text-center text-slate-400`}>{index + 1}</td>
               <td className={`${cell} text-xs font-semibold text-[#084C61]`}>{event.time}</td>
               <td className={`${cell} font-semibold text-[#183D4C]`}>{event.title}</td>
-              <td className={`${cell} text-xs leading-relaxed`}>{event.location || 'Belum tersedia'}</td>
+              <td className={`${cell} text-xs leading-relaxed`}>{agendaLocationParts(event.location || 'Belum tersedia').map((part, partIndex) => part.href ? <a key={partIndex} href={part.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline underline-offset-2 hover:text-blue-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 break-words">{part.text}</a> : part.text)}</td>
               <td className={`${cell} text-xs leading-relaxed`}>{event.disposition || 'Belum tersedia'}</td>
               <td className={`${cell} border-r-0 !px-2`}>
                 {files.length ? <ul className="space-y-2">{files.map((file, fileIndex) => <li key={file.url}><a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name} aria-label={`Buka ${file.name}`} className="flex items-start gap-1.5 rounded-lg border border-[#D5C58A]/60 bg-white px-2 py-2 text-[11px] font-semibold text-[#084C61] hover:bg-[#F2EEDF] focus-visible:outline focus-visible:outline-2">
