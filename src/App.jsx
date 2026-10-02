@@ -359,7 +359,8 @@ const hitungHariDinas = (tglBerangkat, tglPulang) => {
   return '-';
 };
 
-// 2026 National Holidays based on official data
+// Libur nasional serta cuti bersama (keduanya berstatus Libur).
+// Tambahan 2027: PDF pengguna "Hari Libur Nasional dan Cuti Bersama 2027", lampiran hlm. 4–5.
 const DAFTAR_LIBUR_NASIONAL = [
   '2026-01-01', // Tahun Baru Masehi
   '2026-01-16', // Isra Mi'raj Nabi Muhammad SAW
@@ -377,7 +378,33 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2026-06-16', // Tahun Baru Islam (1 Muharram)
   '2026-08-17', // Hari Kemerdekaan RI
   '2026-08-25', // Maulid Nabi Muhammad SAW
-  '2026-12-25'  // Hari Raya Natal
+  '2026-12-25', // Hari Raya Natal
+  '2027-01-01', // Tahun Baru Masehi
+  '2027-01-05', // Isra Mikraj 1448 H
+  '2027-02-05', // Cuti bersama Imlek
+  '2027-02-06', // Tahun Baru Imlek
+  '2027-03-08', // Nyepi
+  '2027-03-09', // Cuti bersama Idul Fitri
+  '2027-03-10', // Idul Fitri
+  '2027-03-11', // Idul Fitri
+  '2027-03-12', // Cuti bersama Idul Fitri
+  '2027-03-15', // Cuti bersama Idul Fitri
+  '2027-03-25', // Cuti bersama Wafat Yesus Kristus
+  '2027-03-26', // Wafat Yesus Kristus
+  '2027-03-28', // Paskah
+  '2027-05-01', // Hari Buruh
+  '2027-05-06', // Kenaikan Yesus Kristus
+  '2027-05-17', // Idul Adha
+  '2027-05-18', // Cuti bersama Idul Adha
+  '2027-05-19', // Cuti bersama Waisak
+  '2027-05-20', // Waisak
+  '2027-06-01', // Hari Lahir Pancasila
+  '2027-06-06', // Tahun Baru Islam
+  '2027-08-15', // Maulid Nabi Muhammad SAW
+  '2027-08-17', // Proklamasi Kemerdekaan
+  '2027-12-24', // Cuti bersama Natal
+  '2027-12-25', // Natal
+  '2027-12-26', // Isra Mikraj 1449 H
 ];
 
 const hitungHariKerjaAktif = (startStr, endStr) => {

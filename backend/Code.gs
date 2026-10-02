@@ -1290,7 +1290,15 @@ function updateProfilePhoto_(payload) {
 // Tab 4: preview from saved tab-2 data; only the final confirmation writes V6:V.
 var BASELINE_SHEET = '_PRESENSI_TAB2';
 // Same holiday configuration currently used by the frontend. Extend through HARI_LIBUR.
-var CUTI_HOLIDAYS = ['2026-01-01','2026-01-16','2026-02-17','2026-03-19','2026-03-21','2026-03-22','2026-04-03','2026-04-05','2026-05-01','2026-05-14','2026-05-27','2026-05-31','2026-06-01','2026-06-16','2026-08-17','2026-08-25','2026-12-25'];
+var CUTI_HOLIDAYS = [
+  '2026-01-01','2026-01-16','2026-02-17','2026-03-19','2026-03-21','2026-03-22','2026-04-03','2026-04-05','2026-05-01','2026-05-14','2026-05-27','2026-05-31','2026-06-01','2026-06-16','2026-08-17','2026-08-25','2026-12-25',
+  // PDF pengguna: Hari Libur Nasional dan Cuti Bersama 2027, lampiran hlm. 4–5.
+  // 18 tanggal libur nasional + 8 tanggal cuti bersama, seluruhnya dihitung Libur.
+  '2027-01-01','2027-01-05','2027-02-05','2027-02-06',
+  '2027-03-08','2027-03-09','2027-03-10','2027-03-11','2027-03-12','2027-03-15','2027-03-25','2027-03-26','2027-03-28',
+  '2027-05-01','2027-05-06','2027-05-17','2027-05-18','2027-05-19','2027-05-20',
+  '2027-06-01','2027-06-06','2027-08-15','2027-08-17','2027-12-24','2027-12-25','2027-12-26'
+];
 function holidayDates_() {
   var dates = CUTI_HOLIDAYS.slice();
   var sheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('HARI_LIBUR');
@@ -1423,9 +1431,10 @@ function finalState_(payload) {
     documents.push({ fileId: entry.fileId, sourceFileId: entry.sourceFileId, jenisDokumen: entry.jenisDokumen, fileName: entry.fileName, dates: dates });
   });
   documents.sort(function(a,b) { return a.fileId.localeCompare(b.fileId); });
+  var holidays = holidayDates_();
   var rows = saved.rows.map(function(row) {
     var day = parseDate_(row.tanggal).getUTCDay();
-    var holiday = day === 0 || day === 6 || row.keteranganAwal.toLowerCase() === 'libur' || /^(sabtu|minggu)$/i.test(row.hari);
+    var holiday = day === 0 || day === 6 || holidays.indexOf(row.tanggal) !== -1 || row.keteranganAwal.toLowerCase() === 'libur' || /^(sabtu|minggu)$/i.test(row.hari);
     var matched = documents.filter(function(doc) { return doc.dates.indexOf(row.tanggal) !== -1; });
     var spt = matched.some(function(doc) { return doc.jenisDokumen === 'spt'; });
     var cuti = matched.some(function(doc) { return doc.jenisDokumen === 'cuti'; });
@@ -1572,7 +1581,7 @@ function processEvidence_(payload) {
 // Percentages below are percentage points (0.5 means 0.5%, not 50%).
 function attendanceStatus_(row) {
   var day = parseDate_(row.tanggal).getUTCDay(), status = text_(row.keterangan).toUpperCase();
-  if (row.libur || day === 0 || day === 6 || status === 'LIBUR') return 'Libur';
+  if (row.libur || day === 0 || day === 6 || CUTI_HOLIDAYS.indexOf(row.tanggal) !== -1 || status === 'LIBUR') return 'Libur';
   if (status === 'DINAS' || status === 'SPT') return 'Dinas';
   if (/^CUTI(?:\s|$)/.test(status)) return 'Cuti';
   if (status === 'TB' || status === 'TUGAS BELAJAR') return 'TB';

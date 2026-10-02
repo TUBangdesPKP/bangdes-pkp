@@ -52,10 +52,12 @@ test('Excel D and E stay independent, including absent arrival, absent departure
 // Execute the real application reader with only external IO mocked, so integration
 // regressions (flattened CSV, lost columns, overwritten '-') are covered as well.
 const appSource=fs.readFileSync(new URL('../src/App.jsx',import.meta.url),'utf8');
+const holidayContext=vm.createContext({});
+vm.runInContext(appSource.slice(appSource.indexOf('const DAFTAR_LIBUR_NASIONAL ='),appSource.indexOf('const removeTitlesFromName ='))+'\nglobalThis.holidays = DAFTAR_LIBUR_NASIONAL; globalThis.workdays = hitungHariKerjaAktif;',holidayContext);
 function reader(sheets, ocrText=letter, digitalText='') {
   const context=vm.createContext({
     attendanceExcelClocks,extractCutiPeriod,recognizeCutiImage,console,
-    DAFTAR_LIBUR_NASIONAL:['2026-08-17','2026-08-25'],
+    DAFTAR_LIBUR_NASIONAL:holidayContext.holidays,
     localStorage:{getItem:()=>JSON.stringify([{NIP:'199001012020011001',Nama:'Pegawai Uji'}])},
     parseIndoDate:value=>{const parts=value.split(' '), months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];return new Date(+parts[2],months.indexOf(parts[1].slice(0,3)),+parts[0]);},
     formatIndoToYMD:()=>'',hitungHariKerjaAktif:()=>2,
@@ -73,6 +75,19 @@ test('real Excel reader keeps departure-only attendance, 1-digit hours, sheet bo
   assert.equal(result.rows.length,2);assert.equal(result.totalHariMasuk,2);
   assert.equal(result.rows[1].datang,'-');assert.equal(result.rows[1].pulang,'18:04');
   assert.equal(result.rows[0].datang,'07:06');assert.equal(result.rows[0].pulang,'-');
+});
+
+test('2027 national and collective holidays are Libur in Excel preview and excluded from working days',async()=>{
+  const holidays=Array.from(holidayContext.holidays).filter(date=>date.startsWith('2027-'));
+  assert.equal(holidays.length,26);
+  const rows=holidays.map((date,i)=>[String(i+1),'',date,'-','-',...Array(16).fill(''),'WFO']);
+  const result=await reader({One:rows})('holidays.xlsx');
+  assert.equal(result.rows.length,26);
+  assert.ok(result.rows.every(row=>row.keterangan==='Libur'));
+  assert.equal(result.totalHariMasuk,0);
+  assert.equal(holidayContext.workdays('2027-03-08','2027-03-15'),0);
+  assert.equal(holidayContext.workdays('2027-03-08','2027-03-16'),1);
+  assert.equal(holidayContext.workdays('2027-12-24','2027-12-27'),1);
 });
 test('real scanned-PDF pipeline carries Bab IV duration and dates through to archive preview',async()=>{
   const result=await reader({},letter)('cuti.pdf','cuti');

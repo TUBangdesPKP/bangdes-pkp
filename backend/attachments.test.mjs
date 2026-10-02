@@ -687,6 +687,41 @@ test('Cuti excludes weekends, configured holidays and extra HARI_LIBUR; SPT does
   assert.deepEqual(Array.from(f.context.archiveDateList_('18 Mei 2026','20 Mei 2026','cuti')), ['2026-05-18','2026-05-19','2026-05-20']);
 });
 
+test('2027 PDF dates match frontend and backend, including collective leave on page 5', () => {
+  const f=fixture();
+  const expected=[
+    '2027-01-01','2027-01-05','2027-02-05','2027-02-06',
+    '2027-03-08','2027-03-09','2027-03-10','2027-03-11','2027-03-12','2027-03-15','2027-03-25','2027-03-26','2027-03-28',
+    '2027-05-01','2027-05-06','2027-05-17','2027-05-18','2027-05-19','2027-05-20',
+    '2027-06-01','2027-06-06','2027-08-15','2027-08-17','2027-12-24','2027-12-25','2027-12-26'
+  ];
+  const backend=Array.from(f.context.CUTI_HOLIDAYS);
+  assert.deepEqual(backend.filter(date=>date.startsWith('2027-')),expected);
+  assert.equal(new Set(backend).size,backend.length);
+  const app=fs.readFileSync(new URL('../src/App.jsx',import.meta.url),'utf8');
+  const frontend=vm.runInNewContext(app.slice(app.indexOf('const DAFTAR_LIBUR_NASIONAL ='),app.indexOf('const hitungHariKerjaAktif ='))+'\nDAFTAR_LIBUR_NASIONAL;');
+  assert.deepEqual(Array.from(frontend),backend);
+  assert.deepEqual(Array.from(f.context.archiveDateList_('8 Maret 2027','16 Maret 2027','cuti')),['2027-03-16']);
+  assert.equal(f.context.archiveDateList_('8 Maret 2027','16 Maret 2027','spt').length,9);
+  for(const modul of ['uang-makan','tukin']) {
+    const result=f.context.calculateAttendance_(expected.map(tanggal=>({tanggal,keterangan:'WFO',datang:'-',pulang:'-'})),employeeRate,modul);
+    assert.equal(result.totals.libur,26);
+    for(const key of ['hariKerja','masuk','cuti','unadjusted','menitTanpaPresensi','potonganAbsensi']) assert.equal(result.totals[key],0,key);
+  }
+});
+
+test('backend final preview recognizes 2027 holidays even when the uploaded sheet says WFO', () => {
+  const f=fixture();
+  f.scope.periode='01-03-2027 s/d 31-03-2027';
+  f.master.getSheetByName('REKAP_UANG_MAKAN').rows[1][3]=f.scope.periode;
+  const dates=['2027-03-08','2027-03-09','2027-03-10','2027-03-11','2027-03-12','2027-03-16'];
+  f.working.rows.slice(5,-1).forEach((row,i)=>{row[1]='';row[2]=dates[i];row[3]='-';row[4]='-';row[21]='WFO';});
+  const result=f.context.finalState_(f.scope);
+  assert.ok(result.rows.slice(0,5).every(row=>row.libur&&row.keterangan==='Libur'));
+  assert.equal(result.rows[5].libur,false);
+  assert.equal(result.rows[5].keterangan,'WFO');
+});
+
 test('migration overwrites shifted dates and clears surplus columns, safe to rerun', () => {
   const f = fixture(), cuti = f.master.getSheetByName('REKAP_CUTI');
   cuti.rows[1][4]='10 Juli 2026'; cuti.rows[1][5]='13 Juli 2026'; cuti.rows[1][6]=2;
