@@ -10,6 +10,7 @@ import { MyProfile } from './my-profile.jsx';
 import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
+import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
@@ -1231,16 +1232,16 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
   );
 };
 
-const DashboardHome = ({ navigate, loggedInUser }) => {
+export const DashboardHome = ({ navigate, loggedInUser }) => {
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 md:py-12">
-      <div className="flex flex-col lg:flex-row gap-8 lg:gap-16">
-        <div className="flex-1">
-          <div className="mb-10">
+    <div className="max-w-[1800px] mx-auto px-4 md:px-8 py-6 md:py-8">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6">
+        <div className="min-w-0">
+          <div className="mb-6 max-w-3xl">
             <span className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider mb-3 uppercase shadow-2xs bg-[#F2EEDF] text-[#084C61]">
               Sistem Kepegawaian
             </span>
-            <h1 className="text-3xl md:text-4xl font-black mb-4 leading-tight text-[#084C61]">
+            <h1 className="text-2xl md:text-3xl font-black mb-4 leading-tight text-[#084C61]">
               Dashboard Data dan Informasi Direktorat Pembangunan Perumahan Perdesaan
             </h1>
             <p className="text-gray-600 text-base md:text-lg max-w-xl leading-relaxed font-normal mb-6">
@@ -1263,9 +1264,10 @@ const DashboardHome = ({ navigate, loggedInUser }) => {
               </button>
             </div>
           </div>
+          <DashboardAgenda endpoint={APPS_SCRIPT_URL}/>
         </div>
 
-        <div className="w-full lg:w-[400px] flex flex-col gap-4">
+        <div className="w-full min-w-0 flex flex-col gap-4">
           <PublishedLeaders endpoint={APPS_SCRIPT_URL}/>
 
           <a

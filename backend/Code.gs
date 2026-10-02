@@ -976,6 +976,7 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var payload = JSON.parse(e.postData.contents);
+    if (payload.action === 'agenda_dashboard') return json_(dashboardAgenda_(payload));
     // Read-only wrap requests must not hold the write lock while opening employee files.
     if (payload.action === 'rekap_bulanan') return json_(monthlyWrapPreview_(payload));
     if (payload.action === 'rekap_bulanan_tersimpan') return json_(savedMonthlyWrap_(payload));
@@ -1022,6 +1023,170 @@ function doPost(e) {
     return json_({ status: 'error', message: error.message });
   }
   finally { if (lock.hasLock()) lock.releaseLock(); }
+}
+
+// Public agenda: fixed sources approved by the owner. Never accepts arbitrary source URLs/IDs.
+var AGENDA_CALENDAR_ID = 'tubangdespkp@gmail.com';
+var AGENDA_SHEET_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vThPxE5x03a5bSMlq23PaYCAOMPDKf8fI7UIv_Es3CjI7sd04vaYZbDsciZ2AMtRTIaCUurTfVA2iM2/pub?gid=470452082&single=true&output=csv';
+var AGENDA_ZONE = 'Asia/Jakarta';
+
+function agendaIsoDate_(value) {
+  var text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number(text.slice(0,4)) < 1900) return '';
+  var date = new Date(text + 'T00:00:00Z');
+  return !isNaN(date.getTime()) && date.toISOString().slice(0,10) === text ? text : '';
+}
+function agendaSheetDate_(value) {
+  var text = String(value || '').trim().toLowerCase(), iso = agendaIsoDate_(text);
+  if (iso) return iso;
+  var months = ['januari','februari','maret','april','mei','juni','juli','agustus','september','oktober','november','desember'];
+  var named = text.match(/(?:^|[\s,])(\d{1,2})\s+([a-z]+)\s+(\d{4})$/);
+  var numeric = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  var day = named ? named[1] : numeric ? numeric[1] : '', month = named ? months.indexOf(named[2]) + 1 : numeric ? Number(numeric[2]) : 0;
+  return month ? agendaIsoDate_((named || numeric)[3] + '-' + String(month).padStart(2,'0') + '-' + String(day).padStart(2,'0')) : '';
+}
+function agendaDecode_(value) {
+  return String(value || '').replace(/&#(x[0-9a-f]+|\d+);/gi, function(_, code) {
+    var point = code[0].toLowerCase() === 'x' ? parseInt(code.slice(1),16) : Number(code);
+    return point > 0 && point <= 0x10ffff ? String.fromCodePoint(point) : '';
+  }).replace(/&(nbsp|amp|quot|apos|lt|gt);/gi, function(_, key) {
+    return {nbsp:' ',amp:'&',quot:'"',apos:"'",lt:'<',gt:'>'}[key.toLowerCase()];
+  });
+}
+function agendaPlain_(value) {
+  return agendaDecode_(String(value || '').replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi,'').replace(/<br\s*\/?\s*>|<\/(?:p|div|li)>/gi,'\n').replace(/<[^>]+>/g,''))
+    .replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n\s*\n/g,'\n').trim();
+}
+function agendaTitleKey_(value) { return agendaPlain_(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim(); }
+function agendaClock_(value) {
+  var match = String(value || '').match(/\b([01]?\d|2[0-3])[.:]([0-5]\d)\b/);
+  return match ? match[1].padStart(2,'0') + ':' + match[2] : '';
+}
+function agendaSheetRows_(csv) {
+  if (/^\s*</.test(csv)) throw new Error('Sumber agenda bukan CSV.');
+  var rows = Utilities.parseCsv(csv.replace(/^\uFEFF/,''));
+  var header = rows.findIndex(function(row) {
+    return /tanggal/i.test(row[0]) && /^waktu$/i.test(String(row[3]).trim()) && /agenda/i.test(row[5]) && /dispo/i.test(row[6]);
+  });
+  if (header < 0) throw new Error('Kolom sumber agenda berubah.');
+  var currentDate = '', result = [];
+  rows.slice(header + 1).forEach(function(row) {
+    // Merged date cells export as blank on subsequent rows in the same date group.
+    if (String(row[0] || '').trim()) currentDate = agendaSheetDate_(row[0]);
+    if (!currentDate || !String(row[5] || '').trim()) return;
+    result.push({date:currentDate, titleKey:agendaTitleKey_(row[5]), time:agendaClock_(row[3]), location:agendaPlain_(row[4]), disposition:agendaPlain_(row[6])});
+  });
+  return result;
+}
+function agendaMatch_(event, rows) {
+  var date = event.start.date || Utilities.formatDate(new Date(event.start.dateTime), AGENDA_ZONE, 'yyyy-MM-dd');
+  var titleKey = agendaTitleKey_(event.summary);
+  var candidates = rows.filter(function(row) { return row.date === date && row.titleKey === titleKey; });
+  if (candidates.length === 1) return candidates[0];
+  // Repeated titles must also have a unique matching time; never pick the first same-day row.
+  if (event.start.dateTime) {
+    var time = Utilities.formatDate(new Date(event.start.dateTime), AGENDA_ZONE, 'HH:mm');
+    candidates = candidates.filter(function(row) { return row.time === time; });
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+function agendaSafeUrl_(value) {
+  var url = agendaDecode_(value).trim();
+  if (/^https:\/\/(?:www\.)?google\.com\/url\?/i.test(url)) {
+    var redirected = url.match(/[?&](?:q|url)=([^&]+)/);
+    try { url = redirected ? decodeURIComponent(redirected[1]) : ''; } catch (_) { return ''; }
+  }
+  return /^https?:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d+)?(?:[/?#][^\s<>]*)?$/i.test(url) && !/[\u0000-\u001f\u007f\\]/.test(url) ? url : '';
+}
+function agendaFileKey_(url) {
+  var drive = url.match(/^https?:\/\/(?:drive|docs)\.google\.com\/(?:.*?\/d\/(?:e\/)?([\w-]+)|[^#]*[?&]id=([\w-]+))/i);
+  return drive ? 'drive:' + (drive[1] || drive[2]) : url;
+}
+function agendaFiles_(event) {
+  var files = [], seen = {};
+  function add(rawUrl, name) {
+    var url = agendaSafeUrl_(rawUrl);
+    if (!url) return;
+    var key = agendaFileKey_(url);
+    if (seen[key]) return;
+    seen[key] = true;
+    files.push({url:url, name:agendaPlain_(name) || 'Dokumen undangan'});
+  }
+  (event.attachments || []).forEach(function(file) { add(file.fileUrl, file.title); });
+  var description = String(event.description || '');
+  var section = description.search(/(?:link\s+(?:dokumen|undangan)|lampiran)\s*(?:\/\s*undangan)?\s*:/i);
+  function eligible(url, position) {
+    var safe = agendaSafeUrl_(url);
+    return safe && (agendaFileKey_(safe).indexOf('drive:') === 0 || (section >= 0 && position >= section));
+  }
+  // Links in the invitation section may use a non-Drive provider. Ordinary meeting links are not files.
+  description.replace(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, function(full, url, name, offset) {
+    if (eligible(url, offset)) add(url, name);
+    return full;
+  });
+  description.replace(/https?:\/\/[^\s<>"']+/gi, function(raw, offset) {
+    var url = raw.replace(/[.,;]+$/,'');
+    if (eligible(url, offset)) add(url, 'Dokumen undangan');
+    return raw;
+  });
+  return files;
+}
+function agendaEventTime_(event) {
+  if (event.start.date) return 'Sepanjang hari';
+  var start = new Date(event.start.dateTime), end = new Date((event.end || {}).dateTime);
+  var first = Utilities.formatDate(start, AGENDA_ZONE, 'HH:mm');
+  if (event.endTimeUnspecified || isNaN(end.getTime())) return first + ' WIB';
+  if (Utilities.formatDate(start, AGENDA_ZONE, 'yyyy-MM-dd') !== Utilities.formatDate(end, AGENDA_ZONE, 'yyyy-MM-dd')) {
+    return Utilities.formatDate(start, AGENDA_ZONE, 'dd/MM HH:mm') + ' – ' + Utilities.formatDate(end, AGENDA_ZONE, 'dd/MM HH:mm') + ' WIB';
+  }
+  return first + ' – ' + Utilities.formatDate(end, AGENDA_ZONE, 'HH:mm') + ' WIB';
+}
+function dashboardAgenda_(payload) {
+  var date = payload.date == null ? Utilities.formatDate(new Date(), AGENDA_ZONE, 'yyyy-MM-dd') : agendaIsoDate_(payload.date);
+  if (!date) throw new Error('Tanggal agenda tidak valid. Gunakan YYYY-MM-DD.');
+  var cache = CacheService.getScriptCache(), cacheKey = 'dashboard-agenda-v1:' + date, cached = cache.get(cacheKey);
+  if (cached) { try { return JSON.parse(cached); } catch (_) { /* Refetch invalid cache. */ } }
+  var next = new Date(date + 'T00:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
+  var options = {timeMin:date + 'T00:00:00+07:00', timeMax:next.toISOString().slice(0,10) + 'T00:00:00+07:00', singleEvents:true, showDeleted:false, orderBy:'startTime', timeZone:AGENDA_ZONE, maxResults:2500};
+  var events = [], tokens = {}, seen = {};
+  try {
+    if (typeof Calendar === 'undefined') throw new Error('Calendar service belum aktif.');
+    do {
+      var page = Calendar.Events.list(AGENDA_CALENDAR_ID, options);
+      if (page.accessRole === 'freeBusyReader' || page.accessRole === 'none') throw new Error('Akses detail kalender diperlukan.');
+      (page.items || []).forEach(function(event) {
+        if (event.status === 'cancelled' || !event.start || seen[event.id]) return;
+        seen[event.id] = true; events.push(event);
+      });
+      options.pageToken = page.nextPageToken;
+      if (options.pageToken && tokens[options.pageToken]) throw new Error('Pagination kalender tidak selesai.');
+      tokens[options.pageToken] = true;
+    } while (options.pageToken);
+  } catch (_) {
+    // Do not return provider errors, account details or credentials to a public endpoint.
+    throw new Error('Agenda Calendar belum dapat dimuat. Admin perlu mengaktifkan layanan Calendar dan memeriksa izin akun deployment.');
+  }
+  var rows = [], warning = '', unmatched = 0;
+  try {
+    var response = UrlFetchApp.fetch(AGENDA_SHEET_CSV, {muteHttpExceptions:true});
+    if (response.getResponseCode() !== 200) throw new Error('Spreadsheet tidak tersedia.');
+    rows = agendaSheetRows_(response.getContentText());
+  } catch (_) { warning = 'Agenda Calendar tersedia, tetapi Disposisi dari spreadsheet belum dapat dimuat.'; }
+  var result = {status:'success', agendaVersion:1, date:date, timeZone:AGENDA_ZONE, updatedAt:new Date().toISOString(), events:events.map(function(event) {
+    var match = agendaMatch_(event, rows);
+    if (!match) unmatched++;
+    return {id:String(event.id), title:agendaPlain_(event.summary) || 'Tanpa judul', time:agendaEventTime_(event), location:agendaPlain_(event.location) || (match ? match.location : ''), disposition:match ? match.disposition : '', files:agendaFiles_(event)};
+  })};
+  result.warning = warning || (unmatched ? unmatched + ' agenda belum cocok dengan spreadsheet; Disposisi yang belum cocok ditampilkan sebagai belum tersedia.' : '');
+  // Cache only the public whitelist, never the raw Calendar/CSV response. Failure is non-fatal.
+  try { cache.put(cacheKey, JSON.stringify(result), warning ? 30 : 120); } catch (_) { /* Large agenda remains available uncached. */ }
+  return result;
+}
+
+// Run once from the editor after enabling the Advanced Calendar service, before redeploying.
+function periksaKoneksiAgendaDashboard() {
+  var result = dashboardAgenda_({});
+  Logger.log(JSON.stringify({tanggal:result.date, jumlahAgenda:result.events.length, peringatan:result.warning || 'Tidak ada'}));
 }
 
 // Profile mutations authenticate the owner on the server, independently of browser role/NIP.
