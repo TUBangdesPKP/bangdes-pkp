@@ -14,7 +14,7 @@ import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
-import { attendanceExcelClocks, extractCutiPeriod } from './document-parsers.js';
+import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -816,6 +816,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   let fullText = '';
   let lines = [];
   let excelRows = [];
+  let pdfRows = null;
   let cutiPeriod = null;
 
   if (isExcel) {
@@ -878,9 +879,11 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       cMapPacked: true
     }).promise;
     
+    const pdfPages = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
+      pdfPages.push(textContent.items);
       
       const items = textContent.items.map(item => ({
         str: item.str.trim(),
@@ -909,6 +912,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       }
     }
     fullText = lines.join('\n');
+    if (activeTab !== 'spt' && activeTab !== 'cuti') pdfRows = attendancePdfRows(pdfPages);
     
     const digitsOnly = fullText.replace(/[^0-9]/g, '');
     const hasNip = /(19\d{16}|20\d{16})/.test(digitsOnly);
@@ -919,6 +923,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     }
 
     if (!hasNip || isTooShort || needsCutiOcr) {
+      pdfRows = null;
       if (onProgress) onProgress("Dokumen terdeteksi sebagai hasil scan. Mengunduh modul OCR AI...");
       
       if (!window.Tesseract) {
@@ -1053,6 +1058,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
 
   const rows = [];
   const seenDates = new Set();
+  if (pdfRows) lines = pdfRows.map(row => `${row.tanggal} ${row.status}`);
   
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
@@ -1085,6 +1091,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     let datang = times.length > 0 ? times[0][1] : '-';
     let pulang = times.length > 1 ? times[1][1] : (times.length > 0 && hari !== 'Sabtu' && hari !== 'Minggu' ? times[0][1] : '-');
     if (isExcel) ({ datang, pulang } = attendanceExcelClocks(excelRows[i]));
+    if (pdfRows) ({ datang, pulang } = pdfRows[i]);
     
     let lokasiDatangRaw = '';
     let lokasiPulangRaw = '';
@@ -1138,9 +1145,9 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       tanggal: dateKey,
       hari,
       datang,
-      pulang: isExcel || pulang !== datang || times.length > 1 ? pulang : '-',
+      pulang: isExcel || pdfRows || pulang !== datang || times.length > 1 ? pulang : '-',
       keterangan: status === '-' && (datang !== '-' || pulang !== '-') ? 'WFO' : status,
-      lokasiDatangRaw,
+      lokasiDatangRaw: pdfRows ? pdfRows[i].lokasiDatangRaw : lokasiDatangRaw,
       _dateObj: dateObj
     });
   }

@@ -13,6 +13,17 @@
 
 ## Memasang
 
+### PDF Riwayat Presensi beberapa halaman
+
+- Tab 2 Uang Makan dan Tukin sekarang mengenali tabel digital dengan header Tanggal, Masuk/Waktu, Keluar/Waktu, dan Status dari posisi teks pada PDF.
+- Tanggal dan jam tidak harus berada di satu baris teks atau halaman yang sama. Baris belum lengkap diteruskan ke halaman berikutnya dengan mengabaikan header berulang, footer, dan TOTAL.
+- Kolom Masuk dan Keluar dibaca secara terpisah. Jam pada lokasi atau kolom ringkasan tidak digunakan; tanda `-` tetap `-`, termasuk bila hanya jam pulang tersedia.
+- Bila format tabel dikenali tetapi baris/jam tidak lengkap, tanggal duplikat, atau jumlah tanggal berbeda dari Total Data dokumen, proses berhenti dengan pesan yang jelas. Data tidak diisi dengan perkiraan.
+- Format PDF lain dan OCR arsip SPT/Cuti tetap memakai jalur sebelumnya. Perbaikan ini khusus PDF digital, bukan janji akurasi OCR untuk semua dokumen scan.
+- Uji dokumen contoh September 2026 menghasilkan 30 tanggal, 22 hari masuk dan 8 hari libur; baris 8 September yang terpisah halaman tetap memuat 07:17–16:31. Seluruh pasangan jam tanggal lainnya juga diverifikasi.
+- Pembaruan ini hanya membutuhkan deployment frontend. Tidak mengubah Apps Script atau data yang sudah tersimpan. Unggah/baca ulang PDF di tab 2 setelah aplikasi diperbarui; periksa preview sebelum menyimpan ulang.
+- PDF asli tidak disalin ke repository. Untuk menjalankan uji ulang dengan dokumen lokal, atur environment variable `PRESENSI_PDF_FIXTURE` ke path PDF sebelum menjalankan `node --test tests/document-parsers.test.mjs`. Tanpa variabel tersebut, pengujian dokumen pribadi dilewati tetapi regresi sintetis lintas halaman tetap berjalan.
+
 1. Cadangkan kode Apps Script dan spreadsheet Kepegawaian.
 2. Ganti **seluruh** kode Apps Script dengan `D:\bangdes-pkp\backend\Code.gs` terbaru. Simpan, lalu **Deploy → Manage deployments → pensil/Edit → New version → Deploy** pada deployment yang sama.
 3. Cek web app `/exec?action=health`: `backendVersion` harus `2026-09-25-recap-source`.
