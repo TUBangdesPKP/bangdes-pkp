@@ -13,6 +13,7 @@ import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
+import { KepegawaianPage } from './kepegawaian.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
@@ -1212,7 +1213,7 @@ const getStoredUser = () => {
   return null;
 };
 
-const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
+export const Header = ({ navigate, loggedInUser, onLogoutRequest, currentView }) => {
   return (
     <header data-site-header className="w-full border-b border-[#D5C58A]/40 sticky top-0 z-50 px-4 md:px-8 py-3 grid grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-4 gap-y-3 items-center shadow-xs bg-[#F2EEDF]">
       <div 
@@ -1226,8 +1227,9 @@ const Header = ({ navigate, loggedInUser, onLogoutRequest }) => {
         </div>
       </div>
       
-      <nav aria-label="Navigasi utama" className="order-3 col-span-2 lg:order-none lg:col-span-1 lg:col-start-2 lg:row-start-1 flex justify-center items-center gap-6 text-sm font-medium text-[#084C61]">
+      <nav aria-label="Navigasi utama" className="order-3 col-span-2 lg:order-none lg:col-span-1 lg:col-start-2 lg:row-start-1 flex flex-wrap justify-center items-center gap-x-4 gap-y-2 md:gap-x-6 text-sm font-medium text-[#084C61]">
         <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
+        <a href="#/kepegawaian" aria-current={['kepegawaian','profile'].includes(currentView) ? 'page' : undefined} className="hover:opacity-80 transition-opacity aria-[current=page]:font-extrabold aria-[current=page]:underline underline-offset-4">Kepegawaian</a>
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
         </button>
@@ -1286,13 +1288,6 @@ export const DashboardHome = ({ navigate, loggedInUser }) => {
             </p>
             
             <div className="flex flex-wrap gap-3">
-              <button 
-                onClick={() => navigate('profile')}
-                className="px-6 py-3 rounded-xl font-bold text-white flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer bg-[#084C61]"
-              >
-                <Briefcase size={18} /> Lihat Bank Data Pegawai
-              </button>
-
               <button 
                 onClick={() => navigate(loggedInUser ? 'rekap' : 'login')}
                 className="px-6 py-3 rounded-xl font-bold text-gray-800 bg-white border border-gray-200 flex items-center gap-2 shadow-sm transition-transform hover:scale-[1.02] cursor-pointer"
@@ -3952,7 +3947,7 @@ const ProfileView = ({ navigate }) => {
         <div className="max-w-7xl mx-auto px-4 md:px-8 pt-8 pb-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
             <div>
-              <button onClick={() => navigate('home')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 cursor-pointer"><ArrowLeft size={16} /> Kembali ke Beranda</button>
+              <button onClick={() => navigate('kepegawaian')} className="text-sm font-semibold flex items-center gap-1.5 text-gray-500 hover:text-gray-800 mb-2 cursor-pointer"><ArrowLeft size={16} /> Kembali ke Kepegawaian</button>
               <div className="flex items-center gap-3">
                 <h2 className="text-2xl md:text-3xl font-black" style={{ color: PALETTE_PKP.midnightGreen }}>Bank Data Profil Pegawai</h2>
                 <button onClick={loadData} title="Perbarui Data" className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors cursor-pointer"><RotateCcw size={16} /></button>
@@ -4081,7 +4076,7 @@ export default function App() {
           const { timestamp } = JSON.parse(stored);
           if (new Date().getTime() - timestamp >= SESSION_DURATION) {
             setLoggedInUser(null); localStorage.removeItem('pkp_session'); setSessionExpired(true);
-            if (!['home','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
+            if (!['home','kepegawaian','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
           }
         } catch(e) {}
       }
@@ -4123,6 +4118,7 @@ export default function App() {
     if (isPublicRecap) return <PublicRecapPage endpoint={APPS_SCRIPT_URL}/>;
     switch (currentView) {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
+      case 'kepegawaian': return <KepegawaianPage />;
       case 'rekap': case 'profil-saya': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
         if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
         return <UserDashboardView loggedInUser={loggedInUser} onProfileUpdate={handleProfileUpdate} onLogoutRequest={() => setShowLogoutModal(true)} navigate={navigate} currentView={currentView} activeStep={activeStep} />;
@@ -4148,11 +4144,11 @@ export default function App() {
         </div>
       )}
 
-      {!isDashboardView && !isPublicRecap && currentView !== 'profile' && <Header navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
+      {!isDashboardView && !isPublicRecap && currentView !== 'profile' && <Header currentView={currentView} navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
       
       {currentView === 'profile' ? (
         <div className="flex flex-col h-screen">
-          <Header navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />
+          <Header currentView={currentView} navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />
           <main className="flex-1 overflow-hidden">{renderView()}</main>
         </div>
       ) : (
