@@ -3,7 +3,7 @@ import { AlertCircle, RefreshCw, CheckCircle2, ArrowLeft, Wallet, Clock } from '
 import { sendClaimRequest } from './archive-claims.js';
 import { displayAttendanceTime, sameFinalReview } from './recap-review.js';
 
-export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, cachedReview, savedResult, onPreviewLoaded, onReviewChange, onInvalidated }) {
+export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, cachedReview, savedResult, onPreviewLoaded, onReviewChange, onInvalidated, readOnly = false }) {
   const initialCache = useRef({ key: JSON.stringify(context), preview: cachedPreview, review: cachedReview });
   const callbacks = useRef({ onPreviewLoaded, onReviewChange, onInvalidated });
   callbacks.current = { onPreviewLoaded, onReviewChange, onInvalidated };
@@ -71,6 +71,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   const previousResult = savedResult || preview?.savedResult;
   const unchanged = previousResult?.revision === preview?.revision && sameFinalReview(previousResult, { schedules, resolutions, adjustments });
   const save = async () => {
+    if (readOnly) return;
     if (unchanged && !saving && !loading) { onSaved(previousResult); return; }
     if (!checked || !preview || unresolved.length || saving || loading) return;
     setSaving(true); setError('');
@@ -87,12 +88,12 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   return <section className="space-y-5" aria-label="Preview akhir presensi">
     <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-3">
       <h2 className="text-lg font-extrabold text-[#084C61]">Preview Bukti {moduleLabel}</h2>
-      <p className="text-sm text-gray-600">Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.</p>
+      <p className="text-sm text-gray-600">{readOnly ? 'Menampilkan presensi dan penyesuaian yang sudah tersimpan. Periode ditutup sehingga seluruh isian hanya dapat dilihat.' : 'Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.'}</p>
       <p className="text-xs text-teal-800">Adjustment maksimal 4 kejadian per bulan kalender, dihitung bersama Uang Makan dan Tukin. Jika datang dan pulang sama-sama kosong, hanya satu yang boleh dikoreksi. Jam koreksi digunakan untuk menghitung TL/PSW; absen yang masih kosong tetap dikenai potongan.</p>
-      <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap tab 2. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>
+      {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap tab 2. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>}
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
-    {loading && <p role="status" className="p-5 text-sm">memproses data terbaru</p>}
+    {loading && <p role="status" className="p-5 text-sm">{readOnly ? 'Memuat preview tersimpan...' : 'memproses data terbaru'}</p>}
     {error && <p role="alert" className="rounded-xl bg-red-50 border border-red-200 text-red-700 p-4 text-sm">{error}</p>}
     {!!conflicts.length && <div role="alert" className="rounded-xl bg-amber-50 border border-amber-200 text-amber-900 p-4 space-y-2">
       <p className="font-bold flex gap-2 items-center"><AlertCircle size={18}/>{conflicts.length} tanggal memiliki SPT dan Cuti bersamaan.</p>
@@ -101,7 +102,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     {preview && <>
       <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
         <div className="p-5 border-b text-sm flex flex-wrap items-center justify-between gap-4"><div><strong>Preview Data Presensi</strong><p className="text-xs text-gray-500 mt-1">Hasil penyesuaian sesuai dokumen yang diklaim.</p></div><div className="bg-slate-50 border rounded-2xl p-4 text-right"><strong>{preview.nama}</strong><p className="text-xs text-gray-500">NIP: {preview.nip}</p><p className="text-xs text-teal-700 font-bold mt-1">Periode: {preview.periode}</p></div></div>
-        <div className="overflow-auto max-h-[560px]">
+        <fieldset disabled={readOnly} className="min-w-0"><div className="overflow-auto max-h-[560px]">
           <table className="w-full min-w-[800px] text-xs text-left">
             <thead className="sticky top-0 bg-slate-100 text-gray-600"><tr>{['Tanggal', 'Hari', 'Datang', 'Pulang', 'Ket', 'Jam Kerja'].map(label => <th className="px-4 py-3 uppercase" key={label}>{label}</th>)}</tr></thead>
             <tbody>{rows.map(row => {
@@ -114,14 +115,14 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
               </tr>;
             })}</tbody>
           </table>
-        </div>
-        <div className="p-5 border-t text-xs text-gray-500 flex flex-wrap gap-5"><span>Total Hari: <strong className="text-gray-900">{rows.length} Hari</strong></span><span>Hari Masuk (WFO/WFA/WFH): <strong className="text-teal-700">{presentCount} Hari</strong></span><a href={preview.spreadsheetUrl} target="_blank" rel="noreferrer" className="ml-auto underline text-[#084C61]">Lihat spreadsheet rekap</a></div>
+        </div></fieldset>
+        <div className="p-5 border-t text-xs text-gray-500 flex flex-wrap gap-5"><span>Total Hari: <strong className="text-gray-900">{rows.length} Hari</strong></span><span>Hari Masuk (WFO/WFA/WFH): <strong className="text-teal-700">{presentCount} Hari</strong></span>{!readOnly && <a href={preview.spreadsheetUrl} target="_blank" rel="noreferrer" className="ml-auto underline text-[#084C61]">Lihat spreadsheet rekap</a>}</div>
       </div>
-      {unchanged ? <p role="status" className="rounded-xl bg-teal-50 p-4 text-sm text-teal-800">Data belum berubah. Hasil tersimpan bisa langsung dibuka tanpa menyimpan ulang.</p> : <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700"><input type="checkbox" checked={checked} disabled={saving || unresolved.length > 0} onChange={e => setChecked(e.target.checked)} className="mt-1"/>Saya telah memeriksa preview dan menyetujui hasil akhir pada spreadsheet rekap.</label>}
+      {!readOnly && (unchanged ? <p role="status" className="rounded-xl bg-teal-50 p-4 text-sm text-teal-800">Data belum berubah. Hasil tersimpan bisa langsung dibuka tanpa menyimpan ulang.</p> : <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700"><input type="checkbox" checked={checked} disabled={saving || unresolved.length > 0} onChange={e => setChecked(e.target.checked)} className="mt-1"/>Saya telah memeriksa preview dan menyetujui hasil akhir pada spreadsheet rekap.</label>)}
     </>}
     <div className="flex flex-wrap gap-3 justify-between">
       <button disabled={saving} onClick={onBack} className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gray-100 text-sm"><ArrowLeft size={16}/>Kembali ke Dokumen</button>
-      <button disabled={!preview || (!checked && !unchanged) || loading || saving || unresolved.length > 0} onClick={save} className="px-5 py-3 rounded-xl text-white bg-[#084C61] text-sm font-bold disabled:opacity-40">{saving ? 'Memperbarui rekap...' : unchanged ? 'Lihat Hasil Tersimpan' : 'Lanjutkan Perhitungan ' + moduleLabel}</button>
+      {!readOnly && <button disabled={!preview || (!checked && !unchanged) || loading || saving || unresolved.length > 0} onClick={save} className="px-5 py-3 rounded-xl text-white bg-[#084C61] text-sm font-bold disabled:opacity-40">{saving ? 'Memperbarui rekap...' : unchanged ? 'Lihat Hasil Tersimpan' : 'Lanjutkan Perhitungan ' + moduleLabel}</button>}
     </div>
   </section>;
 }
@@ -131,14 +132,14 @@ const percent = value => value === null || value === undefined ? 'Belum tersedia
 function SummaryStat({ value, label, danger = false }) {
   return <div className="bg-white rounded-2xl border border-slate-300 px-3 py-4 text-center"><div className={`text-xl font-extrabold ${danger ? 'text-red-600' : 'text-slate-900'}`}>{value}</div><div className="text-xs text-slate-600 mt-2">{label}</div></div>;
 }
-export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadAnother }) {
+export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadAnother, readOnly = false }) {
   const [done, setDone] = useState(false);
   const [showNext, setShowNext] = useState(false);
   const top = useRef(null);
   useEffect(() => { top.current?.scrollIntoView({ block: 'start' }); }, [result]);
-  if (!result) return <div className="bg-white rounded-2xl p-6 space-y-4"><p>Periksa dan konfirmasi preview tab 4 sebelum melanjutkan.</p><button onClick={onBack} className="text-[#084C61] underline">Kembali ke tab 4</button></div>;
+  if (!result) return <div className="bg-white rounded-2xl p-6 space-y-4"><p>{readOnly ? 'Belum ada rekap tersimpan untuk periode ini.' : 'Periksa dan konfirmasi preview tab 4 sebelum melanjutkan.'}</p><button onClick={onBack} className="text-[#084C61] underline">Kembali ke tab 4</button></div>;
   const calc = result.calculation;
-  if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">Perbarui backend lalu lakukan perhitungan kembali di tab 4.<button onClick={onBack} className="block mt-3 underline">Kembali ke tab 4</button></div>;
+  if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">{readOnly ? 'Rincian perhitungan tersimpan belum tersedia untuk periode ini.' : 'Perbarui backend lalu lakukan perhitungan kembali di tab 4.'}<button onClick={onBack} className="block mt-3 underline">Kembali ke tab 4</button></div>;
   const { totals: t, amount: a } = calc, tukin = calc.modul === 'tukin';
   const reportedAdjustments = t.adjustmentReported ?? t.adjusted ?? 0;
   return <section ref={top} aria-label={'Hasil perhitungan ' + moduleLabel} className="space-y-4 max-w-6xl mx-auto">
@@ -168,9 +169,9 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadA
     </div>
     <div className="text-xs text-slate-600 flex flex-wrap gap-4"><span>Tugas Belajar: {t.tb} hari</span><span>Libur: {t.libur} hari</span><span>Tanpa kedua presensi: {t.tidakMasuk} hari</span><span>Menit tanpa presensi dipisahkan agar tidak dihitung dua kali.</span></div>
     <details className="rounded-xl border bg-white p-4 text-sm"><summary className="cursor-pointer font-bold">Rincian per tanggal dan sumber tarif</summary><div className="overflow-auto mt-3"><table className="w-full min-w-[720px] text-xs text-left"><thead><tr>{['Tanggal','Keterangan','Jam kerja','Wajib pulang','TL','PSW','Potongan absensi'].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{calc.days.map(day => <tr key={day.tanggal}><td className="p-2 border-b">{day.tanggal}</td><td className="p-2 border-b">{day.status}</td><td className="p-2 border-b">{day.jamKerja === 'ramadan' ? 'Ramadan' : 'Biasa'}</td><td className="p-2 border-b">{['WFO','WFA','WFH'].includes(day.status) ? day.wajibPulang : '—'}</td><td className="p-2 border-b">{day.tl ? 'TL ' + day.tl : '—'}</td><td className="p-2 border-b">{day.psw ? 'PSW ' + day.psw : '—'}</td><td className="p-2 border-b">{percent(day.potongan)}</td></tr>)}</tbody></table></div><p className="text-xs text-slate-500 mt-3">{Object.values(calc.sources || {}).join(' · ')}</p></details>
-    <div className="flex flex-wrap gap-5 text-sm text-[#084C61] underline"><a href={result.spreadsheetUrl} target="_blank" rel="noreferrer">Buka spreadsheet rekap</a>{result.note?.url && <a href={result.note.url} target="_blank" rel="noreferrer">Buka catatan perhitungan</a>}</div>
+    {!readOnly && <div className="flex flex-wrap gap-5 text-sm text-[#084C61] underline"><a href={result.spreadsheetUrl} target="_blank" rel="noreferrer">Buka spreadsheet rekap</a>{result.note?.url && <a href={result.note.url} target="_blank" rel="noreferrer">Buka catatan perhitungan</a>}</div>}
     {done && <p role="status" className="bg-teal-50 text-teal-800 p-4 rounded-xl flex gap-2 items-center"><CheckCircle2 size={18}/>Selesai. Rekap dan catatan perhitungan sudah tersimpan.</p>}
-    <div className="grid grid-cols-2 gap-4"><button onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={!calc.complete} onClick={() => { setDone(true); setShowNext(true); onDone?.(); }} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">Selesai</button></div>
-    {showNext && <div role="dialog" aria-modal="true" aria-label="Rekap sudah disimpan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl max-w-md p-6 space-y-4 shadow-xl"><h3 className="font-bold text-[#084C61]">Rekap sudah disimpan</h3><p className="text-sm">Ingin mengunggah data pegawai lain?</p><div className="flex flex-wrap gap-3"><button autoFocus onClick={() => setShowNext(false)} className="border rounded-xl px-4 py-2 text-sm">Tetap di sini</button>{onUploadAnother && <button onClick={() => { setShowNext(false); onUploadAnother(); }} className="bg-[#084C61] text-white rounded-xl px-4 py-2 text-sm">Upload data lain</button>}</div></div></div>}
+    <div className="grid grid-cols-2 gap-4"><button onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={!readOnly && !calc.complete} onClick={() => { if (readOnly) { onDone?.(); return; } setDone(true); setShowNext(true); onDone?.(); }} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">{readOnly ? 'Kembali ke Daftar Bulan' : 'Selesai'}</button></div>
+    {showNext && !readOnly && <div role="dialog" aria-modal="true" aria-label="Rekap sudah disimpan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl max-w-md p-6 space-y-4 shadow-xl"><h3 className="font-bold text-[#084C61]">Rekap sudah disimpan</h3><p className="text-sm">Ingin mengunggah data pegawai lain?</p><div className="flex flex-wrap gap-3"><button autoFocus onClick={() => setShowNext(false)} className="border rounded-xl px-4 py-2 text-sm">Tetap di sini</button>{onUploadAnother && <button onClick={() => { setShowNext(false); onUploadAnother(); }} className="bg-[#084C61] text-white rounded-xl px-4 py-2 text-sm">Upload data lain</button>}</div></div></div>}
   </section>;
 }

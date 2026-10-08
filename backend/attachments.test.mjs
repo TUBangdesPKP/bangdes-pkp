@@ -164,6 +164,32 @@ test('server gates Tukin by payment month across year boundary, not attendance m
   assert.doesNotThrow(()=>f.context.requireOpenSubmission_(payload));
   assert.throws(()=>f.context.requireOpenSubmission_({...payload,periode:'11-12-2026 s/d 10-01-2027'}),/ditutup/);
 });
+
+test('closed meal and tukin views reuse stored results without recalculating or writing',()=>{
+  for (const modul of ['uang-makan','tukin']) {
+    const f=fixture();payrollFixture(f);
+    const saved=confirmRecap(f,{}, {modul});
+    assert.equal(saved.status,'success');
+    // Fixture July meal / July-attendance Tukin have different payment months.
+    for(let month=1;month<=12;month++)f.properties.set(`SUBMISI_STATUS_${modul}_2026_${String(month).padStart(2,'0')}`,'DITUTUP');
+    const snapshot=()=>JSON.stringify({books:[...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])]),files:[...f.files.keys()]});
+    const before=snapshot();
+    for(let repeat=0;repeat<2;repeat++) {
+      const docs=f.call({action:'list_pendukung',modul});
+      assert.equal(docs.status,'success');assert.equal(docs.processed,true);
+      assert.deepEqual(docs.savedResult.calculation,saved.calculation);
+      assert.equal(docs.savedResult.nip,f.scope.nip);
+      assert.equal(f.call({action:'preview_rekap_final',modul}).status,'success');
+    }
+    for (const absent of [{nip:'OTHER',nama:f.scope.nama},{periode:'01-01-2027 s/d 31-01-2027'}]) {
+      const empty=f.call({action:'list_pendukung',modul,...absent});
+      assert.equal(empty.status,'success');assert.equal(empty.requiresTab2,true);
+      assert.deepEqual(empty.documents,[]);assert.equal(empty.savedResult,undefined);
+    }
+    for(const action of ['proses_bukti','simpan_rekap_final','upload_pendukung_lain','hapus_pendukung'])assert.match(f.call({action,modul}).message,/submisi ditutup/);
+    assert.equal(snapshot(),before);
+  }
+});
 test('period status cannot be changed by a forged admin role from employee session',()=>{
   const f=profileFixture(),session=f.call({action:'login_pegawai',pin:'012345'});
   const command={action:'set_periode_submisi',year:2027,month:1,periodStatus:'DIBUKA',expectedStatus:'DITUTUP',sessionToken:session.sessionToken,role:'admin'};

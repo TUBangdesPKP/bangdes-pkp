@@ -7,6 +7,13 @@ let processed = false;
 let saved = null;
 const counts = {};
 const periodStatuses = new Map();
+const closedTest = new URLSearchParams(window.location.search).has('closedSaved');
+const storedFixture = p => ({status:'success',nip:p.nip,nama:p.nama,periode:p.periode,spreadsheetId:'mock-closed',spreadsheetUrl:'#mock-sheet',revision:'closed-revision',
+  adjustments:{'2026-01-05':{datang:{time:'07:30',fileId:'mock-letter'}}},adjustmentDocuments:[{fileId:'mock-letter',fileName:'Surat Lupa Absen Uji.pdf'}],
+  rows:[{tanggal:'2026-01-05',hari:'Senin',datang:'07:30',originalDatang:'-',pulang:'16:00',keteranganAwal:'WFO',keterangan:'WFO',jamKerja:'biasa',libur:false,konflik:false,dokumen:[]}],
+  calculation:{modul:p.modul,complete:true,warnings:[],jabatan:'Pegawai Simulasi',sources:{saved:'Hasil tersimpan — simulasi'},days:[],
+    totals:{masuk:1,hariKerja:1,dinas:0,cuti:0,tb:0,libur:0,flexi:0,terlambat:0,psw:0,tidakMasuk:0,menitTelat:0,menitPsw:0,menitTanpaPresensi:0,totalMenit:0,potonganAbsensi:0},
+    amount:{tarif:37000,skp:100,potonganSkp:0,persenPotongan:0,bruto:37000,potongan:0,netto:37000}}});
 let files = [{fileId:'test_copy',fileName:'SPT simulasi.pdf',fileUrl:'#mock',jenisDokumen:'spt',sourceFileId:'test_source',sourceUrl:'#mock'}];
 window.fetch = async (_url, options) => {
   const action = options?.body ? JSON.parse(options.body).action : 'archive';
@@ -14,9 +21,16 @@ window.fetch = async (_url, options) => {
   window.dispatchEvent(new Event('mock-request'));
   if (!options?.body) return new Response('Timestamp,NIP,Nama\n');
   const p = JSON.parse(options.body);
+  if(closedTest && !['list_periode_submisi','list_pendukung','preview_rekap_final'].includes(p.action)) throw Error('Read-only fixture rejected mutation: '+p.action);
+  if(closedTest && ['list_pendukung','preview_rekap_final'].includes(p.action)) {
+    if(p.nip!=='TEST'||p.nama!=='Pegawai Uji')throw Error('Wrong employee scope');
+    const hasResult=p.bulanTahun.includes('Januari');
+    if(p.action==='list_pendukung')return Response.json({status:'success',documents:hasResult?files:[],requiresTab2:!hasResult,processed:hasResult,savedResult:hasResult?storedFixture(p):null});
+    return Response.json({...storedFixture(p),savedResult:storedFixture(p)});
+  }
   if(['list_periode_submisi','set_periode_submisi'].includes(p.action)){
     if(p.action==='set_periode_submisi')periodStatuses.set(`${p.modul}:${p.year}:${p.month}`,p.periodStatus);
-    return Response.json({status:'success',periods:Array.from({length:12},(_,i)=>({month:i+1,status:periodStatuses.get(`${p.modul}:${p.year}:${i+1}`)||(p.year===2026&&i>=6?'DIBUKA':'DITUTUP')}))});
+    return Response.json({status:'success',periods:Array.from({length:12},(_,i)=>({month:i+1,status:closedTest?'DITUTUP':periodStatuses.get(`${p.modul}:${p.year}:${i+1}`)||(p.year===2026&&i>=6?'DIBUKA':'DITUTUP')}))});
   }
   if (p.action === 'list_pendukung') return Response.json({status:'success',documents:files,processed,requiresTab2:false,savedResult:saved});
   if (p.action === 'list_submisi_terhitung') return Response.json({status:'success',employees:Array.from({length:25},(_,i)=>({nip:`19900101202501${String(i).padStart(4,'0')}`,nama:`Pegawai Simulasi ${i+1}`,jenisAsn:i%2?'PNS':'PPPK',unit:['Subbagian Tata Usaha','Subdirektorat Wilayah I','Subdirektorat Perencanaan Teknis'][i%3]}))});
@@ -40,7 +54,7 @@ window.fetch = async (_url, options) => {
   throw Error('Unexpected request in isolated fixture: '+p.action);
 };
 function Fixture() {
-  const [route,setRoute] = useState({view:'absensi-tunjangan-kinerja',step:1});
+  const [route,setRoute] = useState({view:new URLSearchParams(window.location.search).get('modul')==='uang-makan'?'absensi-uang-makan':'absensi-tunjangan-kinerja',step:1});
   const [requests,setRequests] = useState('{}');
   useEffect(() => { const update=()=>setRequests(JSON.stringify(counts)); window.addEventListener('mock-request',update); return ()=>window.removeEventListener('mock-request',update); },[]);
   const admin=new URLSearchParams(window.location.search).has('admin');

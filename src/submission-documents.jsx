@@ -4,7 +4,7 @@ import { driveFileId, sendClaimRequest } from './archive-claims.js';
 import { EXTRA_TYPES } from './extra-documents.jsx';
 
 // One server-backed collection shared by SPT/Cuti claims and direct uploads.
-export function useSubmissionDocuments({ endpoint, context, enabled, revision, onPreview }) {
+export function useSubmissionDocuments({ endpoint, context, enabled, revision, onPreview, readOnly = false }) {
   const key = JSON.stringify(context);
   const currentKey = useRef(key);
   currentKey.current = key;
@@ -62,6 +62,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   }, [key]);
 
   const claim = async payload => {
+    if (readOnly) throw new Error('Periode ditutup. Dokumen hanya dapat dilihat.');
     if (!ready) throw new Error('Simpan tab 2 dan muat daftar dokumen terlebih dahulu.');
     setClaiming(true);
     try {
@@ -71,7 +72,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   };
 
   const remove = async file => {
-    if (removing) return;
+    if (readOnly || removing) return;
     setRemoving(file.fileId);
     setError('');
     try {
@@ -99,7 +100,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       {expanded && <div className="px-5 pb-5 space-y-4">
         {error && <div role="alert" className="text-xs text-red-700 bg-red-50 rounded-lg p-3">{error}</div>}
         {loading && <p className="text-xs text-gray-500">Memuat dokumen dari folder pengumpulan...</p>}
-        {!loading && !ready && !error && <p className="text-xs text-gray-600">Simpan file presensi dan rekap pada tab 2 terlebih dahulu.</p>}
+        {!loading && !ready && !error && <p className="text-xs text-gray-600">{readOnly ? 'Belum ada data presensi tersimpan untuk periode ini.' : 'Simpan file presensi dan rekap pada tab 2 terlebih dahulu.'}</p>}
         {!loading && ready && files.length === 0 && <p className="text-xs text-gray-500">Belum ada dokumen pendukung pada pengumpulan ini.</p>}
         {['spt', 'cuti', ...Object.keys(EXTRA_TYPES)].map(type => {
           const group = files.filter(file => file.jenisDokumen === type);
@@ -109,14 +110,14 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
               <span className="text-xs text-[#084C61] min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
               <div className="flex gap-2 shrink-0">
                 <button type="button" onClick={() => onPreview(file)} className="flex items-center gap-1 text-xs text-[#084C61] bg-[#D5EAF3] rounded px-2 py-1"><Eye size={14}/>Lihat</button>
-                <button type="button" disabled={!!removing} onClick={() => setConfirmDelete(file)} className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1 disabled:opacity-50"><Trash2 size={14}/>{removing === file.fileId ? 'Menghapus...' : 'Hapus'}</button>
+                {!readOnly && <button type="button" disabled={!!removing} onClick={() => setConfirmDelete(file)} className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1 disabled:opacity-50"><Trash2 size={14}/>{removing === file.fileId ? 'Menghapus...' : 'Hapus'}</button>}
               </div>
             </div>)}
           </div>;
         })}
         <button type="button" disabled={loading || !!removing} onClick={() => setRefreshVersion(v => v + 1)} className="text-xs text-[#084C61] underline">Muat ulang daftar</button>
       </div>}
-      {confirmDelete && <div role="dialog" aria-modal="true" aria-label="Hapus salinan pengumpulan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      {confirmDelete && !readOnly && <div role="dialog" aria-modal="true" aria-label="Hapus salinan pengumpulan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-6 max-w-md space-y-4 text-gray-800 shadow-xl">
           <h3 className="font-bold">Hapus salinan pengumpulan?</h3>
           <p className="text-sm break-words">{confirmDelete.fileName}</p>
@@ -136,5 +137,5 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     setLoading(false);
     setProcessed(value);
   };
-  return { files, ready, loading, processed, savedResult, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
+  return { files, ready, loading, error, loaded: loadedRequest.current === JSON.stringify([endpoint, key, revision, refreshVersion]), processed, savedResult, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
 }

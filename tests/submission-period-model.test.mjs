@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {submissionPeriodCard} from '../src/submission-period-model.js';
+import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep} from '../src/submission-period-model.js';
+
+test('employees enter saved recap for every month; closed periods remain readable without upload',()=>{
+  for (const modul of ['uang-makan','tukin']) {
+    const closed=submissionPeriodCard(modul,2027,1,'DITUTUP');
+    const open=submissionPeriodCard(modul,2027,1,'DIBUKA');
+    assert.equal(submissionIsReadOnly(closed),true);
+    assert.equal(submissionIsReadOnly(open),false);
+    assert.equal(submissionEntryStep(closed,false),5);
+    assert.equal(submissionEntryStep(closed,true),5);
+    assert.equal(submissionEntryStep(open,false),5);
+    assert.equal(submissionEntryStep(open,true),2);
+  }
+  assert.deepEqual([1,2,3,4,5].filter(readOnlySubmissionStep),[1,3,4,5]);
+  assert.equal(readOnlySubmissionStep(6),false);
+});
 
 test('meal periods support future years, leap days and stable legacy identifiers',()=>{
   const leap=submissionPeriodCard('uang-makan',2028,2);

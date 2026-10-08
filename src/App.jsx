@@ -2,6 +2,8 @@ import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { SubmissionSummary } from './submission-summary.jsx';
 import { SubmissionPeriods } from './submission-periods.jsx';
+import { ClosedSubmission } from './closed-submission.jsx';
+import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep } from './submission-period-model.js';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
@@ -2757,7 +2759,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
 const hasArchiveLink = value => /^https?:\/\//i.test(String(value || ''));
 
-const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, selectedPeriod, archiveRevision, documents }) => {
+const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, selectedPeriod, archiveRevision, documents, readOnly = false }) => {
   const label = documentModule === 'spt' ? 'SPT' : 'Cuti';
   // State untuk Tahap 3: Daftar Klaim SPT
   const [sptKlaimList, setSptKlaimList] = useState([]);
@@ -2772,7 +2774,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   const identityName = identity.nama;
   const period = selectedPeriod?.periodeEvent;
   const periodTitle = selectedPeriod?.title;
-  const enabled = activeTab === 'uang-makan' || activeTab === 'tukin';
+  const enabled = !readOnly && (activeTab === 'uang-makan' || activeTab === 'tukin');
   const contextKey = JSON.stringify([activeTab, identityNip, identityName, period, periodTitle]);
   const currentContext = useRef(contextKey);
   currentContext.current = contextKey;
@@ -2800,7 +2802,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   }, [enabled, activeStep, contextKey, documentModule, identityNip, identityName, period, archiveRevision, refreshVersion]);
 
   const handleKlaimSpt = async (item) => {
-    if (!selectedPeriod || !documents.ready || isClaimingSptId || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)) return;
+    if (readOnly || !selectedPeriod || !documents.ready || isClaimingSptId || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)) return;
     const id = crypto.randomUUID();
     const payload = createClaimPayload({ item, documentModule, activeTab, identity, selectedPeriod, id });
     setIsClaimingSptId(item.linkAkses);
@@ -2962,6 +2964,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const activeTab = getModuleKey(currentView);
   const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
+  const readOnlyPeriod = isPeriodSpt && submissionIsReadOnly(selectedPeriod);
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
@@ -3078,7 +3081,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const [extraUploadBusy, setExtraUploadBusy] = useState(false);
   const [processStatus, setProcessStatus] = useState('Memperbarui rekap...');
   const [processError, setProcessError] = useState('');
-  const claimIdentity = getClaimIdentity(parsedData, loggedInUser);
+  const claimIdentity = getClaimIdentity(readOnlyPeriod ? null : parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
   const submissionKey = JSON.stringify(submission);
@@ -3087,7 +3090,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   currentSubmission.current = submissionKey;
   useEffect(() => { setProcessError(''); }, [submissionKey]);
   const documents = useSubmissionDocuments({
-    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && activeStep >= 3,
+    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && !readOnlyPeriod && activeStep >= 3,
+    readOnly: readOnlyPeriod,
     revision: archiveRevision,
     onPreview: file => {
       setPreviewPdfName(file.fileName);
@@ -3096,7 +3100,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   });
   const uploadOptions = {
     isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf, submission,
-    submissionReady: documents.ready,
+    submissionReady: documents.ready && !readOnlyPeriod,
     onUploaded: result => {
       if (isPeriodSpt) documents.acceptResult(result);
       setArchiveRevision(revision => revision + 1);
@@ -3120,7 +3124,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   }, [documents.processed, submissionKey, archiveRevision]);
   // Reloading an unchanged document list is read-only. Actual edits invalidate via processed=false.
   const processEvidence = async () => {
-    if (!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence) return;
+    if (readOnlyPeriod || !documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence) return;
     setIsProcessingEvidence(true); setProcessError(''); setProcessStatus('Memperbarui rekap...');
     try {
       const result = await processSubmissionEvidence(APPS_SCRIPT_URL, submission, {
@@ -3136,7 +3140,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     } finally { setIsProcessingEvidence(false); }
   };
 
-  const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision, documents };
+  const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision, documents, readOnly: readOnlyPeriod };
   const sptClaims = useArchiveClaims({ ...claimOptions, documentModule: 'spt' });
   const cutiClaims = useArchiveClaims({ ...claimOptions, documentModule: 'cuti' });
 
@@ -3154,7 +3158,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedFile || !parsedData || !parsedData.isValid || isParsing || isCheckingExisting || existingCheckError) return;
+    if (readOnlyPeriod || !selectedFile || !parsedData || !parsedData.isValid || isParsing || isCheckingExisting || existingCheckError) return;
 
     setIsSubmitting(true);
     try {
@@ -3450,7 +3454,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
               <div className="flex items-center justify-center gap-3">
                 {[1, 2, 3, 4, 5].map((num) => {
                   const isActive = activeStep === num;
-                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (num >= 4 && !canOpenFinal) || (num === 5 && !finalRecap);
+                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (readOnlyPeriod ? !readOnlySubmissionStep(num) : (num === 4 && !canOpenFinal));
                     return (
                       <button
                         key={num}
@@ -3463,7 +3467,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                             navigate(currentView, num);
                           }
                         }}
-                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : num >= 4 ? 'Klik Lanjut Proses di tab 3; tab 5 memerlukan konfirmasi preview' : 'Tunggu proses selesai') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : readOnlyPeriod ? 'Periode ditutup; unggah tidak tersedia' : num >= 4 ? 'Klik Lanjut Proses di tab 3 untuk membuka preview' : 'Tunggu proses selesai') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
                         className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
                           isActive
                             ? 'text-white ring-4 shadow-sm scale-105'
@@ -3487,9 +3491,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
             <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
                 <SubmissionPeriods key={activeTab} endpoint={APPS_SCRIPT_URL} modul={activeTab} user={loggedInUser} initialPeriod={selectedPeriod} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelect={period => {
-                  if (selectedPeriod?.id !== period.id) { setSelectedPeriod(period); resetUploadState(); }
-                  navigate(currentView, 2);
+                  setSelectedPeriod(period);
+                  if (selectedPeriod?.id !== period.id || submissionIsReadOnly(period) || !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) resetUploadState();
+                  navigate(currentView, submissionEntryStep(period, isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)));
                 }}/>
+              ) : readOnlyPeriod ? (
+                <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => navigate(currentView, step)} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="space-y-5">
                 {isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role) && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey}/>}
@@ -3796,7 +3803,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   onBack={() => navigate(currentView, 3)}
                   onSaved={result => { previewSession.current = { key: submissionKey, data: result.revision ? result : null, review: null }; setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
-                <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} onUploadAnother={() => { handleClearFile(); navigate(currentView, 2); }} />
+                documents.error ? <p role="alert" className="bg-red-50 text-red-700 p-5 rounded-xl">{documents.error}</p> : documents.loading || !documents.loaded ? <p role="status">Memuat rekap tersimpan...</p> : !finalRecap ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>Belum ada rekap tersimpan untuk periode ini.</p><button onClick={() => navigate(currentView, 2)} className="text-[#084C61] underline">Upload presensi di tab 2</button><button onClick={() => navigate(currentView, 3)} className="block text-[#084C61] underline">Lihat dokumen tab 3</button></div> : <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} onUploadAnother={() => { handleClearFile(); navigate(currentView, 2); }} />
               ) : (
                 <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>

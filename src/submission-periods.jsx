@@ -45,12 +45,12 @@ export function SubmissionPeriods({ endpoint, modul, user, adminKey, onAdminKeyC
     finally{setBusy('');}
   };
   const select = async period => {
-    if(busy||period.status!=='DIBUKA')return;
+    if(busy)return;
     setBusy(period.id);setError('');
     try {
       const rows=validate(await read());setPeriods(rows);
-      if(rows.find(p=>p.month===period.month)?.status!=='DIBUKA')throw new Error('Periode baru saja ditutup Admin. Silakan pilih periode yang masih dibuka.');
-      onSelect(period);
+      const current = rows.find(p=>p.month===period.month);
+      onSelect(submissionPeriodCard(modul, year, period.month, current.status));
     }catch(err){setError(err.message);}
     finally{setBusy('');}
   };
@@ -69,11 +69,12 @@ export function SubmissionPeriods({ endpoint, modul, user, adminKey, onAdminKeyC
       {notice&&<p role="status" className="text-xs text-teal-700">{notice}</p>}
       {!ready&&<p role="status" className="text-sm text-slate-500">Memuat periode {year}...</p>}
     </section>
-    {cards.map(period=>{const closed=period.status!=='DIBUKA';return <section key={period.id} className={`rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${closed?'bg-gray-50 border-gray-200':'bg-white border-gray-200 shadow-sm'}`}>
+    {cards.map(period=>{const closed=period.status!=='DIBUKA';return <section key={period.id} className={`relative rounded-3xl border p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${closed?'bg-gray-50 border-gray-200':'bg-white border-gray-200 shadow-sm'} ${!busy?'hover:border-[#084C61] hover:shadow-md transition-shadow':''}`}>
       <div className="space-y-2"><div className="flex items-center gap-3"><span className={`rounded-full border px-3 py-0.5 text-[10px] font-extrabold ${closed?'text-red-700 border-red-200 bg-red-50':'text-emerald-700 border-emerald-200 bg-emerald-50'}`}>{period.status}</span>
-        {admin&&<button type="button" role="switch" aria-checked={!closed} aria-label={`Akses ${MONTH_NAMES[period.month-1]} ${year}`} disabled={!!busy||(!user?.sessionToken&&!adminKey)} onClick={()=>toggle(period)} className="flex gap-2 items-center disabled:opacity-40"><span className={`w-9 h-5 rounded-full relative ${closed?'bg-gray-300':'bg-emerald-500'}`}><span className={`w-4 h-4 bg-white rounded-full absolute top-0.5 ${closed?'left-0.5':'left-[18px]'}`}/></span><span className="text-[10px] font-bold">{closed?'Akses Ditutup':'Akses Dibuka'}</span></button>}
+        {admin&&<button type="button" role="switch" aria-checked={!closed} aria-label={`Akses ${MONTH_NAMES[period.month-1]} ${year}`} disabled={!!busy||(!user?.sessionToken&&!adminKey)} onClick={()=>toggle(period)} className="relative z-10 flex gap-2 items-center disabled:opacity-40"><span className={`w-9 h-5 rounded-full relative ${closed?'bg-gray-300':'bg-emerald-500'}`}><span className={`w-4 h-4 bg-white rounded-full absolute top-0.5 ${closed?'left-0.5':'left-[18px]'}`}/></span><span className="text-[10px] font-bold">{closed?'Akses Ditutup':'Akses Dibuka'}</span></button>}
       </div><h3 className={`text-lg font-black ${closed?'text-gray-500':'text-gray-900'}`}>{period.title}</h3><p className="flex gap-2 items-center text-xs text-gray-500"><Calendar size={14}/>{period.periodeLabel} · {period.tipe}</p></div>
-      <button disabled={closed||!!busy} onClick={()=>select(period)} className="px-6 py-3 rounded-2xl font-bold text-xs text-white bg-[#143E50] flex gap-2 items-center justify-center disabled:opacity-40"><UploadCloud size={16}/>{busy===period.id?'Memeriksa...':closed?'Ditutup':'Pilih & Lanjut'}</button>
+      {/* The button overlay covers the card; the separate admin switch stays above it. */}
+      <button type="button" aria-label={`${closed||!admin?'Lihat Rekap':'Pilih & Lanjut'}: ${period.title}`} disabled={!!busy} onClick={()=>select(period)} className="px-6 py-3 rounded-2xl font-bold text-xs text-white bg-[#143E50] flex gap-2 items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed after:content-[''] after:absolute after:inset-0 after:rounded-3xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-[#084C61] focus-visible:after:ring-offset-2"><UploadCloud size={16}/>{busy===period.id?'Memeriksa...':closed||!admin?'Lihat Rekap':'Pilih & Lanjut'}</button>
     </section>;})}
   </div>;
 }
