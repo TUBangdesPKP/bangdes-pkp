@@ -15,6 +15,14 @@
 
 ### PDF Riwayat Presensi beberapa halaman
 
+#### Akhiran zona waktu pada presensi dinas
+
+- Pembaca PDF menerima `WIB`, `WITA`, dan `WIT` (termasuk label yang terpisah menjadi item teks). Angka jam tetap mengikuti dokumen, dinormalisasi ke `HH:mm`, **tanpa konversi zona waktu**. Tidak ada perubahan aturan perhitungan/potongan.
+- PDF contoh keempat sebelumnya ditolak pada 30 September karena `07:25 WITA` dianggap format jam tidak valid. Kini seluruh 30 tanggal berhasil dibaca pada PDF.js 3.11.174 dan versi lokal, termasuk 29 September `07:00 WITA`, dua status Dinas dengan jam pulang `-`, serta sambungan 11 September `07:35–21:13`.
+- Jam yang tercatat pada Sabtu tetap dipertahankan, tetapi status Libur tetap mengikuti aturan aplikasi yang sudah ada; perbaikan pembaca bukan perubahan aturan hari kerja.
+- Jika parser masih menolak dokumen, tab 2 menampilkan pesan error spesifik (misalnya tanggal/kolom bermasalah), bukan selalu menggantinya dengan “Gagal membaca struktur dokumen”.
+- Uji file keempat memakai `PRESENSI_PDF_FIXTURE_D`. Pengujian sintetis WIB/WITA/WIT dan jam tidak valid berjalan tanpa PDF pribadi. Pembaruan hanya frontend; data produksi tidak ditulis ulang otomatis.
+
 Perbaikan kompatibilitas **PDF lintas halaman v2**:
 
 - Versi PDF.js di aplikasi (`3.11.174`) dapat memecah `Total Data` menjadi beberapa item. Header informasi ini sekarang tidak dianggap sebagai baris `TOTAL` di akhir tabel. Footer yang terpecah menjadi kata-kata juga dikenali sebagai satu baris.

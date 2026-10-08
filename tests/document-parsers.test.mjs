@@ -140,7 +140,30 @@ test('real tab 2 pipeline uses structured PDF rows for meal and Tukin preview',a
   }
 });
 
+test('PDF accepts WIB/WITA/WIT without converting the local clock and preserves a missing departure',async()=>{
+  for(const zone of ['WIB','WITA','WIT','wita']) {
+    const pages=splitPdf();
+    pages[1]=pages[1].map(item=>item.str==='07:17 WIB'?{...item,str:`7:17 ${zone}`}:item.str==='16:31 WIB'?{...item,str:'-'}:item);
+    // The zone label may also be a separate PDF text item.
+    if(zone==='WIT') {
+      const index=pages[1].findIndex(item=>item.str==='7:17 WIT');
+      pages[1].splice(index,1,pdfItem('7:17',158,520,16),pdfItem('WIT',179,520,13));
+    }
+    const row=attendancePdfRows(pages)[1];assert.equal(row.datang,'07:17');assert.equal(row.pulang,'-');
+    for(const module of ['uang-makan','tukin']) {
+      const result=await reader({},'','',pages)('zone.pdf',module);
+      const day=result.rows.find(row=>row.tanggal==='8 Sep 2026');
+      assert.equal(day.datang,'07:17');assert.equal(day.pulang,'-');
+    }
+  }
+  for(const bad of ['25:17 WITA','07:70 WIT','07:17 UNKNOWN']) {
+    const pages=splitPdf();pages[1]=pages[1].map(item=>item.str==='07:17 WIB'?{...item,str:bad}:item);
+    assert.throws(()=>attendancePdfRows(pages),/8 September 2026, kolom Masuk/);
+  }
+});
+
 const suppliedPdfCases = [
+  { env:'PRESENSI_PDF_FIXTURE_D', split:'11 September 2026', dinas:true, masuk:20, expected:['07:25/-','07:00/-','07:15/16:17','-/-','-/-','07:46/19:31','07:44/19:15','07:30/17:40','07:47/18:44','07:13/17:09','-/-','-/-','07:41/18:14','07:33/19:53','07:35/18:29','07:37/19:07','07:22/17:21','-/-','-/-','07:35/21:13','07:21/20:12','07:50/18:12','07:21/17:16','07:25/16:25','-/-','08:25/16:15','07:32/22:07','07:30/18:58','07:31/18:30','07:31/16:06'] },
   { env:'PRESENSI_PDF_FIXTURE', split:'8 September 2026', expected:['07:28/19:08','06:59/16:33','07:13/16:45','-/-','-/-','07:14/17:43','07:19/18:49','07:31/19:34','06:56/17:30','07:19/16:47','-/-','-/-','07:30/17:03','07:35/17:00','07:09/17:04','07:08/17:02','07:01/16:49','-/-','-/-','07:05/18:37','07:35/17:07','07:35/17:36','07:17/16:31','07:06/16:41','-/-','-/-','07:07/17:29','07:12/17:00','07:24/19:08','07:12/16:36'] },
   { env:'PRESENSI_PDF_FIXTURE_B', split:'9 September 2026', wfa:true, expected:['08:05/16:49','08:15/18:46','07:43/16:26','-/-','-/-','08:08/17:17','08:05/19:10','07:51/17:32','07:59/20:08','07:18/16:32','-/-','-/-','07:24/18:14','07:58/17:53','08:16/17:15','08:07/17:00','07:59/17:34','-/-','-/-','08:07/17:11','08:07/16:55','07:59/17:18','07:52/16:53','08:04/17:30','-/-','-/-','08:17/17:22','08:08/17:27','08:13/16:55','08:05/16:45'] },
   { env:'PRESENSI_PDF_FIXTURE_C', split:'8 September 2026', expected:['07:52/16:30','08:17/16:51','08:00/16:42','-/-','-/-','08:03/20:04','07:52/16:58','07:57/16:47','07:54/16:31','07:54/16:43','-/-','-/-','08:01/17:07','08:02/16:43','08:00/16:32','08:00/17:35','07:57/17:03','-/-','-/-','08:05/17:09','07:59/17:27','08:16/17:07','07:55/16:31','08:07/16:39','-/-','-/-','08:04/17:39','07:53/16:37','07:54/16:52','07:57/16:54'] },
@@ -164,11 +187,17 @@ for (const runtime of ['installed','browser3']) for(const sample of suppliedPdfC
     assert.deepEqual(attendancePdfRows(pages).map(row=>`${row.datang}/${row.pulang}`),expected);
     for(const module of ['uang-makan','tukin']) {
       const result=await reader({},'','',pages)('attendance.pdf',module);
-      assert.equal(result.rows.length,30);assert.equal(result.totalHariMasuk,22);
+      assert.equal(result.rows.length,30);assert.equal(result.totalHariMasuk,sample.masuk ?? 22);
       assert.deepEqual(Array.from(result.rows,row=>row.tanggal),Array.from({length:30},(_,i)=>`${30-i} Sep 2026`));
       assert.deepEqual(Array.from(result.rows,row=>`${row.datang}/${row.pulang}`),expected);
       assert.equal(result.rows.filter(row=>row.keterangan==='Libur').length,8);
       assert.deepEqual(Array.from(result.pdfReadInfo.continuedDates),[sample.split]);
+      if(sample.dinas) {
+        assert.equal(result.rows.filter(row=>row.keterangan==='Dinas').length,2);
+        assert.equal(result.rows[0].keterangan,'Dinas');assert.equal(result.rows[1].keterangan,'Dinas');
+        assert.match(result.rows[0].lokasiDatangRaw,/95123, Indonesia$/);
+        assert.equal(result.rows.find(row=>row.tanggal==='5 Sep 2026').keterangan,'Libur');
+      }
       if(sample.wfa) {
         const wfa=result.rows.find(row=>row.tanggal==='18 Sep 2026');
         assert.equal(wfa.keterangan,'WFA');assert.match(wfa.lokasiDatangRaw,/sekitar Jembatan Kembar, Narogong, Bekasi, Jawa Barat, Jawa, 17175, Indonesia/);

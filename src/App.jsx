@@ -3111,7 +3111,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
           await refreshExistingStatus(result, requestId);
         }
       } catch (err) {
-        if (referenceRequest.current === requestId) setParsedData({ isValid: false, isDateMismatch: false, errorMessage: "Gagal membaca struktur dokumen." });
+        if (referenceRequest.current === requestId) setParsedData({ isValid: false, isDateMismatch: false,
+          errorMessage: err?.message || 'Gagal membaca struktur dokumen. Pilih ulang file PDF/Excel yang lengkap lalu coba kembali.' });
       } finally {
         if (referenceRequest.current === requestId) setIsParsing(false);
       }

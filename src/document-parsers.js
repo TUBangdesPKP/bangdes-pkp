@@ -28,7 +28,9 @@ export function attendancePdfRows(pages) {
     const clock = (items, label) => {
       const text = items.join(' ').trim();
       if (/^[-–—]+$/.test(text)) return '-';
-      const match = /^(\d{1,2})[:.](\d{2})(?::\d{2})?(?:\s*WIB)?$/i.exec(text);
+      // Preserve the document's local clock. Travel punches may use WITA/WIT;
+      // accepting their suffix is not authorization to convert payroll time zones.
+      const match = /^(\d{1,2})[:.](\d{2})(?::\d{2})?(?:\s*(?:WIB|WITA|WIT))?$/i.exec(text);
       if (!match || +match[1]>23 || +match[2]>59) return fail(`${current.tanggal}, kolom ${label}`);
       return `${match[1].padStart(2,'0')}:${match[2]}`;
     };
