@@ -1189,6 +1189,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     periodeFolder,
     expectedDays,
     totalRows: rows.length,
+    pdfReadInfo: pdfRows ? { mode:'PDF lintas halaman v2', continuedDates:pdfRows.filter(row=>row.sourcePages.length>1).map(row=>row.tanggal) } : null,
     rows,
     totalHariMasuk,
     isValid: rows.length > 0 && isDateValid,
@@ -3626,6 +3627,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                             <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
                           </div>
                         )}
+
+                        {!isParsing && parsedData?.isValid && parsedData.pdfReadInfo && <p role="status" className="text-xs text-teal-800 rounded-xl border border-teal-100 bg-teal-50 p-3">
+                          {parsedData.pdfReadInfo.mode}. {parsedData.pdfReadInfo.continuedDates.length > 0
+                            ? `Baris disambungkan dari halaman berikutnya: ${parsedData.pdfReadInfo.continuedDates.join(', ')}.`
+                            : 'Kolom Masuk dan Keluar dibaca terpisah.'}
+                        </p>}
 
                         {!isParsing && isAlreadyUploaded && !submitResult && selectedFile && (
                           <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">

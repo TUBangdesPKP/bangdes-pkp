@@ -35,22 +35,24 @@ export function attendancePdfRows(pages) {
     if (seen.has(current.tanggal)) fail(`tanggal ganda ${current.tanggal}`);
     seen.add(current.tanggal);
     result.push({tanggal:current.tanggal, datang:clock(current.datang,'Masuk'), pulang:clock(current.pulang,'Keluar'),
-      status:current.status.join(' '), lokasiDatangRaw:current.location.join(' ')});
+      status:current.status.join(' '), lokasiDatangRaw:current.location.join(' '), sourcePages:[...current.pages]});
   };
   normalized.forEach((items, pageIndex) => {
     const table = layout(items);
     if (!table) return fail(`header halaman ${pageIndex+1}`);
-    const end = items.filter(item => /^TOTAL$|^Keterangan:|^Halaman\s+\d+\s+dari\s+\d+/i.test(item.str));
-    const cutoff = end.length ? Math.max(...end.map(item=>item.y)) : -Infinity;
-    const body = items.filter(item=>item.y < table.bottom-2 && item.y > cutoff+2).sort((a,b)=>b.y-a.y || a.x-b.x);
+    // PDF.js 3 splits "Total Data" and footer words into separate text items.
+    // Examine complete lines BELOW the table header, never isolated header words.
+    const body = items.filter(item=>item.y < table.bottom-2).sort((a,b)=>b.y-a.y || a.x-b.x);
     const lines = [];
     body.forEach(item => {
       const previous = lines.at(-1);
       if (previous && Math.abs(previous.y-item.y)<2) previous.items.push(item);
       else lines.push({y:item.y,items:[item]});
     });
-    lines.forEach(line => {
-      line.items.sort((a,b)=>a.x-b.x);
+    lines.forEach(line=>line.items.sort((a,b)=>a.x-b.x));
+    const endIndex = lines.findIndex(line => line.items.some(item => /^TOTAL$/i.test(item.str) && item.x > table.columns[1].right)
+      || /^(?:Keterangan:|Halaman\s+\d+\s+dari\s+\d+\b)/i.test(line.items.map(item=>item.str).join(' ')));
+    (endIndex < 0 ? lines : lines.slice(0,endIndex)).forEach(line => {
       const dateText = line.items.filter(item=>item.x<table.columns[0].left).map(item=>item.str).join(' ');
       const match = datePattern.exec(dateText);
       if (match) {
@@ -58,16 +60,19 @@ export function attendancePdfRows(pages) {
         const month = MONTHS.findIndex(name=>name.toLowerCase()===match[2].toLowerCase());
         const date = new Date(Date.UTC(+match[3],month,+match[1]));
         if (date.getUTCDate()!==+match[1]) fail(`tanggal ${match[0]}`);
-        current = {tanggal:`${+match[1]} ${MONTHS[month]} ${match[3]}`,datang:[],pulang:[],status:[],location:[]};
+        current = {tanggal:`${+match[1]} ${MONTHS[month]} ${match[3]}`,datang:[],pulang:[],status:[],location:[],pages:new Set()};
       }
       const punches = table.columns.map(column => line.items.filter(item => {
         const x = item.x + item.width/2; return x >= column.left && x < column.right;
       }).map(item=>item.str));
       if (!current && punches.some(values=>values.length)) fail(`jam tanpa tanggal pada halaman ${pageIndex+1}`);
       if (!current) return;
+      current.pages.add(pageIndex+1);
       current.datang.push(...punches[0]); current.pulang.push(...punches[1]);
       current.status.push(...line.items.filter(item=>item.x>=table.status).map(item=>item.str));
-      current.location.push(...line.items.filter(item=>item.x>=table.location.left && item.x<table.location.right).map(item=>item.str));
+      current.location.push(...line.items.filter(item=>{
+        const x=item.x+item.width/2; return x>=table.location.left && x<table.location.right;
+      }).map(item=>item.str));
     });
   });
   finish();

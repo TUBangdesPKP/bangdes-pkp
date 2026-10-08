@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from '../src/document-parsers.js';
 import { recognizeCutiImage, cutiOcrRegions } from '../src/cuti-ocr.js';
 
@@ -89,6 +90,34 @@ test('digital PDF carries a split row across page headers and isolates arrival/d
   const equal=attendancePdfRows(changed)[1];assert.equal(equal.datang,'07:17');assert.equal(equal.pulang,'07:17');
 });
 
+test('PDF.js 3 fragmented Total Data header and footer cannot terminate the attendance table', async()=>{
+  const pages=splitPdf();
+  pages[0].splice(1,1,pdfItem('Total',700,590),pdfItem('Data:',730,590),pdfItem('4',760,590),pdfItem('hari',775,590));
+  for(const [i,page] of pages.entries()) {
+    page.splice(page.findIndex(item=>item.str.startsWith('Halaman')),1,
+      pdfItem('Halaman',430,25),pdfItem(String(i+1),470,25),pdfItem('dari',480,25),pdfItem('2',500,25));
+    const index=page.findIndex(item=>item.str==='Selasa, 8 September 2026');
+    if(index>=0) page.splice(index,1,pdfItem('Selasa,',50,70),pdfItem('8',75,70,4),pdfItem('September',82,70,30),pdfItem('2026',117,70,16));
+  }
+  const rows=attendancePdfRows(pages);
+  assert.equal(rows.length,4);assert.deepEqual(rows[1].sourcePages,[1,2]);
+  assert.equal(rows[1].datang,'07:17');assert.equal(rows[1].pulang,'16:31');
+  const preview=await reader({},'','',pages)('split.pdf');
+  assert.equal(preview.pdfReadInfo.mode,'PDF lintas halaman v2');
+  assert.deepEqual(Array.from(preview.pdfReadInfo.continuedDates),['8 September 2026']);
+});
+
+test('continuations work over three pages and retain centered multiline WFA locations',()=>{
+  const pages=splitPdf();
+  pages[1]=[...pdfHeaders(),...pdfPunches('07:17 WIB','16:31 WIB',520),pdfDate('Senin, 7 September 2026',70),pdfItem('Halaman 2 dari 3',430,25)];
+  pages.push([...pdfHeaders(),...pdfPunches('07:24 WIB','18:14 WIB',520,'WFA'),pdfItem('sekitar Kantor',215,510,65),pdfItem('Jawa, 17175, Indonesia',202,500,85),pdfDate('Minggu, 6 September 2026',480),...pdfPunches('-','-',476,'-'),pdfItem('TOTAL',400,450)]);
+  const rows=attendancePdfRows(pages);
+  assert.deepEqual(rows[1].sourcePages,[1,2]);assert.deepEqual(rows[2].sourcePages,[2,3]);
+  assert.equal(rows[2].datang,'07:24');assert.equal(rows[2].pulang,'18:14');assert.equal(rows[2].status,'WFA');
+  assert.equal(rows[2].lokasiDatangRaw,'sekitar Kantor Jawa, 17175, Indonesia');
+  assert.equal(rows[3].datang,'-');assert.equal(rows[3].pulang,'-');
+});
+
 test('recognized PDF never silently fills missing, conflicting or truncated rows with dashes',()=>{
   assert.throws(()=>attendancePdfRows(splitPdf().slice(0,1)),/8 September 2026, kolom Masuk/);
   assert.throws(()=>attendancePdfRows(splitPdf().slice(1)),/jam tanpa tanggal/);
@@ -111,13 +140,27 @@ test('real tab 2 pipeline uses structured PDF rows for meal and Tukin preview',a
   }
 });
 
-test('optional supplied multipage PDF: all 30 September dates match source and September 8 keeps both punches', {skip:!process.env.PRESENSI_PDF_FIXTURE},async()=>{
-  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const loading=getDocument({data:new Uint8Array(fs.readFileSync(process.env.PRESENSI_PDF_FIXTURE))});
+const suppliedPdfCases = [
+  { env:'PRESENSI_PDF_FIXTURE', split:'8 September 2026', expected:['07:28/19:08','06:59/16:33','07:13/16:45','-/-','-/-','07:14/17:43','07:19/18:49','07:31/19:34','06:56/17:30','07:19/16:47','-/-','-/-','07:30/17:03','07:35/17:00','07:09/17:04','07:08/17:02','07:01/16:49','-/-','-/-','07:05/18:37','07:35/17:07','07:35/17:36','07:17/16:31','07:06/16:41','-/-','-/-','07:07/17:29','07:12/17:00','07:24/19:08','07:12/16:36'] },
+  { env:'PRESENSI_PDF_FIXTURE_B', split:'9 September 2026', wfa:true, expected:['08:05/16:49','08:15/18:46','07:43/16:26','-/-','-/-','08:08/17:17','08:05/19:10','07:51/17:32','07:59/20:08','07:18/16:32','-/-','-/-','07:24/18:14','07:58/17:53','08:16/17:15','08:07/17:00','07:59/17:34','-/-','-/-','08:07/17:11','08:07/16:55','07:59/17:18','07:52/16:53','08:04/17:30','-/-','-/-','08:17/17:22','08:08/17:27','08:13/16:55','08:05/16:45'] },
+  { env:'PRESENSI_PDF_FIXTURE_C', split:'8 September 2026', expected:['07:52/16:30','08:17/16:51','08:00/16:42','-/-','-/-','08:03/20:04','07:52/16:58','07:57/16:47','07:54/16:31','07:54/16:43','-/-','-/-','08:01/17:07','08:02/16:43','08:00/16:32','08:00/17:35','07:57/17:03','-/-','-/-','08:05/17:09','07:59/17:27','08:16/17:07','07:55/16:31','08:07/16:39','-/-','-/-','08:04/17:39','07:53/16:37','07:54/16:52','07:57/16:54'] },
+];
+for (const runtime of ['installed','browser3']) for(const sample of suppliedPdfCases) test(`optional supplied multipage PDF ${sample.env} (${runtime}): all dates and punches match source`, {skip:!process.env[sample.env] || (runtime==='browser3'&&!process.env.PRESENSI_PDFJS3_DIR)},async()=>{
+  const lib=runtime==='browser3'
+    ? createRequire(import.meta.url)(process.env.PRESENSI_PDFJS3_DIR+'/pdf.cjs')
+    : await import('pdfjs-dist/legacy/build/pdf.mjs');
+  if(runtime==='browser3') {
+    assert.equal(lib.version,'3.11.174');
+    lib.GlobalWorkerOptions.workerSrc=process.env.PRESENSI_PDFJS3_DIR+'/pdf.worker.cjs';
+    // Node's fake worker is global: isolate the v3 test from the previously loaded v6 worker.
+    globalThis.pdfjsWorker=createRequire(import.meta.url)(lib.GlobalWorkerOptions.workerSrc);
+  }
+  const {getDocument}=lib;
+  const loading=getDocument({data:new Uint8Array(fs.readFileSync(process.env[sample.env]))});
   const pdf=await loading.promise;
   try {
     const pages=[];for(let n=1;n<=pdf.numPages;n++)pages.push((await (await pdf.getPage(n)).getTextContent()).items);
-    const expected=['07:28/19:08','06:59/16:33','07:13/16:45','-/-','-/-','07:14/17:43','07:19/18:49','07:31/19:34','06:56/17:30','07:19/16:47','-/-','-/-','07:30/17:03','07:35/17:00','07:09/17:04','07:08/17:02','07:01/16:49','-/-','-/-','07:05/18:37','07:35/17:07','07:35/17:36','07:17/16:31','07:06/16:41','-/-','-/-','07:07/17:29','07:12/17:00','07:24/19:08','07:12/16:36'];
+    const {expected}=sample;
     assert.deepEqual(attendancePdfRows(pages).map(row=>`${row.datang}/${row.pulang}`),expected);
     for(const module of ['uang-makan','tukin']) {
       const result=await reader({},'','',pages)('attendance.pdf',module);
@@ -125,6 +168,11 @@ test('optional supplied multipage PDF: all 30 September dates match source and S
       assert.deepEqual(Array.from(result.rows,row=>row.tanggal),Array.from({length:30},(_,i)=>`${30-i} Sep 2026`));
       assert.deepEqual(Array.from(result.rows,row=>`${row.datang}/${row.pulang}`),expected);
       assert.equal(result.rows.filter(row=>row.keterangan==='Libur').length,8);
+      assert.deepEqual(Array.from(result.pdfReadInfo.continuedDates),[sample.split]);
+      if(sample.wfa) {
+        const wfa=result.rows.find(row=>row.tanggal==='18 Sep 2026');
+        assert.equal(wfa.keterangan,'WFA');assert.match(wfa.lokasiDatangRaw,/sekitar Jembatan Kembar, Narogong, Bekasi, Jawa Barat, Jawa, 17175, Indonesia/);
+      }
     }
   } finally {await loading.destroy();}
 });

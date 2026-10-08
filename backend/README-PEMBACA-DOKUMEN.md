@@ -15,6 +15,14 @@
 
 ### PDF Riwayat Presensi beberapa halaman
 
+Perbaikan kompatibilitas **PDF lintas halaman v2**:
+
+- Versi PDF.js di aplikasi (`3.11.174`) dapat memecah `Total Data` menjadi beberapa item. Header informasi ini sekarang tidak dianggap sebagai baris `TOTAL` di akhir tabel. Footer yang terpecah menjadi kata-kata juga dikenali sebagai satu baris.
+- Teks lokasi WFA yang panjang dibaca berdasarkan titik tengah teks di kolom lokasi, sehingga baris panjang yang sedikit melewati batas perkiraan tidak terbuang.
+- Preview menampilkan penanda `PDF lintas halaman v2` dan tanggal yang disambungkan dari halaman berikutnya. Bila penanda belum muncul setelah memilih ulang PDF digital ini, muat ulang aplikasi setelah deployment frontend selesai.
+- Tiga PDF contoh diuji seluruh 30 tanggalnya pada PDF.js versi aplikasi dan versi lokal: contoh pertama menyambung 8 September (07:17–16:31), contoh kedua 9 September (07:59–17:18), dan contoh ketiga 8 September (07:55–16:31). Status WFA serta lokasi multiline pada contoh kedua juga diverifikasi. Setiap dokumen menghasilkan 22 hari masuk dan 8 libur pada preview.
+- Uji opsional: `PRESENSI_PDF_FIXTURE`, `PRESENSI_PDF_FIXTURE_B`, `PRESENSI_PDF_FIXTURE_C` menunjuk ketiga PDF lokal. `PRESENSI_PDFJS3_DIR` menunjuk folder runtime uji PDF.js 3.11.174 yang berisi `pdf.cjs` dan `pdf.worker.cjs`. Tidak ada PDF pribadi yang dimasukkan ke repository. Tes sintetis header terpecah, baris lintas tiga halaman, dan lokasi multiline tetap berjalan tanpa berkas lokal.
+
 - Tab 2 Uang Makan dan Tukin sekarang mengenali tabel digital dengan header Tanggal, Masuk/Waktu, Keluar/Waktu, dan Status dari posisi teks pada PDF.
 - Tanggal dan jam tidak harus berada di satu baris teks atau halaman yang sama. Baris belum lengkap diteruskan ke halaman berikutnya dengan mengabaikan header berulang, footer, dan TOTAL.
 - Kolom Masuk dan Keluar dibaca secara terpisah. Jam pada lokasi atau kolom ringkasan tidak digunakan; tanda `-` tetap `-`, termasuk bila hanya jam pulang tersedia.
