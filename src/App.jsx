@@ -14,6 +14,7 @@ import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { KepegawaianPage } from './kepegawaian.jsx';
+import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
@@ -1935,6 +1936,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 // Shared archive upload UI. Each hook instance owns its files, OCR results and manual entries.
 const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf, onUploaded, submission, submissionReady }) => {
   const [arsipFiles, setArsipFiles] = useState([]);
+  const [isDraggingArsip, setIsDraggingArsip] = useState(false);
   const [isReadingArsip, setIsReadingArsip] = useState(false);
   const [arsipReadingProgress, setArsipReadingProgress] = useState({ current: 0, total: 0 });
 
@@ -1957,6 +1959,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
   const reset = () => {
     setArsipFiles([]);
+    setIsDraggingArsip(false);
     setIsReadingArsip(false);
     setArsipSubmitResult(null);
     setIsSubmittingArsip(false);
@@ -1974,16 +1977,15 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
     setArsipSubmitResult(null);
     setEditingPegawaiData(null);
   };
-  const handleFileChange = (e) => {
-    if (!e.target.files?.length) return;
+  const handleArchiveFiles = (files) => {
+    if (!files?.length) return;
     if (isReadingArsip || isSubmittingArsip) return;
-    const selected = Array.from(e.target.files);
+    const selected = Array.from(files);
     if (selected.some(file => !/\.(pdf|jpe?g|png)$/i.test(file.name) || file.size > 10 * 1024 * 1024)) {
       setArsipSubmitResult({ type: 'error', message: 'Pilih PDF, JPG, atau PNG maksimal 10 MB per file.' });
-      e.target.value = '';
       return;
     }
-    const newFiles = Array.from(e.target.files).map(f => ({
+    const newFiles = selected.map(f => ({
       id: crypto.randomUUID(),
       file: f,
       status: 'pending',
@@ -1991,7 +1993,6 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
     }));
     setArsipFiles(prev => [...prev, ...newFiles].slice(0, 10));
     setArsipSubmitResult(null);
-    e.target.value = '';
     return;
 
   };
@@ -2306,16 +2307,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                         <span className="font-extrabold">💡 Tips:</span> Upload JPG/PNG lebih cepat diproses. Pastikan dokumen memuat kata "{documentModule === 'spt' ? 'Surat Tugas' : 'Cuti'}" dengan nama, NIP, tanggal, dan {documentModule === 'spt' ? 'tujuan' : 'keterangan'} yang jelas.
                       </div>
                       
-                      <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-colors cursor-pointer text-center group mb-6">
-                        <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-gray-400 group-hover:text-[#0E5B73] shadow-sm transition-colors">
-                          <UploadCloud size={24} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-gray-700 group-hover:text-[#0E5B73]">Klik atau drag & drop file</p>
-                          <p className="text-[10px] font-medium text-gray-400 mt-1">PDF (1 halaman), JPG, PNG (max 10MB)</p>
-                        </div>
-                        <input id={`arsip-upload-${documentModule}`} aria-label={`Pilih dokumen ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple onChange={handleFileChange} className="hidden" />
-                      </label>
+                      <ArchiveFileDropzone documentModule={documentModule} disabled={isReadingArsip || isSubmittingArsip}
+                        isDragging={isDraggingArsip} onDragActiveChange={setIsDraggingArsip} onFiles={handleArchiveFiles} />
 
                       <div className="space-y-4">
                         <div>
