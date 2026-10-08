@@ -1530,6 +1530,18 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
   const [archiveError, setArchiveError] = useState('');
+  const [archiveAdminKey, setArchiveAdminKey] = useState('');
+  const [canDeleteAll, setCanDeleteAll] = useState(false);
+  const [deleteTargets, setDeleteTargets] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [archiveNotice, setArchiveNotice] = useState('');
+  const needsArchiveKey = isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken;
+  const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : { adminKey: archiveAdminKey };
+  const normalizeArchiveItems = items => items.map(item => ({ ...item,
+    tanggalBerangkat: standardizeDate(item.tanggalBerangkat), tanggalPulang: standardizeDate(item.tanggalPulang),
+    tahun: String(item.tahun || ''), jumlahHari: Number(item.jumlahHari) || 0,
+  }));
 
   const loadData = async (manual = false) => {
     if (manual) setIsRefreshing(true);
@@ -1537,9 +1549,15 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     
     try {
       setArchiveError('');
-      const options = { loggedInUser, throwOnError: true };
-      const data = isSpt ? await fetchLiveSptData(options) : await fetchLiveCutiData(options);
-      setSptDataList(data);
+      setCanDeleteAll(false);
+      if (needsArchiveKey && !archiveAdminKey) {
+        const options = { loggedInUser, throwOnError: true };
+        setSptDataList(isSpt ? await fetchLiveSptData(options) : await fetchLiveCutiData(options));
+      } else {
+        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'list_arsip', modul, ...archiveAuth() });
+        setSptDataList(normalizeArchiveItems(result.items));
+        setCanDeleteAll(result.canDeleteAll === true);
+      }
     } catch (e) {
       console.error(`Gagal memuat data ${labelSatuan}:`, e);
       setSptDataList([]); setArchiveError(e.message);
@@ -1552,6 +1570,25 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   useEffect(() => {
     loadData();
   }, [modul, loggedInUser?.NIP]);
+
+  const askDelete = (items, event) => {
+    event.stopPropagation();
+    setDeleteError(''); setArchiveNotice(''); setDeleteTargets(items);
+  };
+  const confirmArchiveDelete = async () => {
+    if (isDeleting || !deleteTargets?.length) return;
+    setIsDeleting(true); setDeleteError('');
+    try {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, {
+        action: 'hapus_arsip', modul, ...archiveAuth(), archiveIds: deleteTargets.map(item => item.archiveId),
+      });
+      setSptDataList(normalizeArchiveItems(result.items)); setCanDeleteAll(result.canDeleteAll === true);
+      setDeleteTargets(null);
+      setArchiveNotice(`${result.deleted} data arsip dihapus. File Drive dan klaim submisi sebelumnya tetap disimpan.`);
+    } catch (error) {
+      setDeleteError(`${error.message} Jika hasil belum pasti, tutup konfirmasi dan muat ulang daftar sebelum mencoba kembali.`);
+    } finally { setIsDeleting(false); }
+  };
 
   const availableYears = useMemo(() => {
     const years = new Set(sptDataList.map(item => item.tahun).filter(y => y && y !== '-'));
@@ -1595,7 +1632,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
             pegawai: []
           };
         }
-        eventGroups[eventKey].pegawai.push({ nama: item.nama, nip: item.nip });
+        eventGroups[eventKey].pegawai.push({ nama: item.nama, nip: item.nip, archiveId: item.archiveId });
       });
 
       const sortedEvents = Object.values(eventGroups).sort((a, b) => {
@@ -1656,6 +1693,26 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   return (
     <div className="pt-4">
+      {needsArchiveKey && <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-sm">
+        <label htmlFor="archive-admin-key" className="block font-bold mb-2">Kunci admin untuk menghapus arsip</label>
+        <input id="archive-admin-key" type="password" autoComplete="off" value={archiveAdminKey} onChange={e => { setArchiveAdminKey(e.target.value); setSptDataList(items => items.map(({ archiveId, ...item }) => item)); setCanDeleteAll(false); }} className="border rounded-lg px-3 py-2 mr-2" />
+        <button type="button" onClick={() => loadData(true)} disabled={isRefreshing || !archiveAdminKey} className="rounded-lg bg-[#0b5063] text-white px-3 py-2 disabled:opacity-50">Verifikasi & muat arsip</button>
+        <p className="text-xs text-gray-500 mt-2">Gunakan kunci publikasi rekap, bukan PIN. Akun Admin berbasis NIP tidak memerlukan kunci ini.</p>
+      </div>}
+      {archiveNotice && <p role="status" className="p-3 mb-4 bg-green-50 text-green-800 rounded-xl text-sm">{archiveNotice}</p>}
+      {deleteTargets && <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={e => e.stopPropagation()}>
+        <section role="dialog" aria-modal="true" aria-labelledby="delete-archive-title" className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl">
+          <h2 id="delete-archive-title" className="font-bold text-lg">Hapus {deleteTargets.length} data arsip {labelSatuan}?</h2>
+          <ul className="my-3 max-h-48 overflow-y-auto text-sm space-y-2">{deleteTargets.map(item => <li key={item.archiveId}>{item.nama} — {item.nip}</li>)}</ul>
+          <p className="text-sm text-gray-600">Data yang dipilih akan dihapus dari daftar dan spreadsheet arsip. Data pegawai lain, file Drive asli, dan klaim submisi yang sudah ada tidak ikut dihapus. Untuk memperbaiki klaim yang salah, hapus juga klaim tersebut pada submisi terkait.</p>
+          <p className="text-xs text-gray-500 mt-2">Cadangan penghapusan disimpan di backend untuk pemulihan oleh Admin.</p>
+          {deleteError && <p role="alert" className="text-sm text-red-700 mt-3">{deleteError}</p>}
+          <div className="flex justify-end gap-3 mt-5">
+            <button type="button" autoFocus disabled={isDeleting} onClick={() => setDeleteTargets(null)} className="border rounded-lg px-4 py-2">Batal</button>
+            <button type="button" disabled={isDeleting} onClick={confirmArchiveDelete} className="bg-red-700 text-white rounded-lg px-4 py-2 disabled:opacity-50">{isDeleting ? 'Menghapus...' : 'Ya, hapus data'}</button>
+          </div>
+        </section>
+      </div>}
       {archiveError && <p role="alert" className="p-3 mb-4 bg-red-50 text-red-700 rounded-xl text-sm">{archiveError}</p>}
       {/* Kolom Pencarian dan Filter Terpadu (Unified Bar) */}
       <div className="flex flex-col md:flex-row items-center gap-3 mb-8 relative z-10 bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
@@ -1830,6 +1887,8 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
                                             <div className="text-[13px] font-extrabold text-gray-800 leading-tight">{peg.nama}</div>
                                             <div className="text-[10px] font-medium text-gray-500 font-mono mt-0.5">{peg.nip}</div>
                                           </div>
+                                          <div className="flex items-center gap-2">
+                                          {peg.archiveId && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete([peg], e)} className="px-3 py-1.5 border border-red-200 text-red-700 hover:bg-red-50 rounded-lg text-[10px] font-bold">Hapus</button>}
                                           <a 
                                             href={ev.linkAkses} 
                                             target="_blank" 
@@ -1839,9 +1898,11 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
                                           >
                                             <FileText size={12} className="text-[#1C3A53]" /> Lihat
                                           </a>
+                                          </div>
                                         </div>
                                       ))}
                                     </div>
+                                    {canDeleteAll && ev.pegawai.length > 1 && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete(ev.pegawai, e)} className="mt-4 text-xs font-bold text-red-700 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50">Hapus semua data surat yang ditampilkan ({ev.pegawai.length} pegawai)</button>}
                                   </div>
                                 )}
                               </div>

@@ -995,6 +995,8 @@ function doPost(e) {
     if (payload.action === 'list_submisi_terhitung') return json_(submissionCalculatedList_(payload));
     if (payload.action === 'buat_rekap_submisi') return json_(createSubmissionRecaps_(payload));
     if (payload.action === 'arsip_saya') return json_(ownArchive_(payload));
+    if (payload.action === 'list_arsip') return json_(managedArchiveList_(payload));
+    if (payload.action === 'hapus_arsip') return json_(deleteManagedArchive_(payload));
     if (payload.action === 'publikasikan_wrap_bulanan') return json_(publishWrapSnapshot_(payload));
     if (payload.action === 'proses_bukti') {
       var trace = text_(payload.requestId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -1350,7 +1352,7 @@ function writeDateColumns_(sheet, row, firstColumn, dates) {
   for (var i = 0; i < width; i++) values.push(i < dates.length ? Math.round((parseDate_(dates[i]).getTime() - Date.UTC(1899, 11, 30)) / 86400000) : '');
   sheet.getRange(row, firstColumn, 1, width).setValues([values]).setNumberFormat('yyyy-mm-dd');
 }
-function sourceDates_(sourceId, type, record, writeArchive) {
+function sourceDates_(sourceId, type, record, writeArchive, allowDeleted) {
   var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
   var sheet = book.getSheetByName(type === 'spt' ? 'REKAP_SPT' : 'REKAP_CUTI');
   if (!sheet && type === 'spt') sheet = book.getSheetByName('REKAP _SPT');
@@ -1367,6 +1369,23 @@ function sourceDates_(sourceId, type, record, writeArchive) {
     allDates.forEach(function(date) { if (date >= range[0] && date <= range[1]) dates[date] = true; });
   });
   var result = Object.keys(dates).sort();
+  // Only existing claims may use archived history; a deleted letter cannot be claimed anew.
+  if (!result.length && allowDeleted) {
+    var history = book.getSheetByName('ARSIP_TERHAPUS');
+    var backups = history ? history.getDataRange().getValues().slice(1).reverse() : [];
+    for (var b = 0; b < backups.length; b++) {
+      if (backups[b][3] !== type) continue;
+      var previous = JSON.parse(backups[b][6]).source;
+      if (nip_(previous[1]) !== record.nip || driveId_(previous[9]) !== sourceId) continue;
+      var previousDates = archiveDateList_(previous[4], previous[5], type);
+      if (type === 'cuti') {
+        var previousWarning = cutiCountWarning_(previousDates, previous[6]);
+        if (previousWarning) throw new Error(previousWarning);
+      }
+      result = previousDates.filter(function(date) { return date >= range[0] && date <= range[1]; });
+      if (result.length) break;
+    }
+  }
   if (!result.length) throw new Error('Tanggal arsip tidak ditemukan untuk pegawai/periode ini. Klaim ulang dokumen yang benar.');
   return result;
 }
@@ -1423,7 +1442,7 @@ function finalState_(payload) {
     if (['spt','cuti','lupa_absen','tugas_belajar','lainnya'].indexOf(entry.jenisDokumen) < 0) throw new Error('Jenis bukti tidak dikenal.');
     if (!liveAttachment_(entry)) throw new Error('Salinan bukti tidak lagi tersedia di folder pengumpulan. Hapus klaim yang tidak tersedia atau klaim ulang sebelum melanjutkan.');
     // Recompute from original archive dates: old generated columns may be shifted by a day.
-    var dates = ['spt','cuti'].indexOf(entry.jenisDokumen) >= 0 ? sourceDates_(entry.sourceFileId, entry.jenisDokumen, record, false) : [];
+    var dates = ['spt','cuti'].indexOf(entry.jenisDokumen) >= 0 ? sourceDates_(entry.sourceFileId, entry.jenisDokumen, record, false, true) : [];
     if (entry.jenisDokumen === 'cuti') dates = dates.filter(function(date) {
       return !saved.rows.some(function(row) { return row.tanggal === date && row.keteranganAwal.toLowerCase() === 'libur'; });
     });
@@ -1708,6 +1727,66 @@ function ownArchive_(payload) {
   var rows=sheet?sheet.getDataRange().getDisplayValues():[], headers=rows[0]||[], col=headers.map(function(h){return text_(h).toLowerCase();}).indexOf('nip');
   if(rows.length&&col<0)throw new Error('Kolom NIP arsip tidak ditemukan.');
   return {status:'success',items:rows.slice(1).filter(function(row){return nip_(row[col])===account.nip;}).map(function(row){var item={};headers.forEach(function(h,i){item[h]=row[i];});return item;})};
+}
+function archiveActor_(payload) {
+  if (payload.modul !== 'spt' && payload.modul !== 'cuti') throw new Error('Modul arsip tidak valid.');
+  if (!payload.sessionToken) { requireWrapAdmin_(payload); return { nip:'Admin', admin:true }; }
+  var account = requireProfileSession_({sessionToken:payload.sessionToken});
+  return {nip:account.nip, admin:/^(admin|superadmin|superadministrator|administrator)$/.test(profileUser_(account).Akun_Role.toLowerCase().replace(/[^a-z]/g,''))};
+}
+function managedArchiveSheet_(modul) {
+  var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+  return modul === 'spt' ? (book.getSheetByName('REKAP_SPT') || book.getSheetByName('REKAP _SPT')) : book.getSheetByName('REKAP_CUTI');
+}
+function managedArchiveId_(modul, row, values) {
+  return row + ':' + digest_({modul:modul, values:values.slice(0,10)});
+}
+function managedArchiveList_(payload) {
+  var actor = archiveActor_(payload), sheet = managedArchiveSheet_(payload.modul);
+  var rows = sheet ? sheet.getDataRange().getDisplayValues() : [];
+  if (rows.length && text_(rows[0][1]).toLowerCase() !== 'nip') throw new Error('Susunan kolom arsip tidak sesuai. Hubungi Admin.');
+  var items = [];
+  rows.slice(1).forEach(function(row,i) {
+    if (!nip_(row[1]) || (!actor.admin && nip_(row[1]) !== actor.nip)) return;
+    items.push({archiveId:managedArchiveId_(payload.modul,i+2,row), timestamp:row[0], nip:nip_(row[1]), nama:row[2], tujuan:row[3], tanggalBerangkat:row[4], tanggalPulang:row[5], jumlahHari:row[6], bulan:row[7], tahun:row[8], linkAkses:row[9]});
+  });
+  return {status:'success',items:items,canDeleteAll:actor.admin};
+}
+function deleteManagedArchive_(payload) {
+  var actor = archiveActor_(payload), ids = payload.archiveIds;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 500 || new Set(ids).size !== ids.length) throw new Error('Pilih data arsip yang akan dihapus.');
+  var sheet = managedArchiveSheet_(payload.modul);
+  if (!sheet) throw new Error('Arsip sudah berubah. Muat ulang daftar.');
+  var rows = sheet.getDataRange().getDisplayValues();
+  if (text_(rows[0][1]).toLowerCase() !== 'nip') throw new Error('Susunan kolom arsip tidak sesuai.');
+  // Validate every target before any mutation, including stale row positions after sorting.
+  var targets = ids.map(function(id) {
+    var rowNumber = Number(String(id).split(':')[0]), row = rows[rowNumber-1];
+    if (!Number.isInteger(rowNumber) || rowNumber < 2 || !row || !nip_(row[1]) || id !== managedArchiveId_(payload.modul,rowNumber,row)) throw new Error('Arsip sudah berubah. Muat ulang daftar sebelum menghapus.');
+    if (!actor.admin && nip_(row[1]) !== actor.nip) throw new Error('Pegawai hanya boleh menghapus arsip miliknya sendiri.');
+    return {rowNumber:rowNumber, row:row};
+  });
+  var transaction = Utilities.getUuid(), now = new Date().toISOString();
+  var backups = targets.map(function(target) {
+    var range = sheet.getRange(target.rowNumber,1,1,sheet.getLastColumn());
+    var original = range.getValues()[0], source = target.row.slice(0,10);
+    // Invalid uploaded dates must not prevent removing an incorrect archive.
+    source[4] = parseDate_(original[4]) ? isoDate_(original[4]) : source[4];
+    source[5] = parseDate_(original[5]) ? isoDate_(original[5]) : (source[5] || source[4]);
+    var snapshot = JSON.stringify({source:source,values:original,formulas:range.getFormulas()[0],formats:range.getNumberFormats()[0]});
+    if (snapshot.length > 45000) throw new Error('Cadangan arsip terlalu besar. Hubungi Admin.');
+    return [transaction,now,actor.nip,payload.modul,sheet.getName(),target.rowNumber,snapshot];
+  });
+  var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+  var history = book.getSheetByName('ARSIP_TERHAPUS');
+  if (!history) { history = book.insertSheet('ARSIP_TERHAPUS'); history.appendRow(['Transaksi','Dihapus','Aktor','Modul','Sheet','Baris','CadanganJSON']); history.hideSheet(); }
+  var first = history.getLastRow()+1;
+  history.getRange(first,1,backups.length,7).setNumberFormat('@').setValues(backups);
+  SpreadsheetApp.flush();
+  if (JSON.stringify(history.getRange(first,1,backups.length,7).getValues()) !== JSON.stringify(backups)) throw new Error('Cadangan belum terverifikasi. Arsip belum dihapus.');
+  targets.sort(function(a,b){return b.rowNumber-a.rowNumber;}).forEach(function(target){sheet.deleteRow(target.rowNumber);});
+  SpreadsheetApp.flush();
+  return Object.assign(managedArchiveList_(payload),{deleted:targets.length,transaction:transaction});
 }
 var SUBMISSION_TEMPLATES = {
   'uang-makan':{PNS:'164EB-7F2QtWowKHrTcm1GYxqAoR0P6-BVQBx9s3hIQQ',PPPK:'12I_GwpjdMq87vL21xuWE9QFpnbh2BWoCbU_J9aCCPd0'},

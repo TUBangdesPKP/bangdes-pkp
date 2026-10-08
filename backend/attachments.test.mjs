@@ -26,6 +26,7 @@ function fixture() {
     insertRowAfter() { return this; }
     insertRowsAfter() { return this; }
     appendRow(row) { this.rows.push([...row]); return this; }
+    deleteRow(row) { this.rows.splice(row-1,1); return this; }
     setFrozenRows() { return this; }
     getRange(row, col, height = 1, width = 1) {
       const sheet = this;
@@ -227,6 +228,91 @@ function profileFixture() {
   new folder(f.context.PROFILE_PHOTO_FOLDER_ID,'Foto Profil');
   return {...f,people:sheet};
 }
+
+for (const modul of ['spt','cuti']) {
+  test(`archive ${modul}: employee deletes only own row, preserving shared file and another employee`, () => {
+    const f=profileFixture(), sheet=f.master.getSheetByName(modul==='spt'?'REKAP_SPT':'REKAP_CUTI');
+    const other=[...sheet.rows[1]];other[1]='654321';other[2]='Pegawai Lain';sheet.rows.push(other);
+    const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+    const auth={modul,sessionToken};
+    const list=f.call({...auth,action:'list_arsip',nip:'654321',Role:'Admin'});
+    assert.equal(list.status,'success');assert.equal(list.items.length,1);assert.equal(list.canDeleteAll,false);
+    const foreign=f.context.managedArchiveId_(modul,3,sheet.rows[2].map(String));
+    const own=list.items[0].archiveId;
+    assert.match(f.call({...auth,action:'hapus_arsip',archiveIds:[own,foreign],Role:'Admin'}).message,/miliknya sendiri/);
+    assert.equal(sheet.rows.length,3);assert.equal(f.master.getSheetByName('ARSIP_TERHAPUS'),null);
+    const result=f.call({...auth,action:'hapus_arsip',archiveIds:[own]});
+    assert.equal(result.status,'success',result.message);assert.equal(result.deleted,1);assert.equal(result.items.length,0);
+    assert.deepEqual(sheet.rows[1],other);assert.equal(sheet.rows.length,2);
+    assert.equal((modul==='spt'?f.spt:f.cuti).trashed,false);
+    const backup=f.master.getSheetByName('ARSIP_TERHAPUS');assert.equal(backup.rows.length,2);assert.equal(backup.hidden,true);
+    assert.equal(JSON.parse(backup.rows[1][6]).source[1],'123456');
+    assert.equal(f.call({...auth,action:'hapus_arsip',archiveIds:[own]}).status,'error');
+  });
+  test(`archive ${modul}: NIP Admin can delete selected letter for all participants`, () => {
+    const f=profileFixture(), sheet=f.master.getSheetByName(modul==='spt'?'REKAP_SPT':'REKAP_CUTI');
+    f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
+    const other=[...sheet.rows[1]];other[1]='654321';sheet.rows.push(other);
+    const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+    const auth={modul,sessionToken};const list=f.call({...auth,action:'list_arsip'});
+    assert.equal(list.canDeleteAll,true);assert.equal(list.items.length,2);
+    const result=f.call({...auth,action:'hapus_arsip',archiveIds:list.items.map(i=>i.archiveId)});
+    assert.equal(result.status,'success',result.message);assert.equal(result.deleted,2);assert.equal(sheet.rows.length,1);
+    assert.equal(f.master.getSheetByName(modul==='spt'?'REKAP_CUTI':'REKAP_SPT').rows.length,2);
+  });
+}
+
+test('archive deletion denies missing/expired credentials, spoofed admin, stale rows and invalid targets',()=>{
+  const f=profileFixture(), sheet=f.master.getSheetByName('REKAP_SPT');f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  const list=f.call({action:'list_arsip',modul:'spt',adminKey:wrapKey});assert.equal(list.status,'success');
+  const command={action:'hapus_arsip',modul:'spt',archiveIds:[list.items[0].archiveId]};
+  for (const extra of [{},{Role:'Admin'},{sessionToken:'expired',adminKey:wrapKey},{adminKey:'incorrect'},{modul:'uang-makan',adminKey:wrapKey}]) assert.equal(f.call({...command,...extra}).status,'error');
+  const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+  assert.equal(f.call({action:'list_arsip',modul:'spt',sessionToken,adminKey:wrapKey}).canDeleteAll,false);
+  for (const archiveIds of [[],[command.archiveIds[0],command.archiveIds[0]],['1:fake'],['not-a-row']]) assert.equal(f.call({...command,adminKey:wrapKey,archiveIds}).status,'error');
+  sheet.rows[1][3]='Changed';
+  assert.match(f.call({...command,adminKey:wrapKey}).message,/sudah berubah/);assert.equal(sheet.rows.length,2);
+  assert.equal(f.master.getSheetByName('ARSIP_TERHAPUS'),null);
+});
+
+test('archive deletion requires verified backup before removing any row',()=>{
+  const f=profileFixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  const history=f.master.insertSheet('ARSIP_TERHAPUS');history.appendRow(['header']);
+  history.getRange=()=>({setNumberFormat(){return this;},setValues(){throw Error('Backup write failed');}});
+  const list=f.call({action:'list_arsip',modul:'spt',adminKey:wrapKey});
+  assert.match(f.call({action:'hapus_arsip',modul:'spt',adminKey:wrapKey,archiveIds:[list.items[0].archiveId]}).message,/Backup write failed/);
+  assert.equal(f.master.getSheetByName('REKAP_SPT').rows.length,2);
+});
+
+test('deleted archive keeps existing claim calculation unchanged but rejects new claims',()=>{
+  for(const modul of ['spt','cuti']) {
+    const f=profileFixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+    const file=modul==='spt'?f.spt:f.cuti;
+    const claim=f.call({action:'klaim_dokumen',jenisDokumen:modul,sourceUrl:file.getUrl()});
+    assert.equal(claim.status,'success',claim.message);
+    const before=f.context.finalState_(f.scope);const values=JSON.stringify(f.working.rows);
+    const list=f.call({action:'list_arsip',modul,adminKey:wrapKey});
+    const deleted=f.call({action:'hapus_arsip',modul,adminKey:wrapKey,archiveIds:[list.items[0].archiveId]});
+    assert.equal(deleted.status,'success',deleted.message);
+    const after=f.context.finalState_(f.scope);
+    assert.equal(JSON.stringify(after.rows),JSON.stringify(before.rows));assert.equal(after.revision,before.revision);
+    assert.equal(JSON.stringify(f.working.rows),values);assert.equal(file.trashed,false);
+    assert.equal(f.call({action:'klaim_dokumen',jenisDokumen:modul,sourceUrl:file.getUrl()}).status,'error');
+  }
+});
+
+test('archive deletion supports legacy SPT tab, invalid uploaded dates, and rejects revoked Admin role',()=>{
+  const f=profileFixture(), sheet=f.master.getSheetByName('REKAP_SPT');sheet.setName('REKAP _SPT');
+  const other=[...sheet.rows[1]];other[1]='654321';other[4]='Tanggal salah';sheet.rows.push(other);
+  f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
+  const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const auth={modul:'spt',sessionToken};const items=f.call({...auth,action:'list_arsip'}).items;
+  f.people.rows[1][3]='pegawai';
+  assert.match(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).message,/miliknya sendiri/);
+  f.people.rows[1][3]='Admin';
+  assert.equal(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).status,'success');
+  assert.equal(sheet.rows.length,2);
+});
 test('login uses authoritative Role D and Jabatan M rather than conflicting earlier aliases',()=>{
   const f=profileFixture();
   f.people.rows[0][3]='Role';f.people.rows[1][3]='pegawai';
