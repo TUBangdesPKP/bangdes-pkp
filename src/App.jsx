@@ -3493,7 +3493,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                         <p className="text-xs text-gray-200 leading-snug font-medium">
                           <strong className="text-white font-bold">{firstName}</strong>, lengkapi bukti dukung Anda
                         </p>
-                        <p className="text-[9px] text-teal-200 mt-0.5">Sistem deteksi otomatis berbasis NIP</p>
+                        <p className="text-[9px] text-teal-200 mt-0.5">Agar Rekening Makin Cuan</p>
                       </div>
                       {loggedInUser?.Foto_Pegawai ? (
                         <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-8 h-8 rounded-full object-cover border border-white/40 shrink-0" />
