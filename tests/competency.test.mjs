@@ -104,6 +104,7 @@ test('UI includes filters and safe expandable training detail, and hides other y
   const html = renderToStaticMarkup(React.createElement(CompetencyView, {people, training, initialYear: 2026}));
   for (const label of ['Tahun','Subunit Kerja','Status Pemenuhan','Nama atau NIP','Memenuhi','Belum Memenuhi','JP belum diisi']) assert.ok(html.includes(label), label);
   assert.doesNotMatch(html, /Tahun Lama|NaN|Infinity/);
+  assert.doesNotMatch(html, /Urutan mengikuti spreadsheet|Klik nama untuk melihat|JP kosong atau tidak valid tidak ditambahkan/);
   assert.ok(html.indexOf('Zeta, S.T.') < html.indexOf('Ar. Alfa, S.T.'));
   const employees = analyzeCompetency(people, training, 2026).employees;
   employees[0].courses[0].title = '<script>alert(1)</script>';
@@ -131,6 +132,7 @@ test('JP popup requires employee login for guests and gives admins searchable ma
   const {CompetencyDialog} = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
   const guest = renderToStaticMarkup(React.createElement(CompetencyDialog, {people}));
   assert.match(guest, /Login Admin Pegawai/); assert.match(guest, /type="password"/);
+  assert.doesNotMatch(guest, /Masuk dengan NIP pegawai|Akun username admin lama/);
   assert.doesNotMatch(guest, /jp-pegawai-options/);
   const admin = {...people[0], Akun_Role: 'Admin', sessionToken: 'NEVER-RENDER-THIS'};
   const form = renderToStaticMarkup(React.createElement(CompetencyDialog, {people, user: admin, revision: 'test'}));

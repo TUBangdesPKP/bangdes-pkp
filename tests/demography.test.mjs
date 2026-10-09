@@ -50,6 +50,11 @@ test('demographic charts render in mockup order with readable counts and no indi
   assert.match(html,/100%/);assert.match(html,/50–50 tahun/);
   assert.equal((html.match(/role="img"/g)||[]).length,6);
   assert.doesNotMatch(html,/IDENTITAS-RAHASIA|Nama tidak ditampilkan/);
+  assert.doesNotMatch(html,/kolom [A-Z]|dalam Data_Pegawai|Persentase memakai|Kedua sisi memakai|skala 0/);
+  assert.match(html,/demography-card-title/);
+  assert.match(html,/demography-donut-ring/);
+  assert.match(html,/demography-column-plot/);
+  assert.match(html,/demography-pyramid-side/);
   const empty=renderToStaticMarkup(React.createElement(DemographyCharts,{data:[]}));
   assert.match(empty,/Belum ada data pegawai/);assert.doesNotMatch(empty,/NaN|Infinity/);
 });

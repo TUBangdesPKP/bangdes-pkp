@@ -60,7 +60,6 @@ export function CompetencyView({people, training, initialYear = new Date().getFu
       <label className="text-xs font-bold">Cari Pegawai<input type="search" className={inputClass} value={search} onChange={event => setSearch(event.target.value)} placeholder="Nama atau NIP"/></label>
     </div>
     <div className="grid grid-cols-3 gap-3 mb-5" aria-live="polite">{[['Pegawai ditampilkan', employees.length], ['Memenuhi', met], ['Belum Memenuhi', employees.length - met]].map(([label, value]) => <div key={label} className="rounded-2xl bg-[#F2EEDF] p-4"><b className="block text-2xl text-[#084C61]">{value}</b><span className="text-xs">{label}</span></div>)}</div>
-    <p className="text-xs text-slate-500 mb-3">Klik nama untuk melihat pelatihan tahun {year}. Urutan mengikuti spreadsheet Data Pegawai. JP kosong atau tidak valid tidak ditambahkan ke total.</p>
     {!!(model.unmatched.length || model.invalidYear.length || model.duplicates) && <details className="mb-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900"><summary className="cursor-pointer font-semibold">Data yang perlu diperiksa: {model.unmatched.length} pelatihan belum cocok, {model.invalidYear.length} tahun tidak valid, {model.duplicates} NIP master duplikat</summary>
       <p className="mt-2">Catatan berikut tidak masuk perhitungan. Nama harus cocok secara unik; perbedaan tanda baca dan awalan gelar disetarakan, tanpa menebak kemiripan nama.</p>
       <ul className="list-disc pl-5 mt-2">{[...model.unmatched, ...model.invalidYear].map(course => <li key={course.id}>Baris {course.sourceRow}: {course.name || '(Nama kosong)'} — {course.title || '(Pelatihan kosong)'}</li>)}</ul>
@@ -100,7 +99,7 @@ export function CompetencyPage({loadPeople, loadTraining = loadCompetencyTrainin
   }, [loadPeople, loadTraining, reload, endpoint]);
   const canDelete = canManageCompetency(user) && !!state.data?.revision && !state.loading;
   return <section className="max-w-[1600px] mx-auto p-4 md:p-8 pb-12 text-slate-800" aria-label="Pemenuhan Kompetensi Pegawai">
-    <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 className="text-xl font-extrabold text-[#084C61]">Pemenuhan Kompetensi / JP</h2><p className="mt-1 text-sm text-slate-500">Rekap pelatihan dan pemenuhan minimal {JP_TARGET} JP per tahun.</p></div>
+    <div className="flex flex-wrap justify-between items-center gap-3"><h2 className="text-xl font-extrabold text-[#084C61]">Pemenuhan Kompetensi / JP</h2>
       <div className="flex items-center gap-2">
         <button type="button" disabled={state.loading || !state.data} onClick={() => {setNotice(''); setDialog({});}} className="inline-flex items-center gap-2 rounded-xl bg-[#084C61] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Plus size={16}/>Tambah Data Pelatihan</button>
         <button type="button" aria-label="Muat ulang data" title="Muat ulang data" disabled={state.loading || !!dialog} onClick={() => {setNotice(''); setState(previous => ({...previous, loading: true, error: ''})); setReload(value => value + 1);}} className="inline-flex items-center border rounded-xl bg-white p-2.5 disabled:opacity-50"><RefreshCw size={18}/></button>

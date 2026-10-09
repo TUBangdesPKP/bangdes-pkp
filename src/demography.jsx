@@ -1,72 +1,71 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { analyzeDemography } from './demography-model.js';
+import './demography.css';
 
 const COLORS=['#0E5B73','#B9A77E','#70B8C8','#7D9D88','#486979','#B88376','#747DAD'];
 const percent=(value,total)=>new Intl.NumberFormat('id-ID',{maximumFractionDigits:1}).format(total?value/total*100:0)+'%';
 const color=index=>COLORS[index%COLORS.length];
 const describe=rows=>rows.map(row=>`${row.label}: ${row.value} pegawai`).join('; ');
 
-function Card({title,source,children}) {
-  return <section aria-label={title} className="min-w-0 rounded-[2rem] bg-[#F2EEDF] p-5 md:p-7 border border-[#e6dfcb]">
-    <h3 className="text-lg font-extrabold text-[#084C61]">{title}</h3>
-    <p className="text-xs text-slate-600 mt-1 mb-5">{source}</p>{children}
+function Card({title,children}) {
+  return <section aria-label={title} className="demography-card">
+    <h3 className="demography-card-title">{title}</h3>
+    <div className="demography-card-chart">{children}</div>
   </section>;
 }
 function Donut({rows,total}) {
   let offset=0;
-  return <div className="flex flex-col sm:flex-row items-center gap-6 min-h-[240px]">
-    <svg role="img" aria-label={describe(rows)||'Belum ada data'} viewBox="0 0 200 200" className="w-48 h-48 shrink-0">
+  return <div className="demography-donut">
+    <svg role="img" aria-label={describe(rows)||'Belum ada data'} viewBox="0 0 200 200" className="demography-donut-ring">
       <circle cx="100" cy="100" r="72" fill="none" stroke="#e2dfd4" strokeWidth="28" />
-      {rows.map((row,i)=>{const length=total?row.value/total*100:0,start=offset;offset+=length;return <circle key={row.label} cx="100" cy="100" r="72" fill="none" stroke={color(i)} strokeWidth="28" pathLength="100" strokeDasharray={`${length} ${100-length}`} strokeDashoffset={-start} transform="rotate(-90 100 100)"><title>{row.label}: {row.value} ({percent(row.value,total)})</title></circle>;})}
-      <text x="100" y="99" textAnchor="middle" fontSize="30" fontWeight="800" fill="#084C61">{total}</text>
-      <text x="100" y="121" textAnchor="middle" fontSize="12" fill="#475569">pegawai</text>
+      {rows.map((row,i)=>{const length=total?row.value/total*100:0,start=offset;offset+=length;return <circle key={row.label} cx="100" cy="100" r="72" fill="none" stroke={color(i)} strokeWidth="28" pathLength="100" strokeDasharray={`${length} ${100-length}`} strokeDashoffset={-start} transform="rotate(-90 100 100)"><title>{`${row.label}: ${row.value} (${percent(row.value,total)})`}</title></circle>;})}
+      <text x="100" y="100" textAnchor="middle" fontSize="34" fontWeight="800" fill="#084C61">{total}</text>
+      <text x="100" y="122" textAnchor="middle" fontSize="13" fill="#475569">pegawai</text>
     </svg>
-    <ul className="space-y-3 w-full text-sm">{rows.map((row,i)=><li key={row.label} className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><span aria-hidden="true" className="w-3 h-3 rounded-full shrink-0" style={{background:color(i)}}/>{row.label}</span><span className="whitespace-nowrap"><b>{row.value}</b> <span className="text-xs text-slate-600">({percent(row.value,total)})</span></span></li>)}</ul>
+    <ul className="demography-legend">{rows.map((row,i)=><li key={row.label}><span className="flex items-center gap-2 min-w-0"><span aria-hidden="true" className="w-3.5 h-3.5 rounded-full shrink-0" style={{background:color(i)}}/>{row.label}</span><span className="whitespace-nowrap"><b>{row.value}</b> <span className="text-slate-600">({percent(row.value,total)})</span></span></li>)}</ul>
   </div>;
 }
 function Bars({rows,total}) {
   const max=Math.max(1,...rows.map(row=>row.value));
-  return <div className="max-h-[440px] overflow-y-auto pr-2 space-y-3" role="img" aria-label={describe(rows)||'Belum ada data'}>{rows.map((row,i)=><div key={row.label} className="grid grid-cols-[minmax(95px,1fr)_minmax(100px,1.3fr)] items-center gap-3 text-xs">
-    <span className="leading-snug break-words">{row.label}</span><div><div className="text-right mb-1"><b>{row.value}</b> <span className="text-slate-600">({percent(row.value,total)})</span></div><div className="h-3 rounded-full bg-white/70"><div className="h-full rounded-full" style={{width:`${row.value/max*100}%`,background:color(i)}}/></div></div>
+  return <div className="demography-bars" role="img" aria-label={describe(rows)||'Belum ada data'} tabIndex={0}>{rows.map((row,i)=><div key={row.label} className="demography-bar-row">
+    <span className="leading-snug break-words font-medium">{row.label}</span><div className="min-w-0"><div className="text-right mb-2"><b>{row.value}</b> <span className="text-slate-600">({percent(row.value,total)})</span></div><div className="demography-bar-track"><div className="h-full rounded-full" style={{width:`${row.value/max*100}%`,background:color(i)}}/></div></div>
   </div>)}</div>;
 }
 function Columns({rows,total}) {
   const max=Math.max(1,...rows.map(row=>row.value));
-  return <div className="overflow-x-auto" role="img" aria-label={describe(rows)||'Belum ada data'}>
-    <p className="text-[11px] text-slate-600 mb-3">Jumlah pegawai · skala 0–{max}</p>
-    <div className="flex gap-4 border-b border-slate-400 items-end h-[210px] px-3" style={{minWidth:rows.length*65}}>{rows.map((row,i)=><div key={row.label} className="flex-1 flex flex-col items-center justify-end h-full"><b className="text-xs mb-1">{row.value}</b><div className="w-full max-w-14 rounded-t-lg" style={{height:`${row.value/max*175}px`,background:color(i)}}/></div>)}</div>
-    <div className="flex gap-4 px-3 pt-2" style={{minWidth:rows.length*65}}>{rows.map(row=><div key={row.label} className="flex-1 text-center text-xs"><b>{row.label}</b><div className="text-slate-600 mt-1">{percent(row.value,total)}</div></div>)}</div>
+  return <div className="demography-columns" role="img" aria-label={describe(rows)||'Belum ada data'} tabIndex={0}>
+    <div className="demography-column-plot" style={{minWidth:rows.length*70}}>{rows.map((row,i)=><div key={row.label} className="flex-1 min-w-0 flex flex-col items-center justify-end h-full"><b className="mb-2">{row.value}</b><div className="w-full max-w-20 rounded-t-lg shrink-0" style={{height:`${row.value/max*84}%`,background:color(i)}}/></div>)}</div>
+    <div className="demography-column-labels" style={{minWidth:rows.length*70}}>{rows.map(row=><div key={row.label} className="flex-1 min-w-0 text-center break-words"><b>{row.label}</b><div className="text-slate-600 mt-1">{percent(row.value,total)}</div></div>)}</div>
   </div>;
 }
 function Pyramid({rows}) {
   const max=Math.max(1,...rows.flatMap(row=>[row.male,row.female]));
-  return <div>
-    <div className="grid grid-cols-[1fr_88px_1fr] text-xs mb-4"><span className="font-bold text-[#0E5B73]">Laki-laki</span><span/><span className="font-bold text-right text-[#856d3c]">Perempuan</span></div>
-    <div role="img" aria-label={rows.map(row=>`${row.label}: ${row.male} laki-laki, ${row.female} perempuan, ${row.other} gender belum terklasifikasi`).join('; ')} className="space-y-5">{rows.map(row=><div key={row.label}>
-      <div className="grid grid-cols-[1fr_88px_1fr] items-center gap-2">
-        <div className="flex justify-end items-center gap-1"><b className="text-xs">{row.male}</b><div className="h-6 rounded-l-md bg-[#0E5B73]" style={{width:`${row.male/max*80}%`}}/></div>
-        <div className="text-center text-xs"><b>{row.label}</b><span className="block text-[10px] text-slate-600">{row.ageRange||'Umur belum diisi'}</span></div>
-        <div className="flex items-center gap-1"><div className="h-6 rounded-r-md bg-[#B9A77E]" style={{width:`${row.female/max*80}%`}}/><b className="text-xs">{row.female}</b></div>
+  return <div className="demography-pyramid">
+    <div className="demography-pyramid-row mb-6"><span className="font-bold text-[#0E5B73]">Laki-laki</span><span/><span className="font-bold text-right text-[#856d3c]">Perempuan</span></div>
+    <div role="img" aria-label={rows.map(row=>`${row.label}: ${row.male} laki-laki, ${row.female} perempuan, ${row.other} gender belum terklasifikasi`).join('; ')} className="space-y-7">{rows.map(row=><div key={row.label}>
+      <div className="demography-pyramid-row">
+        <div className="demography-pyramid-side"><b>{row.male}</b><div className="flex justify-end min-w-0"><div className="demography-pyramid-bar rounded-l-md bg-[#0E5B73]" style={{width:`${row.male/max*100}%`}}/></div></div>
+        <div className="text-center"><b>{row.label}</b><span className="block text-sm text-slate-600 mt-1">{row.ageRange||'Umur belum diisi'}</span></div>
+        <div className="demography-pyramid-side demography-pyramid-side-right"><div className="min-w-0"><div className="demography-pyramid-bar rounded-r-md bg-[#B9A77E]" style={{width:`${row.female/max*100}%`}}/></div><b className="text-right">{row.female}</b></div>
       </div>
-      {!!row.other&&<p className="text-center text-[10px] text-slate-600 mt-1">{row.other} pegawai: gender belum terklasifikasi</p>}
+      {!!row.other&&<p className="text-center text-sm text-slate-600 mt-2">{row.other} pegawai: gender belum terklasifikasi</p>}
     </div>)}</div>
-    <p className="text-[11px] text-slate-600 mt-5 leading-relaxed">Kedua sisi memakai skala yang sama (0–{max} pegawai). Generasi mengikuti kolom AS; rentang umur adalah nilai minimum–maksimum yang terisi di kolom AI, bukan batas definisi generasi.</p>
   </div>;
 }
 
 export function DemographyCharts({data}) {
   const model=analyzeDemography(data);
   return <>
-    <p className="text-sm text-[#084C61] mb-5"><b>{model.total} pegawai</b> dalam Data_Pegawai. Persentase memakai seluruh pegawai, termasuk kategori belum diisi.</p>
+    <p className="text-base font-semibold text-[#084C61] mb-5">{model.total} Pegawai</p>
     {!!model.duplicates&&<p role="status" className="text-sm text-amber-800 mb-4">{model.duplicates} baris NIP duplikat tidak dihitung ulang; periksa data master.</p>}
     {!model.total?<p className="p-6 rounded-2xl border bg-white">Belum ada data pegawai untuk ditampilkan.</p>:<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
-      <Card title="Status Pegawai" source="Jenis ASN · kolom H"><Donut rows={model.status} total={model.total}/></Card>
-      <Card title="Golongan/Ruang Pegawai" source="Golongan/Ruang · kolom J"><Bars rows={model.grades} total={model.total}/></Card>
-      <Card title="Tingkat Pendidikan Terakhir" source="Pendidikan Terakhir · kolom Z"><Columns rows={model.education} total={model.total}/></Card>
-      <Card title="Jenis Kelamin" source="Gender · kolom G"><Donut rows={model.gender} total={model.total}/></Card>
-      <Card title="Jabatan" source="Jabatan lengkap · kolom M · gulir untuk seluruh jabatan"><Bars rows={model.jobs} total={model.total}/></Card>
-      <Card title="Rentang Umur / Generasi" source="Piramida generasi menurut jenis kelamin"><Pyramid rows={model.pyramid}/></Card>
+      <Card title="Status Pegawai"><Donut rows={model.status} total={model.total}/></Card>
+      <Card title="Golongan/Ruang Pegawai"><Bars rows={model.grades} total={model.total}/></Card>
+      <Card title="Tingkat Pendidikan Terakhir"><Columns rows={model.education} total={model.total}/></Card>
+      <Card title="Jenis Kelamin"><Donut rows={model.gender} total={model.total}/></Card>
+      <Card title="Jabatan"><Bars rows={model.jobs} total={model.total}/></Card>
+      <Card title="Rentang Umur / Generasi"><Pyramid rows={model.pyramid}/></Card>
     </div>}
   </>;
 }

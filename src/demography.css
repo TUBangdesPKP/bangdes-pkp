@@ -1,0 +1,45 @@
+.demography-card {
+  container: demography / inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 390px;
+  padding: clamp(20px, 2.5vw, 32px);
+  border: 1px solid #e6dfcb;
+  border-radius: 2rem;
+  background: #f2eedf;
+}
+.demography-card-title {
+  margin: 0 0 24px;
+  color: #084c61;
+  font-size: clamp(20px, 3.8cqw, 26px);
+  font-weight: 800;
+  line-height: 1.3;
+}
+.demography-card-chart { display: flex; flex: 1; min-width: 0; align-items: center; }
+.demography-donut { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 100%; }
+.demography-donut-ring { width: min(100%, 280px); height: auto; flex-shrink: 0; }
+.demography-legend { width: 100%; min-width: 0; font-size: clamp(14px, 2.8cqw, 17px); }
+.demography-legend li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.demography-legend li + li { border-top: 1px solid #dcd6c5; }
+.demography-bars { width: 100%; max-height: 400px; overflow-y: auto; padding-right: 8px; }
+.demography-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: center; gap: 16px; font-size: clamp(14px, 2.8cqw, 17px); }
+.demography-bar-row + .demography-bar-row { margin-top: 22px; }
+.demography-bar-track { height: 22px; border-radius: 999px; background: #ffffffb3; }
+.demography-columns { width: 100%; overflow-x: auto; padding-bottom: 8px; font-size: clamp(14px, 2.8cqw, 17px); }
+.demography-column-plot { display: flex; gap: 20px; align-items: flex-end; height: clamp(240px, 52cqw, 320px); padding: 0 8px; border-bottom: 1px solid #94a3b8; }
+.demography-column-labels { display: flex; gap: 20px; padding: 12px 8px 0; }
+.demography-pyramid { width: 100%; font-size: clamp(14px, 2.8cqw, 17px); }
+.demography-pyramid-row { display: grid; grid-template-columns: minmax(0, 1fr) clamp(88px, 20cqw, 116px) minmax(0, 1fr); align-items: center; gap: 8px; }
+.demography-pyramid-side { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 4px; min-width: 0; }
+.demography-pyramid-side-right { grid-template-columns: minmax(0, 1fr) 24px; }
+.demography-pyramid-bar { height: 30px; }
+@container demography (min-width: 520px) {
+  .demography-donut { flex-direction: row; gap: 28px; }
+  .demography-donut-ring { width: 46%; max-width: 310px; }
+}
+@media (max-width: 480px) {
+  .demography-card { min-height: 340px; border-radius: 1.5rem; }
+  .demography-donut-ring { max-width: 240px; }
+  .demography-bar-row { gap: 12px; }
+}
