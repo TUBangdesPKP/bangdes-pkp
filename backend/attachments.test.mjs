@@ -134,6 +134,81 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+function jpFixture() {
+  const f=profileFixture();
+  f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
+  f.people.rows[1][0]='199001012020011001';f.people.rows[2][0]='199001012020011002';
+  const book=new f.Book(), sheet=book.insertSheet('Backend');sheet.id=0;
+  sheet.rows=[['Nama','Sertifikasi / Diklat','Tahun','Jumlah JP'],['Pegawai Pertama','Pelatihan A',2026,20],[],['Pegawai Kedua','Pelatihan B',2025,6],[],['Pegawai Ketiga','Pelatihan C',2026,'']];
+  book.insertSheet('Data').rows=[['Ringkasan'],['=SUM(Backend!D:D)']];
+  f.books.set(f.context.JP_SPREADSHEET_ID,book);
+  const sessionToken=f.call({action:'login_pegawai',nip:f.people.rows[1][0],pin:'012345'}).sessionToken;
+  return {...f,jpSheet:sheet,jpBook:book,sessionToken};
+}
+test('JP public reads only the approved detail columns and preserves actual row IDs',()=>{
+  const f=jpFixture(), result=f.call({action:'list_pelatihan_jp'});
+  assert.equal(result.status,'success',result.message);assert.equal(result.jpVersion,1);
+  assert.deepEqual(result.training.map(row=>row.sourceRow),[2,4,6]);
+  assert.equal(result.training[2].jp,null);assert.equal(result.training[0].jp,20);
+  assert.ok(result.revision);assert.doesNotMatch(JSON.stringify(result),/012345|sessionToken|pinHash/);
+  assert.equal(f.jpSheet.rows.length,6);
+});
+test('JP add uses master name and A:D, compacts gaps, escapes formulas and rejects replay',()=>{
+  const f=jpFixture(), beforeMaster=JSON.stringify(f.people.rows), beforeSummary=JSON.stringify(f.jpBook.getSheetByName('Data').rows);
+  const request={action:'tambah_pelatihan_jp',sessionToken:f.sessionToken,expectedRevision:f.call({action:'list_pelatihan_jp'}).revision,employeeNip:f.people.rows[2][0],nama:'Forged',title:'=HYPERLINK("https://invalid.test")',year:'2027',jp:'20,5'};
+  const result=f.call(request);
+  assert.equal(result.status,'success',result.message);assert.equal(f.jpSheet.rows.length,5);
+  assert.deepEqual(f.jpSheet.rows[4],[f.people.rows[2][1], '\'=HYPERLINK("https://invalid.test")',2027,20.5]);
+  assert.equal(JSON.stringify(f.people.rows),beforeMaster);assert.equal(JSON.stringify(f.jpBook.getSheetByName('Data').rows),beforeSummary);
+  assert.match(f.call(request).message,/telah berubah/);assert.equal(f.jpSheet.rows.length,5);
+});
+test('JP rejects guest, employee, legacy admin-read, forged role and revoked/expired sessions',()=>{
+  const f=jpFixture(), initial=JSON.stringify(f.jpSheet.rows), revision=f.call({action:'list_pelatihan_jp'}).revision;
+  const employee=f.call({action:'login_pegawai',nip:f.people.rows[2][0],pin:'654321'}).sessionToken;
+  f.properties.set('LEGACY_ADMIN_PIN','112233');
+  const legacy=f.call({action:'login_admin',pin:'112233'}).adminSessionToken;
+  const body={employeeNip:f.people.rows[2][0],title:'Test',year:2026,jp:20,sourceRow:2,expectedRevision:revision};
+  for(const auth of [{},{sessionToken:employee,Role:'Admin'},{adminSessionToken:legacy},{adminKey:wrapKey},{sessionToken:'expired'}]) {
+    for(const action of ['tambah_pelatihan_jp','hapus_pelatihan_jp'])assert.equal(f.call({...body,action,...auth}).status,'error');
+  }
+  f.people.rows[1][3]='pegawai';
+  assert.match(f.call({...body,action:'hapus_pelatihan_jp',sessionToken:f.sessionToken}).message,/Role Admin/);
+  f.people.rows[1][3]='Admin';f.people.rows[1][4]='999999';
+  assert.equal(f.call({...body,action:'hapus_pelatihan_jp',sessionToken:f.sessionToken}).status,'error');
+  assert.equal(JSON.stringify(f.jpSheet.rows),initial);
+});
+test('JP validates each input and mismatched headers before any write',()=>{
+  const f=jpFixture(), revision=f.call({action:'list_pelatihan_jp'}).revision, before=JSON.stringify(f.jpSheet.rows);
+  const request={action:'tambah_pelatihan_jp',sessionToken:f.sessionToken,expectedRevision:revision,employeeNip:f.people.rows[2][0],title:'Valid',year:2026,jp:20};
+  for(const invalid of [{employeeNip:'unknown'},{title:''},{year:'26'},{year:2026.5},{jp:''},{jp:-1},{jp:'Infinity'},{jp:'1.2345'},{expectedRevision:''}])assert.equal(f.call({...request,...invalid}).status,'error',JSON.stringify(invalid));
+  assert.equal(JSON.stringify(f.jpSheet.rows),before);
+  f.jpSheet.rows[0][3]='';f.jpSheet.rows[0][4]='Jumlah JP';
+  assert.match(f.call(request).message,/kolom A:D/);
+  assert.equal(f.jpSheet.rows.length,6);
+});
+test('JP delete backs up selected row and closes all blank gaps without touching other training or summary',()=>{
+  const f=jpFixture(), snapshot=f.call({action:'list_pelatihan_jp'}), original=[...f.jpSheet.rows[3]], summary=JSON.stringify(f.jpBook.getSheetByName('Data').rows);
+  const request={action:'hapus_pelatihan_jp',sessionToken:f.sessionToken,sourceRow:4,expectedRevision:snapshot.revision};
+  const result=f.call(request);assert.equal(result.status,'success',result.message);
+  assert.deepEqual(f.jpSheet.rows,[['Nama','Sertifikasi / Diklat','Tahun','Jumlah JP'],['Pegawai Pertama','Pelatihan A',2026,20],['Pegawai Ketiga','Pelatihan C',2026,'']]);
+  assert.equal(JSON.stringify(f.jpBook.getSheetByName('Data').rows),summary);
+  const backup=f.master.getSheetByName('JP_PELATIHAN_TERHAPUS');assert.equal(backup.hidden,true);
+  assert.deepEqual(JSON.parse(backup.rows[1][4]),original);assert.equal(backup.rows[1][2],4);
+  assert.match(f.call(request).message,/telah berubah/);
+  assert.equal(f.jpSheet.rows.length,3);
+});
+test('JP rejects stale deletes after external edits, invalid rows and failed backups',()=>{
+  const f=jpFixture(), revision=f.call({action:'list_pelatihan_jp'}).revision;
+  const request={action:'hapus_pelatihan_jp',sessionToken:f.sessionToken,expectedRevision:revision,sourceRow:2};
+  for(const sourceRow of [1,3,99,2.2])assert.equal(f.call({...request,sourceRow}).status,'error');
+  f.jpSheet.rows[1][1]='Edited';
+  assert.match(f.call(request).message,/telah berubah/);
+  const latest=f.call({action:'list_pelatihan_jp'}).revision, before=JSON.stringify(f.jpSheet.rows);
+  const backup=f.master.insertSheet('JP_PELATIHAN_TERHAPUS');backup.getRange=()=>({setValues(){throw Error('Backup unavailable');}});
+  assert.equal(f.call({...request,expectedRevision:latest}).status,'error');
+  assert.equal(JSON.stringify(f.jpSheet.rows),before);
+});
+
 test('period status persists centrally, requires admin, rejects stale updates and isolates module/year', () => {
   const f=fixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
   const read=(modul,year)=>f.call({action:'list_periode_submisi',modul,year});

@@ -4,7 +4,7 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {build} from 'vite';
 import react from '@vitejs/plugin-react';
-import {analyzeCompetency, competencyNameKey, filterCompetency, JP_CSV_URL, loadCompetencyTraining, parseCompetencyCsv} from '../src/competency-model.js';
+import {analyzeCompetency, competencyNameKey, filterCompetency, JP_CSV_URL, loadCompetencyTraining, parseCompetencyCsv, canManageCompetency, chosenTrainingEmployee, trainingEmployeeLabel} from '../src/competency-model.js';
 
 const people = [
   {NIP: '199001012020011001', Nama: 'Zeta, S.T.', SubUnitKerja: 'Wilayah I'},
@@ -13,6 +13,18 @@ const people = [
 ];
 const csv = 'Nama,Sertifikasi / Diklat,Tahun,,Jumlah JP\n"Alfa, ST.","Pelatihan, A",2026,,"19,5"\n"Alfa, ST.",Pelatihan B,2026,,0.5\n"Zeta, S.T.",Tahun Lama,2025,,40\n"Zeta, S.T.",Tahun Baru,2026,,6\n"Zeta, S.T.",JP Kosong,2026,,\n';
 
+test('JP editor only accepts an exact selection from the searchable employee list', () => {
+  const label = trainingEmployeeLabel(people[0]);
+  assert.equal(chosenTrainingEmployee(people, label), people[0]);
+  assert.equal(chosenTrainingEmployee(people, 'Zeta'), null);
+  assert.equal(chosenTrainingEmployee(people, 'Nama bebas'), null);
+  assert.equal(chosenTrainingEmployee([...people, people[0]], label), null);
+  assert.equal(canManageCompetency(null), false);
+  assert.equal(canManageCompetency({...people[0], sessionToken: 'test', Akun_Role: 'pegawai'}), false);
+  assert.equal(canManageCompetency({NIP: 'SUPERADMIN', Akun_Role: 'admin', adminSessionToken: 'test'}), false);
+  assert.equal(canManageCompetency({...people[0], sessionToken: 'test', Akun_Role: 'Admin'}), true);
+});
+
 test('parses observed CSV headers, quoted training titles, decimal JP, and missing values', () => {
   const rows = parseCompetencyCsv('\uFEFF' + csv);
   assert.equal(rows.length, 5);
@@ -20,6 +32,7 @@ test('parses observed CSV headers, quoted training titles, decimal JP, and missi
   assert.equal(rows[0].jp, 19.5);
   assert.equal(rows[4].jp, null);
   assert.equal(rows[0].sourceRow, 2);
+  assert.equal(parseCompetencyCsv('Nama,Sertifikasi / Diklat,Tahun,Jumlah JP\nBeta,Pelatihan,2027,22')[0].jp, 22);
   assert.equal(competencyNameKey('Ar. Alfa, S.T.'), competencyNameKey('Alfa, ST.'));
   assert.equal(parseCompetencyCsv('Nama,Sertifikasi / Diklat,Tahun,,Jumlah JP\n').length, 0);
   assert.throws(() => parseCompetencyCsv('<html>Login</html>'), /CSV/);
@@ -101,4 +114,32 @@ test('UI includes filters and safe expandable training detail, and hides other y
   const loading = renderToStaticMarkup(React.createElement(CompetencyPage, {loadPeople: async () => ({data: people})}));
   assert.match(loading, /Memuat data pegawai dan pelatihan/);
   assert.doesNotMatch(loading, /Belum Memenuhi/);
+  assert.doesNotMatch(loading, /Sumber:|href="https:\/\/docs.google.com/);
+  assert.match(loading, /Tambah Data Pelatihan/);
+  assert.match(loading, /aria-label="Muat ulang data"/);
+  assert.doesNotMatch(loading, />Muat ulang data</);
+  const filtered = renderToStaticMarkup(React.createElement(CompetencyTable, {employees: [employees[2]], year: 2026, onSelect: () => {}}));
+  assert.match(filtered, /text-slate-500">1<\/td>/);
+  assert.doesNotMatch(filtered, /text-slate-500">3<\/td>|Hapus pelatihan/);
+  const managed = renderToStaticMarkup(React.createElement(CompetencyTable, {employees, year: 2026, expanded: people[0].NIP, onSelect: () => {}, onDelete: () => {}}));
+  assert.match(managed, /aria-label="Hapus pelatihan/);
+});
+
+test('JP popup requires employee login for guests and gives admins searchable master names and four fields', async () => {
+  const bundle = await build({configFile: false, plugins: [react()], logLevel: 'error', ssr: {noExternal: true}, build: {ssr: 'src/competency-editor.jsx', write: false, emptyOutDir: false, rollupOptions: {external: ['react','react/jsx-runtime','lucide-react','papaparse']}}});
+  const code = bundle.output.find(item => item.type === 'chunk').code.replace(/(from|import) (["'])(react(?:\/jsx-runtime)?|lucide-react|papaparse)\2/g, (_, keyword, quote, specifier) => `${keyword} ${JSON.stringify(import.meta.resolve(specifier))}`);
+  const {CompetencyDialog} = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+  const guest = renderToStaticMarkup(React.createElement(CompetencyDialog, {people}));
+  assert.match(guest, /Login Admin Pegawai/); assert.match(guest, /type="password"/);
+  assert.doesNotMatch(guest, /jp-pegawai-options/);
+  const admin = {...people[0], Akun_Role: 'Admin', sessionToken: 'NEVER-RENDER-THIS'};
+  const form = renderToStaticMarkup(React.createElement(CompetencyDialog, {people, user: admin, revision: 'test'}));
+  assert.match(form, /list="jp-pegawai-options"/); assert.match(form, /<datalist/);
+  for (const person of people) assert.ok(form.includes(trainingEmployeeLabel(person)));
+  for (const label of ['Nama Sertifikat / Pelatihan', 'Tahun Pelaksanaan', 'Jumlah Jam Pelajaran (JP)', 'Simpan Pelatihan']) assert.ok(form.includes(label));
+  assert.doesNotMatch(form, /NEVER-RENDER-THIS/);
+  const course = parseCompetencyCsv(csv)[0];
+  const confirmation = renderToStaticMarkup(React.createElement(CompetencyDialog, {people, user: admin, course, revision: 'test'}));
+  assert.match(confirmation, /Hapus Data Pelatihan\?/); assert.ok(confirmation.includes(course.title));
+  assert.match(confirmation, /Ya, Hapus Pelatihan/);
 });

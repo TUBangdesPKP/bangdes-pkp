@@ -1,4 +1,12 @@
 import Papa from 'papaparse';
+import {isRecapAdmin} from './monthly-recap-model.js';
+
+export const canManageCompetency = user => !!user?.sessionToken && /^\d{18}$/.test(user?.NIP || '') && isRecapAdmin(user?.Akun_Role || user?.Role);
+export const trainingEmployeeLabel = person => `${person.Nama} — ${person.NIP}`;
+export function chosenTrainingEmployee(people, label) {
+  const matches = people.filter(person => trainingEmployeeLabel(person) === label && /^\d{18}$/.test(person.NIP));
+  return matches.length === 1 ? matches[0] : null;
+}
 
 export const JP_TARGET = 20;
 export const JP_SOURCE_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSHOup2kT_VyLCt2xWpq6Mr3Otn-akrg4IYw97r7Wi0FGXay4KJO-wcaqTVJiFpWej96_uET-52roqK/pubhtml';

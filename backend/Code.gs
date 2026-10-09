@@ -11,6 +11,7 @@ var BACKEND_FOLDER_ID = "1c3BoFGj_WD0v4JHi5kIoO324nt0t9IYC";
 var SPT_FOLDER_ID = "1jbLrjc3GvQWLGw5LZM6s6YPV8rEKiDsU"; // ID Folder Khusus Arsip Surat Tugas
 var CUTI_FOLDER_ID = "1EaJrRSKeRiSu6Dw_T0FeYF37Gtp5s_eh"; // ID Folder Khusus Arsip Cuti (Dari User)
 var TARGET_SPREADSHEET_ID = "1bIQbiWAQ67TYFmvb3WZkvjJaN1moP1fQlmegsFZJWfI"; // ID Spreadsheet Utama
+var JP_SPREADSHEET_ID = '1rhPuQqRDtR8U1aIwyJmJyTdw53nYTyUFfdNDjy_xMyE'; // Pemenuhan JP Bangdes, bukan ID publikasi 2PACX
 
 // ==========================================
 // 2. FUNGSI PEMBANTU
@@ -989,6 +990,10 @@ function doPost(e) {
     if (payload.action === 'proses_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     if (payload.action === 'list_periode_submisi') return json_(listSubmissionPeriods_(payload));
     lock.waitLock(30000);
+    // Read and mutate JP under the same lock so each revision is a coherent snapshot.
+    if (payload.action === 'list_pelatihan_jp') return json_(jpList_());
+    if (payload.action === 'tambah_pelatihan_jp') return json_(jpAdd_(payload));
+    if (payload.action === 'hapus_pelatihan_jp') return json_(jpDelete_(payload));
     if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
     if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) requireOpenSubmission_(payload);
     if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
@@ -1194,6 +1199,76 @@ function dashboardAgenda_(payload) {
 function periksaKoneksiAgendaDashboard() {
   var result = dashboardAgenda_({});
   Logger.log(JSON.stringify({tanggal:result.date, jumlahAgenda:result.events.length, peringatan:result.warning || 'Tidak ada'}));
+}
+
+// JP uses the existing deployment and employee login; legacy admin-read / browser roles
+// never authorize writes. The owner of this deployment needs Editor access to the JP book.
+function jpAdmin_(payload) {
+  var account = requireProfileSession_({sessionToken:payload.sessionToken});
+  if (!/^(admin|superadmin|superadministrator|administrator)$/.test(profileUser_(account).Akun_Role.toLowerCase().replace(/[^a-z]/g,''))) throw new Error('Hanya pegawai dengan Role Admin yang dapat mengubah data pelatihan.');
+  return account;
+}
+function jpState_() {
+  var book = SpreadsheetApp.openById(JP_SPREADSHEET_ID), sheet = book.getSheetByName('Backend');
+  if (!sheet || sheet.getSheetId() !== 0) throw new Error('Tab Backend pada spreadsheet JP tidak ditemukan.');
+  var rows = sheet.getDataRange().getValues();
+  if (JSON.stringify((rows[0] || []).slice(0,4).map(payrollHeader_)) !== JSON.stringify(['nama','sertifikasidiklat','tahun','jumlahjp'])) throw new Error('Periksa kolom A:D pada tab Backend: Nama, Sertifikasi / Diklat, Tahun, Jumlah JP.');
+  return {sheet:sheet, rows:rows, revision:digest_(JSON.stringify(rows))};
+}
+function jpResponse_(state) {
+  return {status:'success',jpVersion:1,revision:state.revision,training:state.rows.slice(1).map(function(row,i) {
+    var year=String(row[2] == null ? '' : row[2]).trim(), raw=String(row[3] == null ? '' : row[3]).trim().replace(/\s*JP$/i,'').trim();
+    return {id:'training-'+(i+2),sourceRow:i+2,name:text_(row[0]),nip:'',title:text_(row[1]),
+      year:/^(19|20|21)\d{2}$/.test(year)?Number(year):null,jp:/^\d+(?:[.,]\d+)?$/.test(raw)&&Number.isFinite(Number(raw.replace(',','.')))?Number(raw.replace(',','.')):null};
+  }).filter(function(row){return row.name||row.title||row.year!==null||row.jp!==null;})};
+}
+function jpList_() { return jpResponse_(jpState_()); }
+function jpExpected_(state,payload) {
+  if (!payload.expectedRevision || payload.expectedRevision !== state.revision) throw new Error('Data pelatihan telah berubah. Muat ulang data sebelum menyimpan atau menghapus.');
+}
+function jpCompact_(sheet) {
+  // Native row deletion shifts remaining records, including their formatting. Do not
+  // clear/rewrite the table or delete a row containing data in any other column.
+  var rows = sheet.getDataRange().getValues();
+  for(var i=rows.length-1;i>=1;i--) if(rows[i].every(function(value){return value === '' || value === null;})) sheet.deleteRow(i+1);
+}
+function jpLiteral_(value) { return /^[=+\-@']/.test(value) ? "'"+value : value; }
+function jpAdd_(payload) {
+  jpAdmin_(payload);
+  var state=jpState_(); jpExpected_(state,payload);
+  var account=employeeAccount_(nip_(payload.employeeNip)), name=profileUser_(account).Nama;
+  var title=String(payload.title||'').trim(), year=String(payload.year||'').trim(), raw=String(payload.jp == null ? '' : payload.jp).trim().replace(',','.');
+  if(!name || !/^\d{18}$/.test(account.nip))throw new Error('Pilih pegawai dari Data Pegawai.');
+  if(!title || title.length>1000)throw new Error('Nama sertifikat/pelatihan wajib diisi, maksimal 1000 karakter.');
+  if(!/^(19|20|21)\d{2}$/.test(year))throw new Error('Tahun pelaksanaan harus 4 angka antara 1900–2199.');
+  if(!/^\d+(?:\.\d{1,3})?$/.test(raw) || !Number.isFinite(Number(raw)))throw new Error('JP wajib berupa angka nol atau positif, maksimal 3 angka desimal.');
+  var row=state.sheet.getLastRow()+1;
+  if(row>state.sheet.getMaxRows())state.sheet.insertRowsAfter(state.sheet.getMaxRows(),1);
+  state.sheet.getRange(row,1,1,2).setNumberFormat('@');
+  state.sheet.getRange(row,1,1,4).setValues([[jpLiteral_(name),jpLiteral_(title),Number(year),Number(raw)]]);
+  SpreadsheetApp.flush();
+  jpCompact_(state.sheet);
+  SpreadsheetApp.flush();
+  return jpList_();
+}
+function jpDelete_(payload) {
+  var actor=jpAdmin_(payload), state=jpState_(); jpExpected_(state,payload);
+  var row=Number(payload.sourceRow);
+  if(!Number.isInteger(row)||row<2||row>state.rows.length||state.rows[row-1].slice(0,4).every(function(value){return value === '' || value === null;}))throw new Error('Baris pelatihan yang dipilih tidak valid.');
+  // Save the exact selected row before deleting. Recovery stays in the private master
+  // workbook, not the publicly published JP tabs. No PIN/session is ever backed up.
+  var master=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), backup=master.getSheetByName('JP_PELATIHAN_TERHAPUS');
+  if(!backup){backup=master.insertSheet('JP_PELATIHAN_TERHAPUS');backup.appendRow(['Dihapus','AdminNIP','BarisAsal','Revisi','DataJSON']);backup.hideSheet();}
+  var original=JSON.stringify(state.rows[row-1]), backupRow=backup.getLastRow()+1;
+  backup.getRange(backupRow,1,1,5).setValues([[new Date().toISOString(),actor.nip,row,state.revision,original]]);
+  SpreadsheetApp.flush();
+  if(backup.getRange(backupRow,5).getValue()!==original)throw new Error('Cadangan belum terverifikasi; pelatihan belum dihapus.');
+  // Check again after backup in case the spreadsheet was edited manually meanwhile.
+  jpExpected_(jpState_(),payload);
+  state.sheet.deleteRow(row);
+  jpCompact_(state.sheet);
+  SpreadsheetApp.flush();
+  return jpList_();
 }
 
 // Profile mutations authenticate the owner on the server, independently of browser role/NIP.
