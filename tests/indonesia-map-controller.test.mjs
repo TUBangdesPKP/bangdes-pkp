@@ -80,7 +80,10 @@ test('controller drills down, preserves focus when switching mode, resets, recov
     const map = state.maps[0];
     const oceanMask = state.groups.find(g => g.options.pane === 'countryMask');
     assert.equal(oceanMask.options.style.fillColor, '#287d92');
-    assert.equal(oceanMask.options.style.fillOpacity, 1, 'neighbouring countries stay hidden');
+    assert.equal(oceanMask.options.style.fillOpacity, 0.18, 'ocean relief remains visible through a subtle tint');
+    assert.equal(oceanMask.options.interactive, false, 'ocean and neighbouring land cannot capture province clicks');
+    assert.equal(state.tiles[0].options.className, 'physical-map-satellite-tiles');
+    assert.match(state.tiles[0].url, /BlueMarble_ShadedRelief_Bathymetry/);
     const provinceGroup = state.groups.find(g => g.data === provinces);
     const java = provinceGroup.layers.find(l => l.feature.properties.code === '32');
     assert.equal(map.active.has(state.tiles[0]),false,'palette must not request imagery');
@@ -118,6 +121,7 @@ test('controller drills down, preserves focus when switching mode, resets, recov
     state.tiles[0].events.tileerror();
     assert.equal(imageryErrors,1);
     assert.equal(map.active.has(state.tiles[0]),false);
+    assert.equal(map.active.has(oceanMask),false,'fallback must remove both satellite layers');
     assert.equal(map.active.has(regencyGroup),true);
     state.tiles[0].events.tileerror();
     assert.equal(imageryErrors,1);

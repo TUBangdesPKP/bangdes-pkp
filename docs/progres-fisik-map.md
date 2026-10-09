@@ -5,7 +5,7 @@ Lokasi: Monitoring Kinerja → Progres Fisik. Perubahan frontend saja; tidak mem
 ## Mode dan interaksi
 
 - **Peta** (default): vektor berwarna teal, sage, dan khaki. Warna hanya membedakan wilayah, bukan nilai progres.
-- **Satelit**: relief/citra statis NASA GIBS Blue Marble, dengan garis batas dan laut biru teal `#287d92`. Citra hanya ditampilkan di daratan Indonesia; negara tetangga tertutup mask. Bukan citra real-time atau bukti kemajuan proyek. Resolusi asli sampai zoom 8, diperbesar di atas level tersebut.
+- **Satelit**: relief/citra statis NASA GIBS Blue Marble, dengan garis batas dan relief dasar laut yang tetap terlihat. Tint biru teal `#287d92` beropasitas 18% menggantikan penutup laut yang sebelumnya solid. Warna citra disesuaikan ke nuansa biru-teal dengan filter CSS pada layer citra saja; batas, tooltip, kontrol, Peta dan Monokrom tidak ikut difilter. Daratan provinsi tidak ditimpa warna palet kecuali saat disorot. Negara tetangga dapat terlihat sebagai latar, tetapi navigasi tetap dibatasi pada cakupan Indonesia dan hanya wilayah Indonesia yang dapat dipilih. Bukan citra real-time atau bukti kemajuan proyek. Resolusi asli sampai zoom 8, diperbesar di atas level tersebut.
 - **Monokrom**: vektor abu-abu untuk latar visualisasi data mendatang.
 - Hover menampilkan nama; klik provinsi memfokuskan seluruh geometri provinsi termasuk pulau terpisah dan memuat batas kabupaten/kota. Klik kabupaten/kota memfokuskan wilayah tersebut.
 - Dropdown provinsi/kabupaten menyediakan alternatif keyboard/touch untuk wilayah kecil. Tombol Seluruh Indonesia mengembalikan tingkat nasional. Tombol target mengatur ulang cakupan wilayah aktif.
@@ -35,6 +35,8 @@ Jangan mengganti sumber tanpa menguji ulang cakupan, pemetaan kode, lisensi, dan
 ## Citra satelit
 
 Layer: `BlueMarble_ShadedRelief_Bathymetry`, WMTS EPSG:3857, `GoogleMapsCompatible_Level8`, endpoint NASA GIBS. Hanya mode Satelit yang meminta tile. Tidak menggunakan Esri karena akun/lisensi Esri tidak disediakan. Tidak mengunduh paket citra atau memerlukan API key.
+
+Referensi pengguna memakai basemap Esri; penyesuaian ini mendekatkan nuansa laut bertekstur dengan sumber NASA yang sudah digunakan, bukan mengklaim citra atau warna identik. Lapisan tint di luar Indonesia tetap non-interaktif dan ikut dilepas saat pindah mode atau saat citra gagal dimuat.
 
 - Dokumentasi: https://nasa-gibs.github.io/gibs-api-docs/
 - Kebijakan data: https://www.earthdata.nasa.gov/engage/open-data-services-software/data-use-policy

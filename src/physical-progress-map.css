@@ -20,6 +20,8 @@
 .physical-map-stage { position: relative; isolation: isolate; }
 .physical-map-canvas { width: 100%; height: clamp(440px,64vh,800px); background: radial-gradient(ellipse at center,#f4f8f7,#dbe9eb); font-family: inherit; }
 .physical-map-realistic .physical-map-canvas { background: var(--satellite-ocean); }
+/* Apply the ocean/earth colour grading to imagery only, never labels or boundaries. */
+.physical-map-realistic .physical-map-satellite-tiles { filter: hue-rotate(-18deg) saturate(.85) brightness(1.13) contrast(.92); }
 .physical-map-monochrome .physical-map-canvas { background: #f0f2f3; }
 .physical-map-monochrome .physical-map-breadcrumb { background: #343d44; }
 .physical-map-status { position: absolute; inset: 16px auto auto 50%; transform: translateX(-50%); z-index: 1000; display: flex; gap: 12px; align-items: center; max-width: calc(100% - 24px); padding: 12px 18px; border-radius: 12px; background: #ffffffed; box-shadow: 0 4px 16px #12374020; font-size: 13px; }

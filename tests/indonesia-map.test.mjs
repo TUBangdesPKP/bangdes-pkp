@@ -71,18 +71,27 @@ test('three modes share geometry, use distinct styles, and monochrome stays gray
   assert.equal(DEFAULT_MAP_MODE, 'palette');
   const normal = regionStyle('palette', '32');
   assert.notEqual(normal.fillColor, regionStyle('palette', '32', { highlighted: true }).fillColor);
-  assert.ok(regionStyle('realistic', '32').fillOpacity < 0.1);
+  assert.equal(regionStyle('realistic', '32').fillOpacity, 0, 'satellite land colours must not be covered by palette colours');
+  assert.equal(regionStyle('realistic', '32', { muted: true }).fillOpacity, 0);
+  assert.ok(regionStyle('realistic', '32', { highlighted: true }).fillOpacity > 0);
   assert.equal(regionStyle('monochrome', '32').fillColor, regionStyle('monochrome', '11').fillColor);
   assert.notEqual(normal.fillColor, regionStyle('monochrome', '32').fillColor);
   assert.equal(regionStyle('monochrome', '32', { highlighted: true }).color, '#15191c');
 });
 
-test('realistic mask reverses every land ring, not a bounding box that hides remote islands', () => {
+test('satellite ocean tint preserves every land ring including remote islands', () => {
   const mask = outsideIndonesiaMask(provinces);
   assert.equal(mask.geometry.type, 'Polygon');
   assert.equal(mask.geometry.coordinates.length, 19285);
   assert.deepEqual(mask.geometry.coordinates[0][0], [-180,-85]);
   assert.deepEqual(mask.geometry.coordinates[1], provinces.features[0].geometry.coordinates[0][0]);
+});
+
+test('satellite colour grading affects only imagery, not controls, boundaries or the other modes', () => {
+  const css = fs.readFileSync(new URL('../src/physical-progress-map.css', import.meta.url), 'utf8');
+  assert.match(css, /\.physical-map-realistic \.physical-map-satellite-tiles\s*\{\s*filter: hue-rotate\(-18deg\) saturate\(\.85\) brightness\(1\.13\) contrast\(\.92\)/);
+  assert.doesNotMatch(css, /\.physical-map-canvas\s*\{[^}]*filter:/);
+  assert.doesNotMatch(css, /\.physical-map-(?:palette|monochrome)[^{]*\{[^}]*filter:/);
 });
 
 test('boundary loader uses same-origin files, caches success, and loads only requested province', async () => {

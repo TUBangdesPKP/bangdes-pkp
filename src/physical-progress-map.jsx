@@ -116,7 +116,7 @@ export function PhysicalProgressMap() {
     </div>
     <details className="physical-map-sources"><summary>Sumber peta</summary>
       <p>Batas indikatif: <a href="https://github.com/AlfianAliM/Indonesia-GeoJSON" target="_blank" rel="noreferrer">Peta Nusa / Laravel Nusa</a> (38 provinsi, 514 kabupaten/kota; snapshot Februari 2026). Pulau-pulau kecil yang tersedia pada sumber tetap dipertahankan; perbesar peta untuk melihatnya. Bukan rujukan penetapan batas resmi.</p>
-      <p>Mode Satelit: <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS / Blue Marble</a>, citra relief statis dengan detail terbatas saat diperbesar, bukan citra langsung atau data progres pembangunan.</p>
+      <p>Mode Satelit: <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS / Blue Marble</a>, citra relief daratan dan dasar laut dengan penyesuaian warna. Wilayah sekitar hanya sebagai latar; pilihan wilayah tetap Indonesia. Citra statis dengan detail terbatas saat diperbesar, bukan citra langsung atau data progres pembangunan.</p>
     </details>
   </section>;
 }

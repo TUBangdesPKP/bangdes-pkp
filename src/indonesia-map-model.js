@@ -5,6 +5,8 @@ export const MAP_MODES = [
 ];
 export const DEFAULT_MAP_MODE = 'palette';
 export const SATELLITE_OCEAN_COLOR = '#287d92';
+// A light tint preserves the underlying bathymetry instead of painting over it.
+export const SATELLITE_OCEAN_TINT_OPACITY = 0.18;
 export const MAP_DATA_VERSION = '169e53b2';
 export const IMAGERY_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg';
 export const MAP_COLORS = ['#6b9da5', '#9cb9b6', '#d7c78b', '#b9cacc', '#7e9f90', '#e4dab2'];
@@ -17,7 +19,7 @@ export function regionStyle(mode, code, { highlighted = false, muted = false, di
     weight: highlighted ? 2.5 : district ? 1.2 : 1.5,
     opacity: muted ? 0.4 : 1,
     fillColor: highlighted ? (monochrome ? '#6e777e' : '#d7c78b') : monochrome ? '#dce0e3' : MAP_COLORS[index],
-    fillOpacity: muted ? 0.15 : mode === 'realistic' ? (highlighted ? 0.35 : 0.06) : highlighted ? 0.95 : 0.9,
+    fillOpacity: mode === 'realistic' ? (highlighted ? 0.25 : 0) : muted ? 0.15 : highlighted ? 0.95 : 0.9,
   };
 }
 
@@ -36,7 +38,8 @@ export function regionBounds(featureOrCollection) {
   return bounds;
 }
 
-// Inverse land mask: imagery is visible in Indonesia only, never in neighbouring countries.
+// Inverse land tint: keep Indonesia un-tinted while allowing ocean relief and
+// neighbouring land to remain visible as non-interactive geographic context.
 export function outsideIndonesiaMask(provinces) {
   const rings = [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]];
   for (const feature of provinces.features) {
