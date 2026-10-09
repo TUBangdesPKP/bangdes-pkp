@@ -1510,6 +1510,7 @@ function saveFinal_(payload) {
   var schedules = validateSchedules_(payload.schedules || savedSchedules_(state.saved, result), result);
   result = result.map(function(row) { return Object.assign({}, row, { jamKerja: schedules[row.tanggal] }); });
   var corrections = validateAdjustments_(state, result, payload.adjustments || {});
+  var evidenceNames = adjustmentEvidenceNamePlan_(state, corrections);
   result = applyAdjustments_(result, corrections);
   result = result.map(function(row){return Object.assign({},row,{datang:normalizedClock_(row.datang),pulang:normalizedClock_(row.pulang)});});
   // Financial inputs are read on the server, never accepted from a browser payload.
@@ -1536,6 +1537,7 @@ function saveFinal_(payload) {
   // Only metadata, not a second copy of daily attendance in the master spreadsheet.
   state.saved.baseline.getRange(1, 3).setValue(new Date().toISOString());
   saveAdjustments_(state, corrections);
+  renameAdjustmentEvidence_(state, evidenceNames);
   writeCalculationMaster_(state.record, calculation, note);
   SpreadsheetApp.flush();
   var revision = markProcessed_(payload, decisions, state);
@@ -1972,6 +1974,49 @@ function normalizedClock_(value) {
   return minutes===null?'-':attendanceClock_(minutes);
 }
 var ADJUSTMENT_HEADERS = ['Modul','NIP','Periode','SpreadsheetId','Tanggal','Presensi','JamKoreksi','FileId','Status','Diperbarui'];
+function adjustmentEvidenceNamePlan_(state, corrections) {
+  var datesByFile={}, entries=registryRows_();
+  Object.keys(corrections).sort().forEach(function(date){
+    Object.keys(corrections[date]).forEach(function(punch){
+      var id=corrections[date][punch].fileId;
+      if(!datesByFile[id])datesByFile[id]=[];
+      if(datesByFile[id].indexOf(date)<0)datesByFile[id].push(date);
+    });
+  });
+  function namePart(value){return text_(value).replace(/[\\/:*?"<>|\x00-\x1f]/g,' ').replace(/\s+/g,' ').trim();}
+  return Object.keys(datesByFile).map(function(id){
+    var matches=entries.filter(function(entry){return entry.fileId===id&&entry.status==='active';});
+    if(matches.length!==1||!sameScope_(matches[0],state.record)||matches[0].jenisDokumen!=='lupa_absen')throw new Error('Surat lupa absen tidak unik atau bukan milik submisi ini.');
+    var entry=matches[0], file=liveAttachment_(entry);
+    if(!file)throw new Error('Surat lupa absen tidak tersedia untuk penamaan.');
+    var original=file.getName(), extension=original.match(/\.(pdf|png|jpe?g)$/i);
+    if(!extension)throw new Error('Ekstensi surat lupa absen harus PDF/JPG/PNG.');
+    return {file:file,fileId:id,row:entry.row,oldName:original,oldRegistryName:entry.fileName,
+      name:'Lupa Absen_'+namePart(state.record.nip)+'_'+namePart(state.record.nama)+'_'+datesByFile[id].join('+')+extension[0]};
+  });
+}
+function renameAdjustmentEvidence_(state, plans) {
+  if(!plans.length)return;
+  var sheet=registry_(false), attempted=[];
+  try {
+    plans.forEach(function(plan){
+      if(plan.oldName===plan.name&&plan.oldRegistryName===plan.name)return;
+      attempted.push(plan);
+      if(plan.oldName!==plan.name)plan.file.setName(plan.name);
+      if(plan.oldRegistryName!==plan.name)sheet.getRange(plan.row,8).setValue(plan.name);
+    });
+    SpreadsheetApp.flush();
+  } catch(error) {
+    var failed=false;
+    attempted.reverse().forEach(function(plan){
+      try { if(plan.file.getName()!==plan.oldName)plan.file.setName(plan.oldName); } catch(rollbackError){failed=true;}
+      try { sheet.getRange(plan.row,8).setValue(plan.oldRegistryName); } catch(rollbackError){failed=true;}
+    });
+    throw new Error(failed?'Penamaan bukti gagal dan pemulihan nama belum lengkap. Hubungi Admin untuk memeriksa file.':'Penamaan bukti gagal; nama sebelumnya dipulihkan. Muat ulang preview sebelum submit kembali.');
+  }
+  // Keep the processed revision, response and registry consistent with Drive.
+  plans.forEach(function(plan){state.documents.forEach(function(doc){if(doc.fileId===plan.fileId)doc.fileName=plan.name;});});
+}
 function adjustmentSheet_(create) {
   var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet = book.getSheetByName('ADJUSTMENT_PRESENSI');
   if (!sheet && create) { sheet = book.insertSheet('ADJUSTMENT_PRESENSI'); sheet.appendRow(ADJUSTMENT_HEADERS); sheet.setFrozenRows(1); }

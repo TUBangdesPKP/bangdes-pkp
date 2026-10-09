@@ -63,6 +63,7 @@ function fixture() {
     getId() { return this.id; } getName() { return this.name; } getUrl() { return `https://drive.google.com/file/d/${this.id}/view`; }
     getMimeType() { return this.mime; } isTrashed() { return this.trashed; }
     setContent(content) { this.content = content; return this; }
+    setName(name) { this.name = name; return this; }
     getParents() { return iterator(this.parent ? [this.parent] : []); }
     setTrashed(value) { this.trashed = value; return this; } setSharing() { return this; }
     makeCopy(name, parent) {
@@ -1222,6 +1223,59 @@ test('new summary columns append without overwriting custom formulas/headers', (
 });
 
 const uploadExtra = (f, extra = {}) => f.call({action:'upload_pendukung_lain',jenisDokumen:'lupa_absen',fileName:'Surat.pdf',fileBase64:Buffer.from('%PDF-test').toString('base64'),requestId:'extra-1',...extra});
+
+test('tab 4 save names adjustment evidence from saved NIP/name and corrected dates without replacing files', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[8][3]='-';
+    const doc=uploadExtra(f,{modul,fileName:'Surat.PNG'}).document;
+    const untouched=uploadExtra(f,{modul,requestId:'unused'}).document;
+    const file=f.files.get(doc.fileId), parent=file.parent, oldName=file.name, count=f.files.size;
+    const preview=f.call({action:'proses_bukti',modul});
+    assert.equal(file.name,oldName);assert.equal(preview.status,'success');
+    const corrections={'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}};
+    const saved=f.call({action:'simpan_rekap_final',modul,confirmed:true,revision:preview.revision,adjustments:corrections});
+    assert.equal(saved.status,'success',saved.message);
+    const prefix=`Lupa Absen_${f.scope.nip}_${f.scope.nama}_`;
+    assert.equal(file.name,prefix+'2026-07-06.png');assert.equal(file.parent,parent);assert.equal(file.trashed,false);
+    assert.equal(saved.adjustmentDocuments.find(d=>d.fileId===doc.fileId).fileName,file.name);
+    const listed=f.call({action:'list_pendukung',modul});
+    assert.equal(listed.processed,true);assert.equal(listed.documents.find(d=>d.fileId===doc.fileId).fileUrl,doc.fileUrl);
+    assert.equal(listed.documents.find(d=>d.fileId===untouched.fileId).fileName,untouched.fileName);
+    assert.equal(f.call({action:'preview_rekap_final',modul}).revision,saved.revision);
+    corrections['2026-07-07']={datang:{fileId:doc.fileId,time:'07:30'}};
+    const multi=confirmRecap(f,corrections,{modul});assert.equal(multi.status,'success',multi.message);
+    assert.equal(file.name,prefix+'2026-07-06+2026-07-07.png');
+    const countAfterSave=f.files.size;
+    assert.equal(confirmRecap(f,corrections,{modul}).status,'success');
+    assert.equal(f.files.size,countAfterSave);assert.ok(f.files.size>=count); // calculation note only, no evidence copy
+    assert.equal(f.context.registryRows_().find(row=>row.fileId===doc.fileId).fileName,file.name);
+  }
+});
+
+test('invalid tab 4 corrections never rename evidence', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';
+  const doc=uploadExtra(f).document, file=f.files.get(doc.fileId), original=file.name;
+  const preview=f.call({action:'proses_bukti'});
+  for(const extra of [{confirmed:false},{revision:'stale'},{adjustments:{'2026-07-06':{datang:{fileId:'foreign',time:'07:30'}}}}]) {
+    const result=f.call({action:'simpan_rekap_final',confirmed:true,revision:preview.revision,adjustments:{'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}},...extra});
+    assert.equal(result.status,'error');assert.equal(file.name,original);
+    assert.equal(f.context.registryRows_().find(row=>row.fileId===doc.fileId).fileName,original);
+  }
+});
+
+test('failed Drive rename restores earlier evidence names and registry names without deleting files', () => {
+  const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[8][3]='-';
+  const a=uploadExtra(f).document,b=uploadExtra(f,{requestId:'second'}).document;
+  const first=f.files.get(a.fileId), second=f.files.get(b.fileId), originalA=first.name, originalB=second.name;
+  second.setName=()=>{throw Error('Simulated Drive failure');};
+  const result=confirmRecap(f,{'2026-07-06':{datang:{fileId:a.fileId,time:'07:30'}},'2026-07-07':{datang:{fileId:b.fileId,time:'07:30'}}});
+  assert.equal(result.status,'error');assert.match(result.message,/nama sebelumnya dipulihkan/);
+  assert.equal(first.name,originalA);assert.equal(second.name,originalB);
+  for(const doc of [a,b]){
+    assert.equal(f.context.registryRows_().find(row=>row.fileId===doc.fileId).fileName,doc.fileName);
+    assert.equal(f.files.get(doc.fileId).trashed,false);
+  }
+});
 const confirmRecap = (f, adjustments = {}, extra = {}) => {
   const p=f.call({action:'proses_bukti',...extra});
   assert.equal(p.status,'success',p.message);
