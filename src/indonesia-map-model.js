@@ -1,9 +1,10 @@
 export const MAP_MODES = [
-  { id: 'realistic', label: 'Realistis' },
-  { id: 'palette', label: 'Palet Aplikasi' },
+  { id: 'realistic', label: 'Satelit' },
+  { id: 'palette', label: 'Peta' },
   { id: 'monochrome', label: 'Monokrom' },
 ];
 export const DEFAULT_MAP_MODE = 'palette';
+export const SATELLITE_OCEAN_COLOR = '#287d92';
 export const MAP_DATA_VERSION = '169e53b2';
 export const IMAGERY_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg';
 export const MAP_COLORS = ['#6b9da5', '#9cb9b6', '#d7c78b', '#b9cacc', '#7e9f90', '#e4dab2'];

@@ -78,6 +78,9 @@ test('controller drills down, preserves focus when switching mode, resets, recov
       onImageryError: () => imageryErrors++,
     });
     const map = state.maps[0];
+    const oceanMask = state.groups.find(g => g.options.pane === 'countryMask');
+    assert.equal(oceanMask.options.style.fillColor, '#287d92');
+    assert.equal(oceanMask.options.style.fillOpacity, 1, 'neighbouring countries stay hidden');
     const provinceGroup = state.groups.find(g => g.data === provinces);
     const java = provinceGroup.layers.find(l => l.feature.properties.code === '32');
     assert.equal(map.active.has(state.tiles[0]),false,'palette must not request imagery');
@@ -104,6 +107,7 @@ test('controller drills down, preserves focus when switching mode, resets, recov
     for (const mode of ['realistic','monochrome','palette']) {
       controller.setMode(mode);
       assert.equal(map.active.has(state.tiles[0]),mode==='realistic');
+      assert.equal(map.active.has(oceanMask),mode==='realistic','ocean styling stays scoped to satellite mode');
       assert.equal(map.active.has(regencyGroup),true);
       assert.equal(map.fits.length,focusedFits,'mode switch must preserve focus');
       assert.equal(district.style.weight,2.5,'selected district remains highlighted');

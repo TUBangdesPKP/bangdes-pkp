@@ -1,7 +1,7 @@
 // Imported only when Progres Fisik is opened. Leaflet never runs during SSR.
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { DEFAULT_MAP_MODE, IMAGERY_URL, outsideIndonesiaMask, regionBounds, regionStyle } from './indonesia-map-model.js';
+import { DEFAULT_MAP_MODE, IMAGERY_URL, SATELLITE_OCEAN_COLOR, outsideIndonesiaMask, regionBounds, regionStyle } from './indonesia-map-model.js';
 
 export function createIndonesiaMap(element, provinces, { onProvinceSelect, onDistrictSelect, onImageryError }) {
   let mode = DEFAULT_MAP_MODE;
@@ -26,7 +26,7 @@ export function createIndonesiaMap(element, provinces, { onProvinceSelect, onDis
   map.getPane('countryMask').style.pointerEvents = 'none';
   const mask = L.geoJSON(outsideIndonesiaMask(provinces), {
     pane: 'countryMask', interactive: false, renderer: L.canvas({ pane: 'countryMask', padding: 0.5 }),
-    style: { stroke: false, fillColor: '#dbe9eb', fillOpacity: 1, fillRule: 'evenodd' },
+    style: { stroke: false, fillColor: SATELLITE_OCEAN_COLOR, fillOpacity: 1, fillRule: 'evenodd' },
   });
   const imagery = L.tileLayer(IMAGERY_URL, {
     attribution: '<a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener noreferrer">NASA GIBS / Blue Marble</a>',

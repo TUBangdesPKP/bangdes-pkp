@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Earth, LocateFixed, MapPinned, Palette, RotateCcw, Scan } from 'lucide-react';
-import { createBoundaryLoader, DEFAULT_MAP_MODE, MAP_MODES } from './indonesia-map-model.js';
+import { Earth, LocateFixed, Map, MapPinned, RotateCcw, Satellite, Scan } from 'lucide-react';
+import { createBoundaryLoader, DEFAULT_MAP_MODE, MAP_MODES, SATELLITE_OCEAN_COLOR } from './indonesia-map-model.js';
 import './physical-progress-map.css';
 
 const loadBoundaries = createBoundaryLoader(undefined, import.meta.env.BASE_URL);
-const modeIcons = { realistic: Earth, palette: Palette, monochrome: Scan };
+const modeIcons = { realistic: Satellite, palette: Map, monochrome: Scan };
 
 function useBoundaries(provinceCode, retry, enabled = true) {
   const [result, setResult] = useState({ key: null, data: null, error: '' });
@@ -63,7 +63,7 @@ export function PhysicalProgressMap() {
   const retryLoading = () => { setMapError(''); setController(null); setRetry(value => value + 1); };
   const error = mapError || provinces.error || districts.error;
   const loading = !error && (!controller || (!!provinceCode && !districts.data));
-  return <section className={`physical-map-page physical-map-${mode}`} aria-labelledby="physical-map-title">
+  return <section className={`physical-map-page physical-map-${mode}`} style={{ '--satellite-ocean': SATELLITE_OCEAN_COLOR }} aria-labelledby="physical-map-title">
     <div className="physical-map-header">
       <div>
         <div className="physical-map-eyebrow"><MapPinned size={16} aria-hidden="true"/> PROGRES FISIK</div>
@@ -108,7 +108,7 @@ export function PhysicalProgressMap() {
           {error ? <><span>{error}</span><button type="button" onClick={retryLoading}><RotateCcw size={16}/> Coba lagi</button></> : <><span className="physical-map-spinner"/>{provinceCode ? 'Memuat batas kabupaten / kota…' : 'Memuat peta Indonesia…'}</>}
         </div>}
       </div>
-      {imageryError && <div className="physical-map-warning" role="status">Citra satelit tidak tersedia. Peta tetap dapat digunakan dalam mode Palet Aplikasi.</div>}
+      {imageryError && <div className="physical-map-warning" role="status">Citra satelit tidak tersedia. Peta tetap dapat digunakan dalam mode Peta.</div>}
       <div className="physical-map-footer">
         <span>Arahkan kursor untuk melihat nama wilayah. Klik provinsi untuk membuka kabupaten / kota.</span>
         <span className="physical-map-legend"><i aria-hidden="true"/> {provinceCode ? 'Batas kabupaten / kota' : 'Batas provinsi'}</span>
@@ -116,7 +116,7 @@ export function PhysicalProgressMap() {
     </div>
     <details className="physical-map-sources"><summary>Sumber peta</summary>
       <p>Batas indikatif: <a href="https://github.com/AlfianAliM/Indonesia-GeoJSON" target="_blank" rel="noreferrer">Peta Nusa / Laravel Nusa</a> (38 provinsi, 514 kabupaten/kota; snapshot Februari 2026). Pulau-pulau kecil yang tersedia pada sumber tetap dipertahankan; perbesar peta untuk melihatnya. Bukan rujukan penetapan batas resmi.</p>
-      <p>Mode Realistis: <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS / Blue Marble</a>, citra relief statis dengan detail terbatas saat diperbesar, bukan citra langsung atau data progres pembangunan.</p>
+      <p>Mode Satelit: <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noreferrer">NASA GIBS / Blue Marble</a>, citra relief statis dengan detail terbatas saat diperbesar, bukan citra langsung atau data progres pembangunan.</p>
     </details>
   </section>;
 }

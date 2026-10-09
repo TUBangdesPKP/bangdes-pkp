@@ -67,7 +67,7 @@ test('six Papua provinces have their own districts after the administrative spli
 });
 
 test('three modes share geometry, use distinct styles, and monochrome stays grayscale', () => {
-  assert.deepEqual(MAP_MODES.map(m => m.label), ['Realistis','Palet Aplikasi','Monokrom']);
+  assert.deepEqual(MAP_MODES.map(m => m.label), ['Satelit','Peta','Monokrom']);
   assert.equal(DEFAULT_MAP_MODE, 'palette');
   const normal = regionStyle('palette', '32');
   assert.notEqual(normal.fillColor, regionStyle('palette', '32', { highlighted: true }).fillColor);
@@ -128,5 +128,7 @@ test('map shell renders without browser APIs and offers accessible mode and regi
   assert.match(html, /Seluruh Indonesia/);
   assert.match(html, /role="status"/);
   assert.match(html, /38 provinsi/);
+  assert.match(html, /--satellite-ocean:#287d92/);
+  assert.doesNotMatch(html, /Realistis|Palet Aplikasi/);
   assert.doesNotMatch(html, /10\.493|100%|service_role|supabase/);
 });

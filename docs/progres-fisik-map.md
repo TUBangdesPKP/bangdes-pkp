@@ -4,8 +4,8 @@ Lokasi: Monitoring Kinerja → Progres Fisik. Perubahan frontend saja; tidak mem
 
 ## Mode dan interaksi
 
-- **Palet Aplikasi** (default): vektor berwarna teal, sage, dan khaki. Warna hanya membedakan wilayah, bukan nilai progres.
-- **Realistis**: relief/citra statis NASA GIBS Blue Marble, dengan garis batas. Citra hanya ditampilkan di daratan Indonesia; negara tetangga tertutup mask. Bukan citra real-time atau bukti kemajuan proyek. Resolusi asli sampai zoom 8, diperbesar di atas level tersebut.
+- **Peta** (default): vektor berwarna teal, sage, dan khaki. Warna hanya membedakan wilayah, bukan nilai progres.
+- **Satelit**: relief/citra statis NASA GIBS Blue Marble, dengan garis batas dan laut biru teal `#287d92`. Citra hanya ditampilkan di daratan Indonesia; negara tetangga tertutup mask. Bukan citra real-time atau bukti kemajuan proyek. Resolusi asli sampai zoom 8, diperbesar di atas level tersebut.
 - **Monokrom**: vektor abu-abu untuk latar visualisasi data mendatang.
 - Hover menampilkan nama; klik provinsi memfokuskan seluruh geometri provinsi termasuk pulau terpisah dan memuat batas kabupaten/kota. Klik kabupaten/kota memfokuskan wilayah tersebut.
 - Dropdown provinsi/kabupaten menyediakan alternatif keyboard/touch untuk wilayah kecil. Tombol Seluruh Indonesia mengembalikan tingkat nasional. Tombol target mengatur ulang cakupan wilayah aktif.
@@ -32,9 +32,9 @@ node scripts/prepare-indonesia-map.mjs "C:/path/to/source"
 
 Jangan mengganti sumber tanpa menguji ulang cakupan, pemetaan kode, lisensi, dan geometri. Skrip tidak mengakses atau mengubah data pegawai.
 
-## Citra realistis
+## Citra satelit
 
-Layer: `BlueMarble_ShadedRelief_Bathymetry`, WMTS EPSG:3857, `GoogleMapsCompatible_Level8`, endpoint NASA GIBS. Hanya mode Realistis yang meminta tile. Tidak menggunakan Esri karena akun/lisensi Esri tidak disediakan. Tidak mengunduh paket citra atau memerlukan API key.
+Layer: `BlueMarble_ShadedRelief_Bathymetry`, WMTS EPSG:3857, `GoogleMapsCompatible_Level8`, endpoint NASA GIBS. Hanya mode Satelit yang meminta tile. Tidak menggunakan Esri karena akun/lisensi Esri tidak disediakan. Tidak mengunduh paket citra atau memerlukan API key.
 
 - Dokumentasi: https://nasa-gibs.github.io/gibs-api-docs/
 - Kebijakan data: https://www.earthdata.nasa.gov/engage/open-data-services-software/data-use-policy
@@ -42,7 +42,7 @@ Layer: `BlueMarble_ShadedRelief_Bathymetry`, WMTS EPSG:3857, `GoogleMapsCompatib
 
 We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).
 
-Jika tile gagal, aplikasi berpindah ke palet dengan notifikasi; batas dan interaksi tetap dapat digunakan. Jika batas gagal, tampil Coba lagi. Respons provinsi lama dibatalkan/diabaikan saat pengguna cepat berganti pilihan.
+Jika tile gagal, aplikasi berpindah ke mode Peta dengan notifikasi; batas dan interaksi tetap dapat digunakan. Jika batas gagal, tampil Coba lagi. Respons provinsi lama dibatalkan/diabaikan saat pengguna cepat berganti pilihan.
 
 ## Verifikasi
 
