@@ -11,6 +11,7 @@ import { AccountActivation } from './account-activation.jsx';
 import { MyProfile } from './my-profile.jsx';
 import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
+import { FaqManager } from './faq-manager.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { KepegawaianPage } from './kepegawaian.jsx';
@@ -29,7 +30,7 @@ import { useCutiCalendar } from './use-cuti-calendar.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  FileText, HelpCircle, MessageCircle, User, ChevronRight,
+  FileText, MessageCircle, User, ChevronRight,
   FileBarChart, ArrowLeft, Search, Briefcase, CheckCircle2, AlertCircle, 
   Calendar, Clock, LogOut, FileCheck, KeyRound, RotateCcw, UploadCloud, 
   FileSpreadsheet, Trash2, Users, Edit3, Save, X, Eye, MapPin, 
@@ -1244,9 +1245,7 @@ export const Header = ({ navigate, loggedInUser, onLogoutRequest, currentView })
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
         </button>
-        <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
-          <HelpCircle size={16} /> FAQ
-        </button>
+        <FaqManager loadPeople={fetchPegawaiData}/>
       </nav>
 
       <div className="flex items-center justify-self-end gap-3 lg:col-start-3 lg:row-start-1">
