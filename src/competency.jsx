@@ -75,7 +75,6 @@ export function CompetencyPage({loadPeople, loadTraining = loadCompetencyTrainin
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {controller.abort(); reject(new Error('Waktu pemuatan habis.'));}, 30000);
     });
-    setState(previous => ({...previous, loading: true, error: ''}));
     Promise.race([Promise.all([loadPeople(true), loadTraining({signal: controller.signal})]), timeout]).then(([people, training]) => {
       if (people.source === 'empty' || !Array.isArray(people.data) || !people.data.length) throw new Error('Data induk pegawai belum dapat dimuat.');
       if (!cancelled) setState({data: {people: people.data, training, source: people.source}, loading: false, error: ''});
@@ -86,7 +85,7 @@ export function CompetencyPage({loadPeople, loadTraining = loadCompetencyTrainin
   }, [loadPeople, loadTraining, reload]);
   return <section className="max-w-[1600px] mx-auto p-4 md:p-8 pb-12 text-slate-800" aria-label="Pemenuhan Kompetensi Pegawai">
     <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 className="text-xl font-extrabold text-[#084C61]">Pemenuhan Kompetensi / JP</h2><p className="mt-1 text-sm text-slate-500">Rekap pelatihan dan pemenuhan minimal {JP_TARGET} JP per tahun.</p></div>
-      <button type="button" disabled={state.loading} onClick={() => setReload(value => value + 1)} className="inline-flex gap-2 items-center text-xs border rounded-xl bg-white px-3 py-2 disabled:opacity-50"><RefreshCw size={15}/>Muat ulang data</button>
+      <button type="button" disabled={state.loading} onClick={() => {setState(previous => ({...previous, loading: true, error: ''})); setReload(value => value + 1);}} className="inline-flex gap-2 items-center text-xs border rounded-xl bg-white px-3 py-2 disabled:opacity-50"><RefreshCw size={15}/>Muat ulang data</button>
     </div>
     {state.loading && <p role="status" className="py-5 text-sm">Memuat data pegawai dan pelatihan...</p>}
     {!!state.error && <p role="alert" className="p-4 bg-red-50 text-red-700 rounded-xl mt-4">{state.error}{state.data && ' Tampilan di bawah masih menggunakan hasil pemuatan sebelumnya.'}</p>}
