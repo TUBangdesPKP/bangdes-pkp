@@ -992,6 +992,7 @@ function doPost(e) {
     lock.waitLock(30000);
     // Read and mutate JP under the same lock so each revision is a coherent snapshot.
     if (payload.action === 'list_pelatihan_jp') return json_(jpList_());
+    if (payload.action === 'rekap_cuti_kepegawaian') return json_(personnelLeaveRecap_());
     if (payload.action === 'tambah_pelatihan_jp') return json_(jpAdd_(payload));
     if (payload.action === 'hapus_pelatihan_jp') return json_(jpDelete_(payload));
     if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
@@ -1078,7 +1079,7 @@ function agendaSheetRows_(csv) {
   if (/^\s*</.test(csv)) throw new Error('Sumber agenda bukan CSV.');
   var rows = Utilities.parseCsv(csv.replace(/^\uFEFF/,''));
   var header = rows.findIndex(function(row) {
-    return /tanggal/i.test(row[0]) && /^waktu$/i.test(String(row[3]).trim()) && /agenda/i.test(row[5]) && /dispo/i.test(row[6]);
+    return /tanggal/i.test(row[0]) && /^waktu(?:\s+pelaksanaan)?$/i.test(String(row[3]).trim()) && /agenda/i.test(row[5]) && /dispo/i.test(row[6]);
   });
   if (header < 0) throw new Error('Kolom sumber agenda berubah.');
   var currentDate = '', result = [];
@@ -1086,7 +1087,8 @@ function agendaSheetRows_(csv) {
     // Merged date cells export as blank on subsequent rows in the same date group.
     if (String(row[0] || '').trim()) currentDate = agendaSheetDate_(row[0]);
     if (!currentDate || !String(row[5] || '').trim()) return;
-    result.push({date:currentDate, titleKey:agendaTitleKey_(row[5]), time:agendaClock_(row[3]), location:agendaPlain_(row[4]), disposition:agendaPlain_(row[6])});
+    // Keep the original displayed time separately from the clock used to match duplicates.
+    result.push({date:currentDate, titleKey:agendaTitleKey_(row[5]), time:agendaClock_(row[3]), timeLabel:String(row[3] || '').trim(), location:agendaPlain_(row[4]), disposition:agendaPlain_(row[6])});
   });
   return result;
 }
@@ -1156,7 +1158,7 @@ function agendaEventTime_(event) {
 function dashboardAgenda_(payload) {
   var date = payload.date == null ? Utilities.formatDate(new Date(), AGENDA_ZONE, 'yyyy-MM-dd') : agendaIsoDate_(payload.date);
   if (!date) throw new Error('Tanggal agenda tidak valid. Gunakan YYYY-MM-DD.');
-  var cache = CacheService.getScriptCache(), cacheKey = 'dashboard-agenda-v1:' + date, cached = cache.get(cacheKey);
+  var cache = CacheService.getScriptCache(), cacheKey = 'dashboard-agenda-v2:' + date, cached = cache.get(cacheKey);
   if (cached) { try { return JSON.parse(cached); } catch (_) { /* Refetch invalid cache. */ } }
   var next = new Date(date + 'T00:00:00Z'); next.setUTCDate(next.getUTCDate() + 1);
   var options = {timeMin:date + 'T00:00:00+07:00', timeMax:next.toISOString().slice(0,10) + 'T00:00:00+07:00', singleEvents:true, showDeleted:false, orderBy:'startTime', timeZone:AGENDA_ZONE, maxResults:2500};
@@ -1183,11 +1185,11 @@ function dashboardAgenda_(payload) {
     var response = UrlFetchApp.fetch(AGENDA_SHEET_CSV, {muteHttpExceptions:true});
     if (response.getResponseCode() !== 200) throw new Error('Spreadsheet tidak tersedia.');
     rows = agendaSheetRows_(response.getContentText());
-  } catch (_) { warning = 'Agenda Calendar tersedia, tetapi Disposisi dari spreadsheet belum dapat dimuat.'; }
+  } catch (_) { warning = 'Agenda Calendar tersedia, tetapi waktu pelaksanaan dan Disposisi dari spreadsheet belum dapat dimuat. Waktu mengikuti Calendar.'; }
   var result = {status:'success', agendaVersion:1, date:date, timeZone:AGENDA_ZONE, updatedAt:new Date().toISOString(), events:events.map(function(event) {
     var match = agendaMatch_(event, rows);
     if (!match) unmatched++;
-    return {id:String(event.id), title:agendaPlain_(event.summary) || 'Tanpa judul', time:agendaEventTime_(event), location:agendaPlain_(event.location) || (match ? match.location : ''), disposition:match ? match.disposition : '', files:agendaFiles_(event)};
+    return {id:String(event.id), title:agendaPlain_(event.summary) || 'Tanpa judul', time:match && match.timeLabel ? match.timeLabel : agendaEventTime_(event), location:agendaPlain_(event.location) || (match ? match.location : ''), disposition:match ? match.disposition : '', files:agendaFiles_(event)};
   })};
   result.warning = warning || (unmatched ? unmatched + ' agenda belum cocok dengan spreadsheet; Disposisi yang belum cocok ditampilkan sebagai belum tersedia.' : '');
   // Cache only the public whitelist, never the raw Calendar/CSV response. Failure is non-fatal.
@@ -1199,6 +1201,34 @@ function dashboardAgenda_(payload) {
 function periksaKoneksiAgendaDashboard() {
   var result = dashboardAgenda_({});
   Logger.log(JSON.stringify({tanggal:result.date, jumlahAgenda:result.events.length, peringatan:result.warning || 'Tidak ada'}));
+}
+
+// Public personnel view exposes totals only, never leave letters, dates, or reasons.
+// The recorded days/year are authoritative; this is not a leave-entitlement calculator.
+function personnelLeaveRecap_() {
+  var sheet=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('REKAP_CUTI');
+  if(!sheet)throw new Error('Sheet REKAP_CUTI belum tersedia.');
+  var rows=sheet.getRange(1,1,Math.max(1,sheet.getLastRow()),9).getValues(), headers=rows[0].map(payrollHeader_);
+  function column(names){for(var i=0;i<names.length;i++){var c=headers.indexOf(names[i]);if(c>=0)return c;}throw new Error('Kolom rekap cuti tidak lengkap: '+names[0]);}
+  var nipCol=column(['nip']),typeCol=column(['jeniscuti']),daysCol=column(['jumlahharicuti','jumlahhari']),yearCol=column(['tahun']);
+  var groups=Object.create(null), invalidRows=0, missingYears=0;
+  rows.slice(1).forEach(function(row){
+    if(row.every(function(value){return value===''||value===null;}))return;
+    var nip=nip_(row[nipCol]), raw=String(row[daysCol]==null?'':row[daysCol]).trim().replace(/\s*hari$/i,'').trim();
+    if(!/^\d{18}$/.test(nip)||!/^\d+(?:[.,]\d+)?$/.test(raw)||!Number.isFinite(Number(raw.replace(',','.')))){invalidRows++;return;}
+    var type=text_(row[typeCol]).replace(/\s+/g,' ').trim(), key=type.toLowerCase();
+    var types={'cuti tahunan':'Cuti Tahunan','tahunan':'Cuti Tahunan','cuti sakit':'Cuti Sakit','sakit':'Cuti Sakit',
+      'cuti karena alasan penting':'Cuti Karena Alasan Penting','cuti alasan penting':'Cuti Karena Alasan Penting','alasan penting':'Cuti Karena Alasan Penting',
+      'cuti besar':'Cuti Besar','cuti melahirkan':'Cuti Melahirkan','cuti di luar tanggungan negara':'Cuti di Luar Tanggungan Negara'};
+    type=types[key]||(!type||type==='-'?'Jenis belum diisi':type.replace(/\S+/g,function(word){return word[0].toUpperCase()+word.slice(1).toLowerCase();}));
+    var rawYear=text_(row[yearCol]), year=/^(19|20|21)\d{2}$/.test(rawYear)?Number(rawYear):null;
+    if(year===null)missingYears++;
+    var groupKey=JSON.stringify([nip,type,year]);
+    if(!groups[groupKey])groups[groupKey]={nip:nip,type:type,year:year,days:0};
+    groups[groupKey].days+=Number(raw.replace(',','.'));
+  });
+  var totals=Object.keys(groups).map(function(key){var result=groups[key];result.days=Math.round(result.days*1e9)/1e9;return result;});
+  return {status:'success',leaveRecapVersion:1,totals:totals,warnings:{invalidRows:invalidRows,missingYears:missingYears}};
 }
 
 // JP uses the existing deployment and employee login; legacy admin-read / browser roles

@@ -134,6 +134,48 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+test('personnel leave recap sums recorded days by NIP/type/year and never exposes letters or individual dates',()=>{
+  const f=fixture(), sheet=f.master.getSheetByName('REKAP_CUTI');
+  sheet.rows=[['Timestamp','NIP','Nama','Jenis Cuti','Tanggal Awal','Tanggal Akhir','Jumlah Hari Cuti','Bulan','Tahun','Link Arsip','Tanggal_1'],
+    ['PRIVATE',"'199001012020011001",'PRIVATE NAME','Cuti Tahunan','PRIVATE START','PRIVATE END',3,'Oktober',2026,'PRIVATE URL','PRIVATE DATE'],
+    ['','','','','','','','',''],
+    ['', '199001012020011001','PRIVATE',' cuti  tahunan ','','','2 hari','',2026],
+    ['', '199001012020011001','','Cuti Sakit','','','1,5','',2026],
+    ['', '199001012020011001','','Cuti Tahunan','','',4,'',2025],
+    ['', '199001012020011002','','Cuti Melahirkan','','',30,'',2026],
+    ['', '199001012020011002','','Cuti Alasan Penting','','',2,'',2026]];
+  const before=JSON.stringify(sheet.rows), result=f.call({action:'rekap_cuti_kepegawaian'});
+  assert.equal(result.status,'success',result.message);assert.equal(result.leaveRecapVersion,1);
+  assert.equal(result.totals.length,5);
+  assert.deepEqual(result.totals.find(row=>row.type==='Cuti Tahunan'&&row.year===2026),{nip:'199001012020011001',type:'Cuti Tahunan',year:2026,days:5});
+  assert.equal(result.totals.find(row=>row.type==='Cuti Sakit').days,1.5);
+  assert.equal(result.totals.find(row=>row.type==='Cuti Karena Alasan Penting').days,2);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|https:|Timestamp|Tanggal|Link Arsip/);
+  assert.equal(JSON.stringify(sheet.rows),before);
+});
+test('personnel leave recap preserves unknown years, reports invalid data and never substitutes guessed date durations',()=>{
+  const f=fixture(), sheet=f.master.getSheetByName('REKAP_CUTI');
+  sheet.rows=[['Timestamp','NIP','Nama','Jenis Cuti','Tanggal Awal','Tanggal Akhir','Jumlah Hari Cuti','Bulan','Tahun'],
+    ['', '199001012020011001','','Cuti Besar','2026-12-30','2027-01-03',3,'',2027],
+    ['', '199001012020011001','','Cuti Tahunan','','',2,'',''],
+    ['', '199001012020011001','','-','','',0,'',2026],
+    ['', 'invalid','','Cuti Sakit','','',5,'',2026],
+    ['', '199001012020011001','','Cuti Sakit','2026-01-01','2026-01-30','','',2026],
+    ['', '199001012020011001','','Cuti Sakit','','',-2,'',2026]];
+  const result=f.call({action:'rekap_cuti_kepegawaian'});
+  assert.equal(result.status,'success',result.message);
+  assert.deepEqual(result.warnings,{invalidRows:3,missingYears:1});
+  assert.equal(result.totals.find(row=>row.type==='Cuti Besar').year,2027);
+  assert.equal(result.totals.find(row=>row.type==='Cuti Tahunan').year,null);
+  assert.equal(result.totals.find(row=>row.type==='Jenis belum diisi').days,0);
+  sheet.rows=[sheet.rows[0]];
+  assert.deepEqual(f.call({action:'rekap_cuti_kepegawaian'}).totals,[]);
+  sheet.rows[0][6]='Unexpected';
+  assert.equal(f.call({action:'rekap_cuti_kepegawaian'}).status,'error');
+  f.master.sheets.delete('REKAP_CUTI');
+  assert.equal(f.call({action:'rekap_cuti_kepegawaian'}).status,'error');
+});
+
 function jpFixture() {
   const f=profileFixture();
   f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';

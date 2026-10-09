@@ -34,6 +34,8 @@ test('published CSV columns A/D/E/F/G, merged dates, multiline text and exact ti
   const rows=ctx.agendaSheetRows_(ctx.UrlFetchApp.fetch('gid=470452082').getContentText());
   assert.equal(rows.length,3);
   assert.equal(rows[1].date,'2026-10-02');
+  assert.equal(rows[0].time,'08:00');
+  assert.equal(rows[0].timeLabel,'08.00 WIB s.d. selesai');
   assert.equal(ctx.agendaMatch_(event('1','RAPAT  Koordinasi!'),rows).disposition,'Rentek\nWilayah I');
   assert.equal(ctx.agendaMatch_(event('2','Kegiatan tidak ditemukan'),rows),null);
 });
@@ -109,5 +111,31 @@ test('one matched event uses column G, missing G is blank, location fallback is 
   const result=ctx.dashboardAgenda_({date:'2026-10-02'});
   assert.equal(result.events[0].disposition,'Rentek');
   assert.equal(result.events[0].location,'Ruang spreadsheet');
+  assert.equal(result.events[0].time,'08.00 WIB');
   assert.equal(result.warning,'');
+});
+
+test('matched agenda preserves spreadsheet time wording, punctuation and line breaks', () => {
+  for (const label of ['08.00 WIB - selesai','08.00 WIB s.d. selesai','08.00–09.45 WIB','08.00 WIB\n- selesai','Menyesuaikan']) {
+    const {ctx,cache}=fixture({pages:[{items:[event('1')]}],rows:[['02/10/2026','','',label,'','Rapat Koordinasi','TU']]});
+    cache.set('dashboard-agenda-v1:2026-10-02',JSON.stringify({events:[{time:'obsolete'}]}));
+    assert.equal(ctx.dashboardAgenda_({date:'2026-10-02'}).events[0].time,label);
+  }
+});
+
+test('blank, unmatched or ambiguous spreadsheet times fall back to Calendar; duplicate clock matching stays intact', () => {
+  for (const rows of [
+    [['02/10/2026','','','   ','','Rapat Koordinasi','TU']],
+    [['02/10/2026','','','08.00 WIB - selesai','','Different title','TU']],
+    [['02/10/2026','','','08.00 WIB - selesai','','Rapat Koordinasi','TU'],['','','','08.00 WIB - selesai','','Rapat Koordinasi','Rentek']],
+  ]) {
+    const {ctx}=fixture({pages:[{items:[event('1')]}],rows});
+    assert.equal(ctx.dashboardAgenda_({date:'2026-10-02'}).events[0].time,'08:00 – 10:00 WIB');
+  }
+  const {ctx}=fixture({pages:[{items:[event('1')]}],csv:Papa.unparse([
+    header.map((value,i)=>i===3?'Waktu Pelaksanaan':value),
+    ['02/10/2026','','','08.00 WIB - selesai','','Rapat Koordinasi','TU'],
+    ['','','','09.00 WIB - selesai','','Rapat Koordinasi','Rentek'],
+  ])});
+  assert.equal(ctx.dashboardAgenda_({date:'2026-10-02'}).events[0].time,'08.00 WIB - selesai');
 });
