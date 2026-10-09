@@ -14,6 +14,7 @@ import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { KepegawaianPage } from './kepegawaian.jsx';
+import { OrganizationPage } from './organization.jsx';
 import { DemographyPage } from './demography.jsx';
 import { CompetencyPage } from './competency.jsx';
 import { LeaveRecapPage } from './leave-recap.jsx';
@@ -4125,7 +4126,7 @@ export default function App() {
     if (isPublicRecap) return <PublicRecapPage endpoint={APPS_SCRIPT_URL}/>;
     switch (currentView) {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
-      case 'kepegawaian': return <KepegawaianPage demografi={<DemographyPage loadPeople={fetchPegawaiData}/>} cuti={<LeaveRecapPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL}/>} kompetensi={<CompetencyPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL} user={loggedInUser} onAuthenticated={handleLoginSuccess}/>}><ProfileView navigate={navigate} embedded /></KepegawaianPage>;
+      case 'kepegawaian': return <KepegawaianPage struktur={<OrganizationPage loadPeople={fetchPegawaiData}/>} demografi={<DemographyPage loadPeople={fetchPegawaiData}/>} cuti={<LeaveRecapPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL}/>} kompetensi={<CompetencyPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL} user={loggedInUser} onAuthenticated={handleLoginSuccess}/>}><ProfileView navigate={navigate} embedded /></KepegawaianPage>;
       case 'monitoring-kinerja': return <MonitoringKinerjaPage />;
       case 'rekap': case 'profil-saya': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
         if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;

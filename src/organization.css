@@ -1,0 +1,39 @@
+.organization-scroll { overflow: auto; border: 1px solid #dbe3e7; border-radius: 20px; background: #fff; padding: 28px 20px; }
+.organization-scroll:focus-visible { outline: 2px solid #0e5b73; outline-offset: 3px; }
+.organization-chart { min-width: 1150px; max-width: 1800px; margin: auto; --org-line: #71858c; }
+.organization-box { border: 1px solid #a3b3b9; border-radius: 9px; overflow: hidden; background: #fff; }
+.organization-box-title { font-weight: 800; font-size: 13px; line-height: 1.4; text-align: center; padding: 12px 10px; margin: 0; background: #e3be58; color: #183d4c; }
+.organization-director { width: 290px; margin: 0 auto; position: relative; z-index: 1; }
+.organization-director > .organization-box-title { background: #e6cf6b; }
+.organization-leader-body { text-align: center; padding: 13px 10px; }
+.organization-person { overflow-wrap: anywhere; }
+.organization-person p { margin: 0; }
+.organization-name { font-size: 12px; font-weight: 700; line-height: 1.5; }
+.organization-nip, .organization-grade { font-size: 10px; line-height: 1.6; color: #475569; }
+.organization-job { font-size: 10px; line-height: 1.5; color: #64748b; padding-top: 3px; }
+.organization-empty { font-size: 12px; color: #64748b; text-align: center; padding: 12px; }
+.organization-branches { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 24px; position: relative; padding-top: 56px; }
+.organization-branches::before { content: ''; position: absolute; top: 28px; left: calc((100% - 96px)/10); right: calc((100% - 96px)/10); border-top: 1px solid var(--org-line); }
+.organization-branches::after { content: ''; position: absolute; top: 0; left: 50%; height: 28px; border-left: 1px solid var(--org-line); }
+.organization-unit { position: relative; display: flex; flex-direction: column; }
+.organization-branches > .organization-unit::before { content: ''; position: absolute; top: -28px; left: 50%; height: 28px; border-left: 1px solid var(--org-line); }
+.organization-leader { min-height: 150px; }
+.organization-leader > .organization-box-title { background: #347447; color: #fff; min-height: 61px; display: flex; align-items: center; justify-content: center; }
+.organization-staff { margin-top: 28px; flex: 1; position: relative; overflow: visible; }
+.organization-staff > .organization-box-title { border-radius: 8px 8px 0 0; }
+.organization-staff::before { content: ''; position: absolute; top: -29px; left: 50%; height: 28px; border-left: 1px solid var(--org-line); }
+.organization-staff ol { margin: 0; padding: 16px 12px 16px 28px; list-style: decimal; }
+.organization-staff li { padding-left: 2px; margin-bottom: 12px; font-size: 11px; }
+.organization-staff li:last-child { margin-bottom: 0; }
+.organization-unit-fungsional .organization-staff { margin-top: 178px; }
+.organization-branches > .organization-unit-fungsional::before { height: 206px; }
+.organization-unit-fungsional .organization-staff::before { display: none; }
+.organization-administration { position: relative; padding-top: 40px; }
+/* The TU branch runs from the director's bus through the gap between columns. */
+.organization-administration::before { content: ''; position: absolute; left: calc(40% - 2.4px); top: 0; width: calc(10% + 2.4px); height: 20px; border-left: 1px solid var(--org-line); border-bottom: 1px solid var(--org-line); }
+.organization-branches { background: linear-gradient(var(--org-line),var(--org-line)) calc(40% - 2.4px) 28px / 1px calc(100% - 28px) no-repeat; }
+.organization-administration::after { content: ''; position: absolute; top: 20px; left: 50%; height: 20px; border-left: 1px solid var(--org-line); }
+.organization-administration .organization-unit { width: 290px; margin: 0 auto; }
+.organization-unit-tu .organization-box-title { background: #0e5b73; color: white; }
+.organization-unit-tu .organization-staff > .organization-box-title { background: #e3be58; color: #183d4c; }
+.organization-unit-tu .organization-leader { min-height: 0; }

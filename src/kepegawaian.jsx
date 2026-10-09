@@ -1,16 +1,16 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
 const tabs = [
+  { id: 'struktur', label: 'Struktur Unit Kerja' },
   { id: 'data', label: 'Data Pegawai' },
   { id: 'demografi', label: 'Demografi' },
   { id: 'cuti', label: 'Rekap Cuti' },
-  { id: 'kredit', label: 'Angka Kredit' },
   { id: 'kompetensi', label: 'Pemenuhan Kompetensi' },
 ];
 
-export function KepegawaianPage({ children, demografi, kompetensi, cuti }) {
-  const [activeTab, setActiveTab] = useState('data');
+export function KepegawaianPage({ children, struktur, demografi, kompetensi, cuti }) {
+  const [activeTab, setActiveTab] = useState('struktur');
   const tabRefs = useRef([]);
   const handleKeyDown = (event, index) => {
     const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
@@ -45,7 +45,7 @@ export function KepegawaianPage({ children, demografi, kompetensi, cuti }) {
         <div key={tab.id} role="tabpanel" id={`kepegawaian-panel-${tab.id}`}
           aria-labelledby={`kepegawaian-tab-${tab.id}`} hidden={activeTab !== tab.id}
           tabIndex={0} className="flex-1 min-h-0 overflow-y-auto focus-visible:outline-none">
-          {tab.id === 'data' ? children : tab.id === 'demografi' && activeTab === 'demografi' ? demografi : tab.id === 'kompetensi' && activeTab === 'kompetensi' ? kompetensi : tab.id === 'cuti' && activeTab === 'cuti' ? cuti : null}
+          {tab.id === 'struktur' && activeTab === 'struktur' ? struktur : tab.id === 'data' ? children : tab.id === 'demografi' && activeTab === 'demografi' ? demografi : tab.id === 'kompetensi' && activeTab === 'kompetensi' ? kompetensi : tab.id === 'cuti' && activeTab === 'cuti' ? cuti : null}
         </div>
       ))}
     </section>

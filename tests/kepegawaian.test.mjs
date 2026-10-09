@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 
-test('Kepegawaian opens the inline directory by default for all roles and preserves the legacy route', async () => {
+test('Kepegawaian opens the organization by default for all roles and preserves the inline directory and legacy route', async () => {
   const bundle = await build({ configFile:false, plugins:[react()], logLevel:'error', ssr:{noExternal:true},
     build:{ssr:'src/App.jsx',write:false,emptyOutDir:false,rollupOptions:{external:['react','react/jsx-runtime','lucide-react','papaparse']}} });
   const code=bundle.output.find(item=>item.type==='chunk').code.replace(/from (["'])(react(?:\/jsx-runtime)?|lucide-react|papaparse)\1/g,(_,quote,specifier)=>`from ${JSON.stringify(import.meta.resolve(specifier))}`);
@@ -26,15 +26,18 @@ test('Kepegawaian opens the inline directory by default for all roles and preser
       assert.match(page,/id="kepegawaian-title"/);
       assert.doesNotMatch(page,/href="#\/profile"|Lihat Bank Data Pegawai|Bank Data Profil Pegawai/);
       assert.match(page,/Kembali ke Beranda/);
-      assert.match(page,/role="tab" id="kepegawaian-tab-data"[^>]*aria-selected="true"/);
-      for (const id of ['demografi', 'cuti', 'kredit', 'kompetensi']) {
+      assert.match(page,/role="tab" id="kepegawaian-tab-struktur"[^>]*aria-selected="true"/);
+      assert.match(page,/role="tab" id="kepegawaian-tab-data"[^>]*aria-selected="false"/);
+      assert.match(page,/id="kepegawaian-panel-data"[^>]*hidden=""/);
+      assert.match(page,/Memuat struktur unit kerja/);
+      for (const id of ['demografi', 'cuti', 'kompetensi']) {
         assert.match(page,new RegExp(`role="tab" id="kepegawaian-tab-${id}"[^>]*aria-selected="false"`));
         assert.match(page,new RegExp(`id="kepegawaian-panel-${id}"[^>]*hidden=""`));
         assert.match(page,new RegExp(`id="kepegawaian-panel-${id}"[^>]*></div>`));
       }
-      assert.deepEqual([...page.matchAll(/role="tab" id="kepegawaian-tab-([^"]+)"/g)].map(match=>match[1]),['data','demografi','cuti','kredit','kompetensi']);
+      assert.deepEqual([...page.matchAll(/role="tab" id="kepegawaian-tab-([^"]+)"/g)].map(match=>match[1]),['struktur','data','demografi','cuti','kompetensi']);
       assert.match(page,/Pemenuhan Kompetensi/);
-      assert.match(page,/Angka Kredit/);
+      assert.doesNotMatch(page,/Angka Kredit/);
       assert.match(page,/Demografi/);
       assert.match(page,/Rekap Cuti/);
       assert.match(page,/Filter Berdasarkan Sub Unit Kerja/);
