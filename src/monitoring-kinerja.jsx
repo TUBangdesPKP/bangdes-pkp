@@ -1,6 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { StrategicObjectives } from './strategic-objectives.jsx';
+import { PhysicalProgressMap } from './physical-progress-map.jsx';
 
 const tabs = [
   {id:'sasaran',label:'Sasaran Strategis'},
@@ -38,6 +39,7 @@ export function MonitoringKinerjaPage() {
       </div>
       {tabs.map(tab => <div key={tab.id} role="tabpanel" id={`monitoring-panel-${tab.id}`} aria-labelledby={`monitoring-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0} className="flex-1 min-h-0 overflow-y-auto focus-visible:outline-none">
         {tab.id === 'sasaran' && activeTab === 'sasaran' ? <StrategicObjectives/> : null}
+        {tab.id === 'fisik' && activeTab === 'fisik' ? <PhysicalProgressMap/> : null}
       </div>)}
     </section>
   );
