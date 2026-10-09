@@ -1245,7 +1245,7 @@ export const Header = ({ navigate, loggedInUser, onLogoutRequest, currentView })
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
         </button>
-        <FaqManager loadPeople={fetchPegawaiData}/>
+        <FaqManager/>
       </nav>
 
       <div className="flex items-center justify-self-end gap-3 lg:col-start-3 lg:row-start-1">
