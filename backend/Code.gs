@@ -367,6 +367,12 @@ function saveArchive_(payload) {
   var mime = mimeForName_(fileName);
   if (['application/pdf', 'image/jpeg', 'image/png'].indexOf(mime) === -1) throw new Error('Format arsip harus PDF/JPG/PNG.');
   if (fileBase64.length > 14 * 1024 * 1024) throw new Error('Ukuran berkas melebihi 10 MB.');
+  // Validate/count before creating a Drive file. Never trust OCR/client duration.
+  var cutiDates = modul === 'cuti' ? payload.sptData.map(function(item) {
+    var dates = archiveDateList_(item.tanggalBerangkat, item.tanggalPulang, 'cuti');
+    if (!dates.length) throw new Error('Rentang cuti tidak memiliki hari kerja setelah libur nasional dan cuti bersama dikecualikan.');
+    return dates;
+  }) : null;
       var isSpt = modul === 'spt';
       // Gunakan Folder Cuti yang baru jika modul = cuti
       var targetBaseFolder = isSpt ? DriveApp.getFolderById(SPT_FOLDER_ID) : DriveApp.getFolderById(CUTI_FOLDER_ID);
@@ -468,7 +474,7 @@ function saveArchive_(payload) {
             var tglBerangkat = item.tanggalBerangkat || '-';
             var tglPulang = item.tanggalPulang || '-';
             var tujuan = item.tujuan || '-';
-            var jmlHari = item.jumlahHariDinas || hitungHariDinas(tglBerangkat, tglPulang);
+            var jmlHari = cutiDates ? cutiDates[k].length : (item.jumlahHariDinas || hitungHariDinas(tglBerangkat, tglPulang));
             
             var bulanSurat = item.bulan && item.bulan !== "-" ? item.bulan : "-";
             var tahunSurat = item.tahun && item.tahun !== "-" ? item.tahun : "-";
@@ -519,7 +525,7 @@ function saveArchive_(payload) {
               dataMap[checkKey] = targetRow; 
               actualLastRow = targetRow; // Update index baris terakhir
             }
-            writeDateColumns_(sheet, dataMap[checkKey], 11, archiveDateList_(tglBerangkat, tglPulang, modul));
+            writeDateColumns_(sheet, dataMap[checkKey], 11, cutiDates ? cutiDates[k] : archiveDateList_(tglBerangkat, tglPulang, modul));
           }
         }
       } catch (sheetError) {
@@ -982,6 +988,8 @@ function doPost(e) {
       requireSubmissionReader_(payload);
     }
     if (payload.action === 'agenda_dashboard') return json_(dashboardAgenda_(payload));
+    // Public calendar exposes dates only, from the fixed master; no employee records.
+    if (payload.action === 'kalender_cuti') return json_({status:'success',calendarVersion:1,dates:holidayDates_().filter(function(date,i,all){return all.indexOf(date)===i;}).sort()});
     // Read-only wrap requests must not hold the write lock while opening employee files.
     if (payload.action === 'rekap_bulanan') return json_(monthlyWrapPreview_(payload));
     if (payload.action === 'rekap_bulanan_tersimpan') return json_(savedMonthlyWrap_(payload));
@@ -1404,6 +1412,8 @@ var BASELINE_SHEET = '_PRESENSI_TAB2';
 // Same holiday configuration currently used by the frontend. Extend through HARI_LIBUR.
 var CUTI_HOLIDAYS = [
   '2026-01-01','2026-01-16','2026-02-17','2026-03-19','2026-03-21','2026-03-22','2026-04-03','2026-04-05','2026-05-01','2026-05-14','2026-05-27','2026-05-31','2026-06-01','2026-06-16','2026-08-17','2026-08-25','2026-12-25',
+  // Cuti bersama 2026, SKB 3 Menteri (Kemenko PMK, 19 September 2025).
+  '2026-02-16','2026-03-18','2026-03-20','2026-03-23','2026-03-24','2026-05-15','2026-05-28','2026-12-24',
   // PDF pengguna: Hari Libur Nasional dan Cuti Bersama 2027, lampiran hlm. 4–5.
   // 18 tanggal libur nasional + 8 tanggal cuti bersama, seluruhnya dihitung Libur.
   '2027-01-01','2027-01-05','2027-02-05','2027-02-06',

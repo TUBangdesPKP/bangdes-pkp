@@ -24,6 +24,7 @@ import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
+import { useCutiCalendar } from './use-cuti-calendar.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -390,6 +391,9 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2026-08-17', // Hari Kemerdekaan RI
   '2026-08-25', // Maulid Nabi Muhammad SAW
   '2026-12-25', // Hari Raya Natal
+  // Cuti bersama 2026 (SKB 3 Menteri): tidak mengurangi hari cuti pada rentang.
+  '2026-02-16','2026-03-18','2026-03-20','2026-03-23','2026-03-24',
+  '2026-05-15','2026-05-28','2026-12-24',
   '2027-01-01', // Tahun Baru Masehi
   '2027-01-05', // Isra Mikraj 1448 H
   '2027-02-05', // Cuti bersama Imlek
@@ -418,31 +422,28 @@ const DAFTAR_LIBUR_NASIONAL = [
   '2027-12-26', // Isra Mikraj 1449 H
 ];
 
-const hitungHariKerjaAktif = (startStr, endStr) => {
-  if (!startStr || !endStr) return 0;
-  const start = new Date(startStr);
-  const end = new Date(endStr);
+const hitungHariKerjaAktif = (startStr, endStr, holidays = DAFTAR_LIBUR_NASIONAL) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr || '') || !/^\d{4}-\d{2}-\d{2}$/.test(endStr || '')) return 0;
+  const start = new Date(startStr + 'T00:00:00Z');
+  const end = new Date(endStr + 'T00:00:00Z');
   if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
-  if (start > end) return 0;
+  if (start.toISOString().slice(0,10) !== startStr || end.toISOString().slice(0,10) !== endStr || start > end || (end-start)/86400000 > 730) return 0;
 
   let count = 0;
   let current = new Date(start);
   
   while (current <= end) {
-    const dayOfWeek = current.getDay();
+    const dayOfWeek = current.getUTCDay();
     // Exclude weekends (0 = Sunday, 6 = Saturday)
     if (dayOfWeek !== 0 && dayOfWeek !== 6) { 
-      const y = current.getFullYear();
-      const m = String(current.getMonth() + 1).padStart(2, '0');
-      const d = String(current.getDate()).padStart(2, '0');
-      const ymd = `${y}-${m}-${d}`;
+      const ymd = current.toISOString().slice(0,10);
       
-      // Also exclude national holidays
-      if (!DAFTAR_LIBUR_NASIONAL.includes(ymd)) {
+      // Exclude national holidays and collective leave, independently of device timezone.
+      if (!holidays.includes(ymd)) {
         count++;
       }
     }
-    current.setDate(current.getDate() + 1);
+    current.setUTCDate(current.getUTCDate() + 1);
   }
   return count;
 };
@@ -1943,6 +1944,8 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
 // Shared archive upload UI. Each hook instance owns its files, OCR results and manual entries.
 const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf, onUploaded, submission, submissionReady }) => {
+  const cutiCalendar = useCutiCalendar(APPS_SCRIPT_URL, documentModule === 'cuti');
+  const countArchiveDays = (start,end) => hitungHariKerjaAktif(start,end,cutiCalendar.dates || DAFTAR_LIBUR_NASIONAL);
   const [arsipFiles, setArsipFiles] = useState([]);
   const [isDraggingArsip, setIsDraggingArsip] = useState(false);
   const [isReadingArsip, setIsReadingArsip] = useState(false);
@@ -2061,7 +2064,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         if (isValidSptLocation(newTujuan)) newNames = newNames.map(p => ({ ...p, selected: true }));
         else newNames = newNames.map(p => ({ ...p, selected: false }));
       } else if (documentModule === 'cuti') {
-        const validDays = hitungHariKerjaAktif(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang)) > 0;
+        const validDays = cutiCalendar.ready && countArchiveDays(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang)) > 0;
         if (validDays && newTujuan !== 'Cuti / Alasan Lainnya') newNames = newNames.map(p => ({ ...p, selected: true }));
         else newNames = newNames.map(p => ({ ...p, selected: false }));
       }
@@ -2082,8 +2085,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
   const handleUploadSubmitArsip = async (e) => {
     e.preventDefault();
-    if (isSubmittingArsip || isReadingArsip || (isPeriodSpt && !submissionReady)) return;
-    const filesToUpload = arsipFiles.filter(f => f.status === 'success' && !f.parsedData.arsipCutiWarning && f.parsedData.arsipNames.some(p => p.selected));
+    if (!cutiCalendar.ready || isSubmittingArsip || isReadingArsip || (isPeriodSpt && !submissionReady)) return;
+    const filesToUpload = arsipFiles.filter(f => f.status === 'success' && !f.parsedData.arsipCutiWarning && f.parsedData.arsipNames.some(p => p.selected) && (documentModule !== 'cuti' || countArchiveDays(formatIndoToYMD(f.parsedData.arsipDateBerangkat), formatIndoToYMD(f.parsedData.arsipDatePulang)) > 0));
     if (filesToUpload.length === 0) return;
 
     setIsSubmittingArsip(true);
@@ -2096,7 +2099,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         const arsipDataPayload = fObj.parsedData.arsipNames.filter(p => p.selected).map(pegawai => {
           const tglBerangkat = fObj.parsedData.arsipDateBerangkat || '-';
           const tglPulang = fObj.parsedData.arsipDatePulang || '-';
-          const jumlahHari = documentModule === 'cuti' ? (fObj.parsedData.arsipJumlahHariCuti ?? hitungHariKerjaAktif(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang))) : hitungHariDinas(tglBerangkat, tglPulang);
+          // The letter's duration remains a reference, never an override of working days.
+          const jumlahHari = documentModule === 'cuti' ? countArchiveDays(formatIndoToYMD(tglBerangkat), formatIndoToYMD(tglPulang)) : hitungHariDinas(tglBerangkat, tglPulang);
           
           let bulan = '-';
           let tahun = '-';
@@ -2203,7 +2207,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
 
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
-  const isManualUploadValid = (!isPeriodSpt || submissionReady) && manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0 && (documentModule !== 'cuti' || hitungHariKerjaAktif(e.startDate, e.endDate) > 0));
+  const isManualUploadValid = cutiCalendar.ready && (!isPeriodSpt || submissionReady) && manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0 && (documentModule !== 'cuti' || countArchiveDays(e.startDate, e.endDate) > 0));
 
   const handleUploadManualSubmit = async () => {
     if (!isManualUploadValid || isSubmittingArsip) return;
@@ -2217,7 +2221,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         
         const tglBerangkat = formatYMDtoIndo(entry.startDate);
         const tglPulang = formatYMDtoIndo(entry.endDate);
-        const jumlahHari = documentModule === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) : hitungHariDinas(tglBerangkat, tglPulang);
+        const jumlahHari = documentModule === 'cuti' ? countArchiveDays(entry.startDate, entry.endDate) : hitungHariDinas(tglBerangkat, tglPulang);
         
         let bulan = '-';
         let tahun = '-';
@@ -2291,10 +2295,12 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
 
   const arsipSuccessfulFiles = arsipFiles.filter(f => f.status === 'success');
-  const arsipTotalSelectedPegawai = arsipSuccessfulFiles.reduce((tot, f) => tot + f.parsedData.arsipNames.filter(p => p.selected).length, 0);
+  const arsipTotalSelectedPegawai = !cutiCalendar.ready ? 0 : arsipSuccessfulFiles.reduce((tot, f) => tot + (documentModule === 'cuti' && countArchiveDays(formatIndoToYMD(f.parsedData.arsipDateBerangkat), formatIndoToYMD(f.parsedData.arsipDatePulang)) === 0 ? 0 : f.parsedData.arsipNames.filter(p => p.selected).length), 0);
 
   const renderArsipUploadPanel = () => (
                 <div className="pt-4">
+                  {cutiCalendar.loading && <p role="status" className="mb-3 text-sm text-[#084C61]">Memuat kalender hari libur…</p>}
+                  {cutiCalendar.error && <div role="alert" className="mb-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{cutiCalendar.error}<button type="button" onClick={cutiCalendar.reload} className="ml-2 underline font-semibold">Muat ulang kalender</button></div>}
                   {isPeriodSpt && !submissionReady && <p className="mb-3 text-xs text-amber-700">Simpan tab 2 dan muat daftar dokumen terlebih dahulu sebelum mengunggah ke folder pengumpulan.</p>}
                   {arsipSubmitResult && (
                     <div role="status" className={`mb-4 p-4 rounded-xl text-xs font-semibold border ${arsipSubmitResult.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
@@ -2437,7 +2443,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                 {entry.startDate && entry.endDate && (
                                     <div className="flex justify-end mb-3">
                                         <span className="text-[10px] font-bold text-[#0E5B73] bg-[#EAF5FA] px-2.5 py-1 rounded-md border border-[#CDE5F1]">
-                                          Total Hari {documentModule === 'spt' ? 'Dinas' : 'Cuti'}: {documentModule === 'cuti' ? hitungHariKerjaAktif(entry.startDate, entry.endDate) + ' Hari Kerja' : hitungHariDinas(formatYMDtoIndo(entry.startDate), formatYMDtoIndo(entry.endDate)) + ' Hari'}
+                                          Total Hari {documentModule === 'spt' ? 'Dinas' : 'Cuti'}: {documentModule === 'cuti' ? (cutiCalendar.ready ? countArchiveDays(entry.startDate, entry.endDate) + ' Hari Kerja' : 'Menunggu kalender') : hitungHariDinas(formatYMDtoIndo(entry.startDate), formatYMDtoIndo(entry.endDate)) + ' Hari'}
                                         </span>
                                     </div>
                                 )}
@@ -2583,7 +2589,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                         )}
                                         {documentModule === 'cuti' && (
                                           <div className="flex items-center gap-3">
-                                            <label className="w-20 text-xs font-bold text-[#114053]">Hari cuti:</label>
+                                            <label className="w-20 text-xs font-bold text-[#114053]">Hari pada surat:</label>
                                             <input aria-label="Jumlah hari cuti pada surat" type="number" min="1" step="1" value={editArsipForm.jumlahHariCuti ?? ''} onChange={e => setEditArsipForm({...editArsipForm, jumlahHariCuti: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs" />
                                           </div>
                                         )}
@@ -2615,7 +2621,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                     ) : (
                                       <div className="flex justify-between items-start gap-4">
                                         <div className="space-y-1.5 pr-24">
-                                          {documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0 && (
+                                          {documentModule === 'cuti' && cutiCalendar.ready && countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0 && (
                                               <div className="flex items-center gap-2 mb-2 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700">
                                                   <AlertCircle size={14} className="shrink-0" />
                                                   <span className="text-[10px] font-bold uppercase tracking-wide">Peringatan: Data rentang cuti tidak valid (0 hari). Silakan klik "Ubah Data".</span>
@@ -2636,11 +2642,11 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                           <div className="flex items-center gap-2">
                                             <Calendar size={16} className="text-[#114053] shrink-0" />
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
-                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({documentModule === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
+                                            <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({documentModule === 'cuti' ? (cutiCalendar.ready ? countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : 'Menunggu kalender') : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
                                           </div>
                                           {documentModule === 'cuti' && pd.arsipJumlahHariCuti != null && (
                                             <p className="text-xs text-[#114053]">Bab IV pada surat: {pd.arsipJumlahHariCuti} hari cuti.
-                                              {pd.arsipJumlahHariCuti !== hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah berbeda dari kalender kerja. Periksa tanggal, hari libur, dan jumlah pada surat sebelum klaim.</span>}
+                                              {cutiCalendar.ready && pd.arsipJumlahHariCuti !== countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah pada surat berbeda. Yang disimpan adalah hari kerja pada rentang cuti, tanpa Sabtu–Minggu, libur nasional, dan cuti bersama.</span>}
                                             </p>
                                           )}
                                           {pd.arsipCutiWarning && <p role="alert" className="text-xs text-amber-700">{pd.arsipCutiWarning}</p>}
@@ -2656,7 +2662,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                           </div>
                                         </div>
                                         <button onClick={() => {
-                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-', jumlahHariCuti: pd.arsipJumlahHariCuti ?? hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) });
+                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-', jumlahHariCuti: pd.arsipJumlahHariCuti ?? countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) });
                                           setEditingArsipId(fileObj.id);
                                         }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
                                           <Edit3 size={14} /> Ubah Data
@@ -2668,7 +2674,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                   <div className="p-3 space-y-0.5 max-h-[300px] overflow-y-auto custom-scrollbar spt-employee-list">
                                     {pd.arsipNames.map((pegawai, idx) => {
                                       const isEditingThisPegawai = editingPegawaiData && editingPegawaiData.fileId === fileObj.id && editingPegawaiData.idx === idx;
-                                      const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0;
+                                      const isZeroDays = documentModule === 'cuti' && (!cutiCalendar.ready || countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) === 0);
                                       const isInvalidCutiType = documentModule === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya';
                                       const isErrorState = isZeroDays || isInvalidCutiType || isInvalidSptLocationState || !!pd.arsipCutiWarning;
                                       
@@ -2760,7 +2766,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                               <div key={idx} onClick={() => {
                                                 updateArsipFileData(fileObj.id, oldData => {
                                                   if (!oldData.arsipNames.some(existing => existing.nip === peg.NIP)) {
-                                                    const isZeroDays = documentModule === 'cuti' && hitungHariKerjaAktif(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0;
+                                                    const isZeroDays = documentModule === 'cuti' && (!cutiCalendar.ready || countArchiveDays(formatIndoToYMD(oldData.arsipDateBerangkat), formatIndoToYMD(oldData.arsipDatePulang)) === 0);
                                                     const isInvalidCutiType = documentModule === 'cuti' && oldData.arsipTujuan === 'Cuti / Alasan Lainnya';
                                                     const currentErrorState = isZeroDays || isInvalidCutiType || !!oldData.arsipCutiWarning || (documentModule === 'spt' && !isValidSptLocation(oldData.arsipTujuan));
                                                     return { ...oldData, arsipNames: [...oldData.arsipNames, { nama: peg.Nama, nip: peg.NIP, selected: !currentErrorState }] };

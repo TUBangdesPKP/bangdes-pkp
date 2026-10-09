@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
+import { extractCutiPeriod } from '../src/document-parsers.js';
 
 const sourceCode = fs.readFileSync(new URL('./Code.gs', import.meta.url), 'utf8');
 
@@ -915,6 +916,70 @@ test('Cuti excludes weekends, configured holidays and extra HARI_LIBUR; SPT does
   f.master.insertSheet('HARI_LIBUR').rows = [['Tanggal','Keterangan'],['2026-08-18','Libur tambahan organisasi']];
   assert.deepEqual(Array.from(f.context.archiveDateList_('14 Agustus 2026','18 Agustus 2026','cuti')), ['2026-08-14']);
   assert.deepEqual(Array.from(f.context.archiveDateList_('18 Mei 2026','20 Mei 2026','cuti')), ['2026-05-18','2026-05-19','2026-05-20']);
+});
+
+test('public cuti calendar returns only deduplicated dates from the fixed master without mutating records',()=>{
+  const f=fixture();
+  f.master.insertSheet('HARI_LIBUR').rows=[['Tanggal','Catatan'],['2026-05-29','PRIVATE NOTE'],['2026-05-28','PRIVATE NOTE']];
+  const before=JSON.stringify(f.master.getSheetByName('HARI_LIBUR').rows), files=f.files.size;
+  const result=f.call({action:'kalender_cuti',spreadsheetId:'untrusted-other-book'});
+  assert.equal(result.status,'success');
+  assert.equal(result.calendarVersion,1);
+  assert.ok(result.dates.includes('2026-05-29'));
+  assert.equal(result.dates.filter(date=>date==='2026-05-28').length,1);
+  assert.deepEqual(result.dates,[...result.dates].sort());
+  assert.deepEqual(Object.keys(result).sort(),['calendarVersion','dates','status']);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|Pegawai|123456/);
+  assert.equal(JSON.stringify(f.master.getSheetByName('HARI_LIBUR').rows),before);
+  assert.equal(f.files.size,files);
+  f.master.getSheetByName('HARI_LIBUR').rows[0][0]='Wrong header';
+  assert.equal(f.call({action:'kalender_cuti'}).status,'error');
+});
+
+test('manual and OCR leave count the May/June 2026 range as three working days, with matching frontend/backend calendars', () => {
+  const f=fixture();
+  const app=fs.readFileSync(new URL('../src/App.jsx',import.meta.url),'utf8');
+  const count=vm.runInNewContext(app.slice(app.indexOf('const DAFTAR_LIBUR_NASIONAL ='),app.indexOf('const removeTitlesFromName ='))+'\nhitungHariKerjaAktif;');
+  assert.equal(count('2026-05-26','2026-06-02'),3);
+  assert.equal(count('2026-05-26','2026-06-02',[...f.context.CUTI_HOLIDAYS,'2026-05-29']),2,'preview honors server-provided extra holidays');
+  assert.deepEqual(Array.from(f.context.archiveDateList_('26 Mei 2026','2 Juni 2026','cuti')),['2026-05-26','2026-05-29','2026-06-02']);
+  const parsed=extractCutiPeriod('IV. LAMANYA CUTI Selama 4 hari Mulai Tanggal 26 Mei 2026 sampai dengan 2 Juni 2026 V. ALAMAT');
+  assert.equal(parsed.duration,4,'raw letter duration is preserved for review, not used as the saved count');
+  assert.equal(f.context.archiveDateList_(parsed.berangkat,parsed.pulang,'cuti').length,3);
+  for(const date of ['2026-02-16','2026-03-18','2026-03-20','2026-03-23','2026-03-24','2026-05-15','2026-05-28','2026-12-24']) {
+    assert.equal(count(date,date),0,date);
+    assert.equal(f.context.archiveDateList_(date,date,'cuti').length,0,date);
+  }
+  assert.equal(count('2026-05-30','2026-06-01'),0);
+  assert.equal(count('2026-12-31','2027-01-04'),2);
+  for(const pair of [['2026-02-30','2026-03-02'],['2026-06-02','2026-05-26'],['','2026-05-26']])assert.equal(count(...pair),0);
+  assert.equal(f.context.archiveDateList_('26 Mei 2026','2 Juni 2026','spt').length,8);
+  assert.doesNotMatch(app,/const jumlahHari = documentModule === 'cuti' \? \(fObj\.parsedData\.arsipJumlahHariCuti/);
+});
+
+test('archive upload recalculates stored leave days and date columns instead of trusting manual/OCR totals',()=>{
+  for(const inputDays of [4,8,99,0]) {
+    const f=fixture(), sheet=f.master.getSheetByName('REKAP_CUTI'), original=JSON.stringify(sheet.rows[1]);
+    const result=f.context.saveArchive_({modul:'cuti',fileName:'Cuti.png',fileBase64:'dGVzdA==',sptData:[{nip:'199001012020011001',nama:'Pegawai Uji',tanggalBerangkat:'26 Mei 2026',tanggalPulang:'2 Juni 2026',tujuan:'Cuti Tahunan',jumlahHariDinas:inputDays}]});
+    assert.equal(result.status,'success',result.message);
+    const row=sheet.rows.find(row=>row[9]===result.fileUrl);
+    assert.equal(row[6],3);
+    assert.deepEqual(row.slice(10,13).map(value=>f.context.isoDate_(value)),['2026-05-26','2026-05-29','2026-06-02']);
+    assert.equal(JSON.stringify(sheet.rows[1]),original,'unrelated historical leave is unchanged');
+  }
+});
+
+test('zero-working-day cuti fails before creating files, and additional HARI_LIBUR affects stored counts',()=>{
+  const f=fixture(), initial=f.files.size, snapshot=JSON.stringify(f.master.getSheetByName('REKAP_CUTI').rows);
+  const payload={modul:'cuti',fileName:'Cuti.png',fileBase64:'dGVzdA==',sptData:[{nip:'199001012020011001',nama:'Uji',tanggalBerangkat:'27 Mei 2026',tanggalPulang:'28 Mei 2026',tujuan:'Cuti Tahunan',jumlahHariDinas:2}]};
+  assert.throws(()=>f.context.saveArchive_(payload),/tidak memiliki hari kerja/);
+  assert.equal(f.files.size,initial);
+  assert.equal(JSON.stringify(f.master.getSheetByName('REKAP_CUTI').rows),snapshot);
+  f.master.insertSheet('HARI_LIBUR').rows=[['Tanggal'],['2026-05-29']];
+  payload.sptData[0].tanggalBerangkat='26 Mei 2026';payload.sptData[0].tanggalPulang='2 Juni 2026';
+  const result=f.context.saveArchive_(payload);
+  assert.equal(result.status,'success',result.message);
+  assert.equal(f.master.getSheetByName('REKAP_CUTI').rows.find(row=>row[9]===result.fileUrl)[6],2);
 });
 
 test('2027 PDF dates match frontend and backend, including collective leave on page 5', () => {

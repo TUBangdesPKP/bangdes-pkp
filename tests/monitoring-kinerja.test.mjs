@@ -47,3 +47,12 @@ test('hover and keyboard focus highlight only the owning objective group and its
   assert.match(css,/max-width: 440px/);
   assert.doesNotMatch(css,/\.strategic-page:hover|\.strategic-grid:hover/);
 });
+
+test('SK and IKK use equal columns and shared expanding rows without truncating long text',()=>{
+  const css=fs.readFileSync(new URL('../src/strategic-objectives.css',import.meta.url),'utf8');
+  assert.match(css,/\.strategic-grid-directorate\s*\{[^}]*grid-template-columns: repeat\(6,minmax\(0,1fr\)\)[^}]*grid-auto-rows: minmax\(180px,1fr\)/);
+  assert.match(css,/\.strategic-grid-directorate > \.strategic-group\s*\{[^}]*grid-template-rows: subgrid[^}]*grid-row: span 6/);
+  assert.match(css,/\.strategic-indicators-directorate\s*\{[^}]*grid-row: 2 \/ span 5[^}]*grid-template-rows: subgrid/);
+  assert.match(css,/\.strategic-grid-directorate \.strategic-objective h4\s*\{[^}]*font-size: clamp\(12px,.85vw,14px\)/);
+  assert.doesNotMatch(css,/line-clamp|text-overflow: ellipsis|overflow: hidden/);
+});

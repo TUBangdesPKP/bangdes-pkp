@@ -8,7 +8,10 @@
 .strategic-program { text-align: center; font-size: clamp(16px,1.4vw,23px); line-height: 1.35; font-weight: 800; text-transform: uppercase; color: white; background: #5081b7; border: 2px solid #294968; border-radius: 7px; padding: 9px 12px; margin: 8px 0; }
 .strategic-grid { display: grid; gap: 12px; align-items: start; }
 .strategic-grid-program { grid-template-columns: repeat(5,minmax(0,1fr)) minmax(0,1.7fr); }
-.strategic-grid-directorate { grid-template-columns: repeat(3,minmax(0,1fr)) minmax(0,1.5fr) repeat(2,minmax(0,1fr)); }
+.strategic-grid-directorate { grid-template-columns: repeat(6,minmax(0,1fr)); grid-auto-rows: minmax(180px,1fr); align-items: stretch; gap: 8px 12px; }
+/* Shared tracks keep SK 01–06 and every IKK the same size, including long text.
+   Cards grow together if text is enlarged; no fixed height or clipped content. */
+.strategic-grid-directorate > .strategic-group { display: grid; grid-template-rows: subgrid; grid-row: span 6; align-self: stretch; }
 .strategic-group { min-width: 0; }
 .strategic-objective { min-height: 155px; background: #b7cbcf; border: 2px solid #e7deba; border-radius: 20px; padding: 16px 10px; display: flex; align-items: center; justify-content: center; text-align: center; color: #173d48; transition: background-color 160ms,color 160ms,border-color 160ms; }
 .strategic-objective h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.4; }
@@ -23,10 +26,12 @@
 .strategic-group-sp6 .strategic-indicators { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .strategic-goal-directorate { border-radius: 6px; padding: 9px 14px; }
 .strategic-program-directorate { background: #084c61; border-color: #084c61; text-transform: none; margin-top: 0; }
-.strategic-grid-directorate .strategic-objective { border-radius: 6px; min-height: 178px; }
-.strategic-indicators-directorate { margin-top: 8px; }
-.strategic-indicators-directorate > .strategic-indicator { border-radius: 5px; padding: 12px 8px; }
-.strategic-indicators-directorate > .strategic-indicator:first-child { min-height: 148px; }
+.strategic-grid-directorate .strategic-objective { border-radius: 6px; min-height: 180px; padding: 14px 12px; }
+.strategic-grid-directorate .strategic-objective h4 { font-size: clamp(12px,.85vw,14px); line-height: 1.4; overflow-wrap: anywhere; }
+.strategic-indicators-directorate { margin-top: 0; grid-row: 2 / span 5; grid-template-rows: subgrid; gap: 8px; }
+.strategic-indicators-directorate > .strategic-indicator { border-radius: 5px; padding: 14px 12px; min-height: 180px; }
+.strategic-indicators-directorate .strategic-indicator p { font-size: clamp(12px,.8vw,13px); line-height: 1.45; overflow-wrap: anywhere; }
+.strategic-grid-directorate .strategic-objective strong,.strategic-indicators-directorate .strategic-indicator strong { font-size: 14px; }
 /* A single group owns its objective and all indicators, so highlighting never leaks to siblings. */
 .strategic-group:hover .strategic-objective,.strategic-group:focus-within .strategic-objective { background: #084c61; border-color: #084c61; color: #fff; }
 .strategic-group:hover .strategic-indicator,.strategic-group:focus-within .strategic-indicator { background: #d7c78b; border-color: #d7c78b; }
@@ -35,4 +40,11 @@
 @media (max-width: 1100px) { .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: repeat(3,minmax(0,1fr)); } }
 @media (max-width: 700px) { .strategic-page { padding: 16px 12px 32px; } .strategic-diagram { padding: 10px; } .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: repeat(2,minmax(0,1fr)); } .strategic-goal { padding: 14px 12px; } }
 @media (max-width: 440px) { .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: minmax(0,1fr); } .strategic-objective,.strategic-grid-directorate .strategic-objective { min-height: 120px; } .strategic-indicators-program > .strategic-indicator { min-height: 160px; } }
+/* Single-column view does not reserve space for indicators a group does not have. */
+@media (max-width: 440px) {
+  .strategic-grid-directorate { grid-auto-rows: auto; row-gap: 20px; }
+  .strategic-grid-directorate > .strategic-group { grid-row: auto; grid-template-rows: auto auto; gap: 8px; }
+  .strategic-indicators-directorate { grid-row: auto; grid-template-rows: none; grid-auto-rows: minmax(160px,1fr); gap: 8px; }
+  .strategic-grid-directorate .strategic-objective,.strategic-indicators-directorate > .strategic-indicator { min-height: 160px; }
+}
 @media (prefers-reduced-motion: reduce) { .strategic-objective,.strategic-indicator { transition: none; } }
