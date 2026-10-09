@@ -1,0 +1,38 @@
+.strategic-page { padding: 24px 28px 48px; color: #172c34; }
+.strategic-diagram { background: white; border: 1px solid #dde5e8; border-radius: 16px; padding: 16px; margin: 0 auto 36px; max-width: 1800px; }
+.strategic-institution { background: #c1c1c1; border-radius: 7px; padding: 11px 16px; text-align: center; text-transform: uppercase; font-size: clamp(16px,1.4vw,23px); line-height: 1.3; font-weight: 800; color: #111; }
+.strategic-goal { background: #ff4d55; color: #fff; text-align: center; margin-top: 8px; padding: 16px 20px; border-radius: 24px; }
+.strategic-goal h3 { font-size: clamp(16px,1.3vw,21px); font-weight: 700; line-height: 1.4; margin: 0; }
+.strategic-goal-ministry h3 strong { display: block; font-size: 25px; }
+.strategic-goal ul { list-style: none; margin: 6px 0 0; padding: 0; font-size: 14px; font-style: italic; line-height: 1.55; }
+.strategic-program { text-align: center; font-size: clamp(16px,1.4vw,23px); line-height: 1.35; font-weight: 800; text-transform: uppercase; color: white; background: #5081b7; border: 2px solid #294968; border-radius: 7px; padding: 9px 12px; margin: 8px 0; }
+.strategic-grid { display: grid; gap: 12px; align-items: start; }
+.strategic-grid-program { grid-template-columns: repeat(5,minmax(0,1fr)) minmax(0,1.7fr); }
+.strategic-grid-directorate { grid-template-columns: repeat(3,minmax(0,1fr)) minmax(0,1.5fr) repeat(2,minmax(0,1fr)); }
+.strategic-group { min-width: 0; }
+.strategic-objective { min-height: 155px; background: #b7cbcf; border: 2px solid #e7deba; border-radius: 20px; padding: 16px 10px; display: flex; align-items: center; justify-content: center; text-align: center; color: #173d48; transition: background-color 160ms,color 160ms,border-color 160ms; }
+.strategic-objective h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.4; }
+.strategic-objective strong,.strategic-objective span,.strategic-indicator strong,.strategic-indicator span { display: block; }
+.strategic-objective strong { font-size: 15px; margin-bottom: 4px; }
+.strategic-indicators { display: grid; gap: 6px; margin-top: 12px; }
+.strategic-indicator { background: #f2eedb; border: 2px solid #e7deba; border-radius: 12px; padding: 16px 10px; text-align: center; color: #111; display: flex; flex-direction: column; justify-content: center; transition: background-color 160ms,border-color 160ms; }
+.strategic-indicator p { margin: 0; font-size: 13px; line-height: 1.4; }
+.strategic-indicator p + p { margin-top: 18px; }
+.strategic-indicator strong { font-size: 15px; margin-bottom: 3px; }
+.strategic-indicators-program > .strategic-indicator { min-height: 265px; }
+.strategic-group-sp6 .strategic-indicators { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.strategic-goal-directorate { border-radius: 6px; padding: 9px 14px; }
+.strategic-program-directorate { background: #084c61; border-color: #084c61; text-transform: none; margin-top: 0; }
+.strategic-grid-directorate .strategic-objective { border-radius: 6px; min-height: 178px; }
+.strategic-indicators-directorate { margin-top: 8px; }
+.strategic-indicators-directorate > .strategic-indicator { border-radius: 5px; padding: 12px 8px; }
+.strategic-indicators-directorate > .strategic-indicator:first-child { min-height: 148px; }
+/* A single group owns its objective and all indicators, so highlighting never leaks to siblings. */
+.strategic-group:hover .strategic-objective,.strategic-group:focus-within .strategic-objective { background: #084c61; border-color: #084c61; color: #fff; }
+.strategic-group:hover .strategic-indicator,.strategic-group:focus-within .strategic-indicator { background: #d7c78b; border-color: #d7c78b; }
+.strategic-objective:focus-visible { outline: 3px solid #297899; outline-offset: 3px; }
+@media (min-width: 1500px) { .strategic-objective h4 { font-size: 16px; } .strategic-indicator p { font-size: 14px; } }
+@media (max-width: 1100px) { .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (max-width: 700px) { .strategic-page { padding: 16px 12px 32px; } .strategic-diagram { padding: 10px; } .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: repeat(2,minmax(0,1fr)); } .strategic-goal { padding: 14px 12px; } }
+@media (max-width: 440px) { .strategic-grid-program,.strategic-grid-directorate { grid-template-columns: minmax(0,1fr); } .strategic-objective,.strategic-grid-directorate .strategic-objective { min-height: 120px; } .strategic-indicators-program > .strategic-indicator { min-height: 160px; } }
+@media (prefers-reduced-motion: reduce) { .strategic-objective,.strategic-indicator { transition: none; } }
