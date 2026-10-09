@@ -9,7 +9,7 @@ const tabs = [
   { id: 'kompetensi', label: 'Pemenuhan Kompetensi' },
 ];
 
-export function KepegawaianPage({ children, demografi }) {
+export function KepegawaianPage({ children, demografi, kompetensi }) {
   const [activeTab, setActiveTab] = useState('data');
   const tabRefs = useRef([]);
   const handleKeyDown = (event, index) => {
@@ -45,7 +45,7 @@ export function KepegawaianPage({ children, demografi }) {
         <div key={tab.id} role="tabpanel" id={`kepegawaian-panel-${tab.id}`}
           aria-labelledby={`kepegawaian-tab-${tab.id}`} hidden={activeTab !== tab.id}
           tabIndex={0} className="flex-1 min-h-0 overflow-y-auto focus-visible:outline-none">
-          {tab.id === 'data' ? children : tab.id === 'demografi' && activeTab === 'demografi' ? demografi : null}
+          {tab.id === 'data' ? children : tab.id === 'demografi' && activeTab === 'demografi' ? demografi : tab.id === 'kompetensi' && activeTab === 'kompetensi' ? kompetensi : null}
         </div>
       ))}
     </section>
