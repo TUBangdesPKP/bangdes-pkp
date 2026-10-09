@@ -103,14 +103,14 @@ export function PhysicalProgressMap() {
         <span>{province ? (districts.data ? `${districtOptions.length} kabupaten / kota` : 'Kabupaten / kota') : '38 provinsi'}</span>
       </div>
       <div className="physical-map-stage">
-        <div ref={container} className="physical-map-canvas" role="region" aria-label="Peta interaktif Indonesia. Pilih provinsi pada peta atau daftar provinsi di atas." aria-busy={loading}/>
+        <div ref={container} className="physical-map-canvas" role="region" aria-label="Peta interaktif Indonesia. Gulir atau cubit dua jari untuk zoom. Pilih provinsi pada peta atau daftar provinsi di atas." aria-busy={loading}/>
         {(loading || error) && <div className="physical-map-status" role={error ? 'alert' : 'status'}>
           {error ? <><span>{error}</span><button type="button" onClick={retryLoading}><RotateCcw size={16}/> Coba lagi</button></> : <><span className="physical-map-spinner"/>{provinceCode ? 'Memuat batas kabupaten / kota…' : 'Memuat peta Indonesia…'}</>}
         </div>}
       </div>
       {imageryError && <div className="physical-map-warning" role="status">Citra satelit tidak tersedia. Peta tetap dapat digunakan dalam mode Peta.</div>}
       <div className="physical-map-footer">
-        <span>Arahkan kursor untuk melihat nama wilayah. Klik provinsi untuk membuka kabupaten / kota.</span>
+        <span>Scroll atau cubit dua jari untuk zoom. Klik provinsi untuk membuka kabupaten / kota.</span>
         <span className="physical-map-legend"><i aria-hidden="true"/> {provinceCode ? 'Batas kabupaten / kota' : 'Batas provinsi'}</span>
       </div>
     </div>

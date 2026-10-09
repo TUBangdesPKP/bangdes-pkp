@@ -135,6 +135,7 @@ test('map shell renders without browser APIs and offers accessible mode and regi
   for (const mode of MAP_MODES) assert.ok(html.includes(mode.label));
   assert.match(html, /role="region" aria-label="Peta interaktif Indonesia/);
   assert.match(html, /Seluruh Indonesia/);
+  assert.match(html, /Scroll atau cubit dua jari untuk zoom/);
   assert.match(html, /role="status"/);
   assert.match(html, /38 provinsi/);
   assert.match(html, /--satellite-ocean:#287d92/);

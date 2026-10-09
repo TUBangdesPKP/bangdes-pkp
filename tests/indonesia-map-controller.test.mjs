@@ -78,6 +78,11 @@ test('controller drills down, preserves focus when switching mode, resets, recov
       onImageryError: () => imageryErrors++,
     });
     const map = state.maps[0];
+    assert.equal(map.options.scrollWheelZoom, true, 'wheel and trackpad zoom around the cursor inside the map');
+    assert.equal(map.options.touchZoom, true, 'two-finger touch pinch is enabled');
+    assert.equal(map.options.bounceAtZoomLimits, false, 'pinch respects the map zoom limits');
+    assert.equal(map.options.wheelDebounceTime, 40);
+    assert.equal(map.options.wheelPxPerZoomLevel, 120, 'fine trackpad input is not overly sensitive');
     const oceanMask = state.groups.find(g => g.options.pane === 'countryMask');
     assert.equal(oceanMask.options.style.fillColor, '#287d92');
     assert.equal(oceanMask.options.style.fillOpacity, 0.18, 'ocean relief remains visible through a subtle tint');
@@ -109,6 +114,8 @@ test('controller drills down, preserves focus when switching mode, resets, recov
     const focusedFits = map.fits.length;
     for (const mode of ['realistic','monochrome','palette']) {
       controller.setMode(mode);
+      assert.equal(map.options.scrollWheelZoom,true,'scroll zoom remains available in all three modes');
+      assert.equal(map.options.touchZoom,true);
       assert.equal(map.active.has(state.tiles[0]),mode==='realistic');
       assert.equal(map.active.has(oceanMask),mode==='realistic','ocean styling stays scoped to satellite mode');
       assert.equal(map.active.has(regencyGroup),true);

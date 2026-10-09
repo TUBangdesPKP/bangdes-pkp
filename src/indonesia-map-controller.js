@@ -15,7 +15,10 @@ export function createIndonesiaMap(element, provinces, { onProvinceSelect, onDis
   const map = L.map(element, {
     preferCanvas: true, zoomControl: false, zoomSnap: 0.25, zoomDelta: 0.5,
     minZoom: 1, maxZoom: 13, maxBounds: allBounds.pad(0.15), maxBoundsViscosity: 1,
-    scrollWheelZoom: false, // Scrolling the page does not accidentally zoom the map.
+    // Leaflet handles wheel/trackpad events on this container only, around the cursor.
+    // Chromium trackpad pinch also arrives as a wheel event (with Ctrl pressed).
+    scrollWheelZoom: true, touchZoom: true, bounceAtZoomLimits: false,
+    wheelDebounceTime: 40, wheelPxPerZoomLevel: 120,
     attributionControl: true,
   });
   L.control.zoom({ position: 'bottomright', zoomInTitle: 'Perbesar peta', zoomOutTitle: 'Perkecil peta' }).addTo(map);

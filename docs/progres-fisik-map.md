@@ -9,7 +9,7 @@ Lokasi: Monitoring Kinerja → Progres Fisik. Perubahan frontend saja; tidak mem
 - **Monokrom**: vektor abu-abu untuk latar visualisasi data mendatang.
 - Hover menampilkan nama; klik provinsi memfokuskan seluruh geometri provinsi termasuk pulau terpisah dan memuat batas kabupaten/kota. Klik kabupaten/kota memfokuskan wilayah tersebut.
 - Dropdown provinsi/kabupaten menyediakan alternatif keyboard/touch untuk wilayah kecil. Tombol Seluruh Indonesia mengembalikan tingkat nasional. Tombol target mengatur ulang cakupan wilayah aktif.
-- Zoom dengan tombol +/−, keyboard dan pinch. Roda mouse tetap menggulir halaman.
+- Zoom dengan tombol +/−, keyboard, scroll mouse, scroll dua jari/gestur pinch trackpad pada browser yang mendukung, dan pinch layar sentuh. Saat kursor berada di peta, scroll memperbesar/memperkecil dengan titik fokus di kursor; di luar peta, scroll tetap menggulir halaman. Menggunakan handler Leaflet pada elemen peta saja, bukan listener global. Sensitivitas roda/trackpad 120 piksel per level, debounce 40 ms, serta batas minimum/maksimum tetap berlaku tanpa pantulan saat pinch.
 - Pergantian mode tidak mengganti wilayah aktif atau mengunduh ulang batas. Tidak ada data capaian/progres fiktif.
 
 ## Sumber dan cakupan
