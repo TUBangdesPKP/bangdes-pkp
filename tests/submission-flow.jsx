@@ -21,7 +21,14 @@ window.fetch = async (_url, options) => {
   window.dispatchEvent(new Event('mock-request'));
   if (!options?.body) return new Response('Timestamp,NIP,Nama\n');
   const p = JSON.parse(options.body);
-  if(closedTest && !['list_periode_submisi','list_pendukung','preview_rekap_final'].includes(p.action)) throw Error('Read-only fixture rejected mutation: '+p.action);
+  if(p.adminReadOnly) {
+    if(!['list_pendukung','preview_rekap_final'].includes(p.action))throw Error('Admin review must never mutate data');
+    if(!p.sessionToken&&!p.adminSessionToken)throw Error('Admin review requires login session');
+    if(!/^19900101202501\d{4}$/.test(p.nip))throw Error('Wrong selected employee');
+    if(p.action==='list_pendukung')return Response.json({status:'success',documents:files,requiresTab2:false,processed:true,savedResult:storedFixture(p)});
+    return Response.json({...storedFixture(p),savedResult:storedFixture(p)});
+  }
+  if(closedTest && !['list_periode_submisi','list_submisi_terhitung','list_pendukung','preview_rekap_final'].includes(p.action)) throw Error('Read-only fixture rejected mutation: '+p.action);
   if(closedTest && ['list_pendukung','preview_rekap_final'].includes(p.action)) {
     if(p.nip!=='TEST'||p.nama!=='Pegawai Uji')throw Error('Wrong employee scope');
     const hasResult=p.bulanTahun.includes('Januari');
@@ -57,7 +64,8 @@ function Fixture() {
   const [route,setRoute] = useState({view:new URLSearchParams(window.location.search).get('modul')==='uang-makan'?'absensi-uang-makan':'absensi-tunjangan-kinerja',step:1});
   const [requests,setRequests] = useState('{}');
   useEffect(() => { const update=()=>setRequests(JSON.stringify(counts)); window.addEventListener('mock-request',update); return ()=>window.removeEventListener('mock-request',update); },[]);
-  const admin=new URLSearchParams(window.location.search).has('admin');
-  return <><div className="fixed bottom-0 left-0 z-50 bg-amber-100 text-xs p-2">SIMULASI LOKAL — tanpa akses backend produksi <output aria-label="Jumlah permintaan">{requests}</output></div><UserDashboardView loggedInUser={{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:admin?'admin':'user',sessionToken:admin?'mock-session':undefined}} currentView={route.view} activeStep={route.step} navigate={(view,step=1)=>setRoute({view,step})} onLogoutRequest={()=>{}}/></>;
+  const legacy=new URLSearchParams(window.location.search).has('legacyAdmin');
+  const admin=legacy||new URLSearchParams(window.location.search).has('admin');
+  return <><div className="fixed bottom-0 left-0 z-50 bg-amber-100 text-xs p-2">SIMULASI LOKAL — tanpa akses backend produksi <output aria-label="Jumlah permintaan">{requests}</output></div><UserDashboardView loggedInUser={{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:admin?'admin':'user',sessionToken:admin&&!legacy?'mock-session':undefined,adminSessionToken:legacy?'mock-admin-session':undefined}} currentView={route.view} activeStep={route.step} navigate={(view,step=1)=>setRoute({view,step})} onLogoutRequest={()=>{}}/></>;
 }
 createRoot(document.getElementById('root')).render(<Fixture/>);

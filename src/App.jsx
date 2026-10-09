@@ -3,7 +3,7 @@ import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { SubmissionSummary } from './submission-summary.jsx';
 import { SubmissionPeriods } from './submission-periods.jsx';
 import { ClosedSubmission } from './closed-submission.jsx';
-import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep } from './submission-period-model.js';
+import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee } from './submission-period-model.js';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
@@ -14,6 +14,7 @@ import { EmployeePhoto } from './employee-photo.jsx';
 import { PublishedLeaders } from './published-leaders.jsx';
 import { DashboardAgenda } from './dashboard-agenda.jsx';
 import { KepegawaianPage } from './kepegawaian.jsx';
+import { MonitoringKinerjaPage } from './monitoring-kinerja.jsx';
 import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
@@ -1230,6 +1231,7 @@ export const Header = ({ navigate, loggedInUser, onLogoutRequest, currentView })
       
       <nav aria-label="Navigasi utama" className="order-3 col-span-2 lg:order-none lg:col-span-1 lg:col-start-2 lg:row-start-1 flex flex-wrap justify-center items-center gap-x-4 gap-y-2 md:gap-x-6 text-sm font-medium text-[#084C61]">
         <button onClick={() => navigate('home')} className="hover:opacity-80 transition-opacity cursor-pointer">Beranda</button>
+        <a href="#/monitoring-kinerja" aria-current={currentView === 'monitoring-kinerja' ? 'page' : undefined} className="hover:opacity-80 transition-opacity aria-[current=page]:font-extrabold aria-[current=page]:underline underline-offset-4">Monitoring Kinerja</a>
         <a href="#/kepegawaian" aria-current={['kepegawaian','profile'].includes(currentView) ? 'page' : undefined} className="hover:opacity-80 transition-opacity aria-[current=page]:font-extrabold aria-[current=page]:underline underline-offset-4">Kepegawaian</a>
         <button className="flex items-center gap-1.5 hover:opacity-80 transition-opacity cursor-pointer">
           <MessageCircle size={16} /> Bantuan
@@ -1345,14 +1347,14 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
     await new Promise(resolve => setTimeout(resolve, 800));
 
     const isSuperAdmin = targetUser && targetUser.NIP === 'SUPERADMIN';
-    if (isSuperAdmin && pinToVerify === '111111') {
-      setLoading(false);
-      onLoginSuccess(targetUser);
-      navigate('rekap');
-      return;
-    }
-
     try {
+      if (isSuperAdmin) {
+        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'login_admin', pin: pinToVerify });
+        if (!result.adminSessionToken || !result.user) throw Error('Backend login Admin perlu diperbarui.');
+        onLoginSuccess({ ...result.user, adminSessionToken: result.adminSessionToken });
+        navigate('rekap');
+        return;
+      }
       const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'login_pegawai', nip: targetUser?.NIP, pin: pinToVerify });
       if (!result.sessionToken || !result.user) throw Error('Backend login perlu diperbarui. Hubungi pengelola.');
       onLoginSuccess({ ...result.user, sessionToken: result.sessionToken });
@@ -1380,7 +1382,7 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
           SubUnitKerja: 'Direktorat Pembangunan Perumahan Perdesaan',
           Jabatan: 'Super Administrator Sistem Informasi',
           AtasanLangsung: 'Direktur Jenderal', KelasJabatan: '17',
-          EmailDinas: 'admin.bangdes@pkp.go.id', Foto_Pegawai: '', PIN: '111111'
+          EmailDinas: 'admin.bangdes@pkp.go.id', Foto_Pegawai: ''
         });
         setPinDigits(['', '', '', '', '', '']);
         setStep(2);
@@ -2970,6 +2972,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
 export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [submissionAdminKey, setSubmissionAdminKey] = useState('');
+  const [selectedRecap, setSelectedRecap] = useState(null);
   
 
   const [selectedFile, setSelectedFile] = useState(null);
@@ -3018,7 +3021,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const activeTab = getModuleKey(currentView);
   const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
-  const readOnlyPeriod = isPeriodSpt && submissionIsReadOnly(selectedPeriod);
+  const isSubmissionAdmin = isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role);
+  const viewingEmployee = selectedSubmissionEmployee(selectedRecap, activeTab, selectedPeriod, isSubmissionAdmin);
+  const readOnlyPeriod = isPeriodSpt && (submissionIsReadOnly(selectedPeriod) || !!viewingEmployee);
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
@@ -3050,6 +3055,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   };
 
   const resetUploadState = () => {
+    setSelectedRecap(null);
     referenceRequest.current++;
     setExistingCheckError(''); setIsCheckingExisting(false);
     sptUpload.reset();
@@ -3136,8 +3142,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const [extraUploadBusy, setExtraUploadBusy] = useState(false);
   const [processStatus, setProcessStatus] = useState('Memperbarui rekap...');
   const [processError, setProcessError] = useState('');
-  const claimIdentity = getClaimIdentity(readOnlyPeriod ? null : parsedData, loggedInUser);
+  const claimIdentity = viewingEmployee || getClaimIdentity(readOnlyPeriod ? null : parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
+  if (viewingEmployee) Object.assign(submission, { adminReadOnly: true, sessionToken: loggedInUser.sessionToken, adminSessionToken: loggedInUser.adminSessionToken });
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
   const submissionKey = JSON.stringify(submission);
   if (previewSession.current.key !== submissionKey) previewSession.current = { key: submissionKey, data: null, review: null };
@@ -3509,13 +3516,14 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
               <div className="flex items-center justify-center gap-3">
                 {[1, 2, 3, 4, 5].map((num) => {
                   const isActive = activeStep === num;
-                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (readOnlyPeriod ? !readOnlySubmissionStep(num) : (num === 4 && !canOpenFinal));
+                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (readOnlyPeriod ? !(readOnlySubmissionStep(num) || (isSubmissionAdmin && num === 2)) : (num === 4 && !canOpenFinal));
                     return (
                       <button
                         key={num}
                         type="button"
                         disabled={isDisabled}
                         onClick={() => {
+                          if (num <= 2) setSelectedRecap(null);
                           if (num === 1) {
                             navigate(currentView, 1);
                           } else {
@@ -3546,16 +3554,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
             <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
                 <SubmissionPeriods key={activeTab} endpoint={APPS_SCRIPT_URL} modul={activeTab} user={loggedInUser} initialPeriod={selectedPeriod} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelect={period => {
+                  setSelectedRecap(null);
                   setSelectedPeriod(period);
                   if (selectedPeriod?.id !== period.id || submissionIsReadOnly(period) || !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) resetUploadState();
-                  navigate(currentView, submissionEntryStep(period, isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)));
+                  navigate(currentView, submissionEntryStep(period, isSubmissionAdmin));
                 }}/>
-              ) : readOnlyPeriod ? (
-                <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => navigate(currentView, step)} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
+              ) : readOnlyPeriod && !(isSubmissionAdmin && activeStep === 2) ? (
+                <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} viewingEmployee={viewingEmployee} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => { if (step <= 2) setSelectedRecap(null); navigate(currentView, step); }} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="space-y-5">
-                {isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role) && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey}/>}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
+                {isSubmissionAdmin && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelectEmployee={employee => { setSelectedRecap({ modul: activeTab, periode: selectedPeriod.periodeEvent, employee }); navigate(currentView, 5); }}/>}
+                {submissionIsReadOnly(selectedPeriod) ? <p className="p-4 rounded-xl bg-amber-50 text-amber-900 text-sm">Periode ditutup. Pilih nama pegawai di atas untuk melihat rekap tersimpan.</p> : <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
                       <>
                         <div>
@@ -3819,7 +3828,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                       </div>
                     </div>
                   </div>
-                </div>
+                </div>}
                 </div>
               ) : activeStep === 3 && selectedPeriod ? (
                 <fieldset disabled={isProcessingEvidence} className="max-w-7xl mx-auto space-y-6 min-w-0">
@@ -4050,7 +4059,7 @@ export default function App() {
 
   useEffect(() => {
     // A direct public recap visit needs only the restricted recap response.
-    if (routeData.view !== 'rekap-publik' && !(routeData.view === 'rekap' && !loggedInUser)) fetchPegawaiData(false);
+    if (!['rekap-publik', 'monitoring-kinerja'].includes(routeData.view) && !(routeData.view === 'rekap' && !loggedInUser)) fetchPegawaiData(false);
   }, [routeData.view, loggedInUser]);
 
   useEffect(() => {
@@ -4069,7 +4078,7 @@ export default function App() {
           const { timestamp } = JSON.parse(stored);
           if (new Date().getTime() - timestamp >= SESSION_DURATION) {
             setLoggedInUser(null); localStorage.removeItem('pkp_session'); setSessionExpired(true);
-            if (!['home','kepegawaian','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
+            if (!['home','monitoring-kinerja','kepegawaian','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
           }
         } catch(e) {}
       }
@@ -4112,6 +4121,7 @@ export default function App() {
     switch (currentView) {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
       case 'kepegawaian': return <KepegawaianPage><ProfileView navigate={navigate} embedded /></KepegawaianPage>;
+      case 'monitoring-kinerja': return <MonitoringKinerjaPage />;
       case 'rekap': case 'profil-saya': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
         if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
         return <UserDashboardView loggedInUser={loggedInUser} onProfileUpdate={handleProfileUpdate} onLogoutRequest={() => setShowLogoutModal(true)} navigate={navigate} currentView={currentView} activeStep={activeStep} />;
@@ -4137,9 +4147,9 @@ export default function App() {
         </div>
       )}
 
-      {!isDashboardView && !isPublicRecap && !['profile', 'kepegawaian'].includes(currentView) && <Header currentView={currentView} navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
+      {!isDashboardView && !isPublicRecap && !['profile', 'kepegawaian', 'monitoring-kinerja'].includes(currentView) && <Header currentView={currentView} navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />}
       
-      {['profile', 'kepegawaian'].includes(currentView) ? (
+      {['profile', 'kepegawaian', 'monitoring-kinerja'].includes(currentView) ? (
         <div className="flex flex-col h-[100dvh]">
           <div className="shrink-0">
           <Header currentView={currentView} navigate={navigate} loggedInUser={loggedInUser} onLogoutRequest={() => setShowLogoutModal(true)} />

@@ -14,23 +14,29 @@ test('Kepegawaian opens the inline directory by default for all roles and preser
   try {
     globalThis.window={location:{hash:'#/kepegawaian'}};
     for(const role of [null,'pegawai','Admin']) {
+      globalThis.window.location.hash='#/kepegawaian';
       const user=role?{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:role}:null;
       globalThis.localStorage={getItem:()=>user?JSON.stringify({user,timestamp:Date.now()}):null};
       const header=renderToStaticMarkup(React.createElement(Header,{navigate:()=>{},loggedInUser:user,currentView:'kepegawaian'}));
-      assert.match(header,/Beranda<\/button><a href="#\/kepegawaian" aria-current="page"/);
+      assert.match(header,/Beranda<\/button><a href="#\/monitoring-kinerja"/);
+      assert.match(header,/<a href="#\/kepegawaian" aria-current="page"/);
+      assert.ok(header.indexOf('Monitoring Kinerja')<header.indexOf('Kepegawaian'));
       assert.ok(header.indexOf('Kepegawaian')<header.indexOf('Bantuan'));
       const page=renderToStaticMarkup(React.createElement(App));
       assert.match(page,/id="kepegawaian-title"/);
       assert.doesNotMatch(page,/href="#\/profile"|Lihat Bank Data Pegawai|Bank Data Profil Pegawai/);
       assert.match(page,/Kembali ke Beranda/);
       assert.match(page,/role="tab" id="kepegawaian-tab-data"[^>]*aria-selected="true"/);
-      for (const id of ['kompetensi', 'kredit']) {
+      for (const id of ['demografi', 'cuti', 'kredit', 'kompetensi']) {
         assert.match(page,new RegExp(`role="tab" id="kepegawaian-tab-${id}"[^>]*aria-selected="false"`));
         assert.match(page,new RegExp(`id="kepegawaian-panel-${id}"[^>]*hidden=""`));
         assert.match(page,new RegExp(`id="kepegawaian-panel-${id}"[^>]*></div>`));
       }
-      assert.match(page,/Pemenuhan Kompetensi Pegawai/);
-      assert.match(page,/Angka Kredit Pegawai/);
+      assert.deepEqual([...page.matchAll(/role="tab" id="kepegawaian-tab-([^"]+)"/g)].map(match=>match[1]),['data','demografi','cuti','kredit','kompetensi']);
+      assert.match(page,/Pemenuhan Kompetensi/);
+      assert.match(page,/Angka Kredit/);
+      assert.match(page,/Demografi/);
+      assert.match(page,/Rekap Cuti/);
       assert.match(page,/Filter Berdasarkan Sub Unit Kerja/);
       assert.match(page,/aria-label="Cari pegawai"/);
       assert.match(page,/aria-label="Daftar pegawai"/);
@@ -40,6 +46,13 @@ test('Kepegawaian opens the inline directory by default for all roles and preser
       assert.doesNotMatch(home,/Lihat Bank Data Pegawai/);
       assert.match(home,/Upload Dokumen Pendukung/);assert.match(home,/#\/rekap-publik/);
       assert.ok(home.indexOf('Upload Dokumen Pendukung')>home.indexOf('Rekap Kinerja &amp; Kedisiplinan'));
+      globalThis.window.location.hash='#/monitoring-kinerja';
+      const monitoring=renderToStaticMarkup(React.createElement(App));
+      assert.match(monitoring,/id="monitoring-kinerja-title"/);
+      assert.match(monitoring,/<a href="#\/monitoring-kinerja" aria-current="page"/);
+      assert.match(monitoring,/Kembali ke Beranda/);
+      assert.equal((monitoring.match(/aria-label="Navigasi utama"/g)||[]).length,1);
+      assert.doesNotMatch(monitoring,/kepegawaian-panel|Memuat data kepegawaian|Dashboard Data dan Informasi/);
     }
     globalThis.window.location.hash='#/profile';
     const bank=renderToStaticMarkup(React.createElement(App));

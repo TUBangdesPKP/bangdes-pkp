@@ -918,7 +918,9 @@ function consolidatedFixture() {
 test('submission list is complete-only and uses latest row, authoritative ASN and subunit', () => {
   const f=consolidatedFixture();
   assert.equal(f.call({action:'list_submisi_terhitung'}).status,'error');
-  const payload={action:'list_submisi_terhitung',adminKey:wrapKey};
+  f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.call({action:'login_admin',pin:'062419'}).adminSessionToken;
+  const payload={action:'list_submisi_terhitung',adminSessionToken};
   const result=f.call(payload);assert.equal(result.employees.length,1);assert.equal(result.employees[0].jenisAsn,'PNS');assert.equal(result.employees[0].unit,'Subbagian Tata Usaha');
   const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN');const last=[...sheet.rows[1]];last[sheet.rows[0].indexOf('Hitung_Status')]='Menunggu perhitungan ulang';sheet.rows.push(last);
   assert.equal(f.call(payload).employees.length,0);
@@ -1004,6 +1006,55 @@ test('aggregate generation refuses stale sources and ambiguous template identiti
 test('non-admin employee session cannot access the all-employee submission list', () => {
   const f=profileFixture(), session=f.call({action:'login_pegawai',pin:'012345'});
   assert.match(f.call({action:'list_submisi_terhitung',sessionToken:session.sessionToken,role:'admin'}).message,/Hanya Admin/);
+});
+
+test('legacy Admin session reads saved employee recap without generation password and cannot generate without it', () => {
+  const f=consolidatedFixture();
+  assert.match(f.call({action:'login_admin',pin:'062419'}).message,/LEGACY_ADMIN_PIN/);
+  f.properties.set('LEGACY_ADMIN_PIN','062419');
+  assert.equal(f.call({action:'login_admin',pin:'111111'}).status,'error');
+  const login=f.call({action:'login_admin',pin:'062419'});
+  assert.equal(login.status,'success');assert.ok(login.adminSessionToken);assert.equal(login.user.PIN,undefined);
+  const auth={adminSessionToken:login.adminSessionToken};
+  assert.equal(f.call({action:'list_submisi_terhitung',...auth}).employees.length,1);
+  assert.equal(f.call({action:'list_submisi_terhitung',adminKey:wrapKey}).status,'error');
+  const before=JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])]));
+  for(const action of ['list_pendukung','preview_rekap_final']) {
+    const result=f.call({action,...auth,adminReadOnly:true});
+    assert.equal(result.status,'success',result.message);
+    assert.equal((result.savedResult||result).nip,f.scope.nip);
+  }
+  for(const action of ['proses_bukti','simpan_rekap_final','hapus_pendukung','upload_pendukung','buat_rekap_submisi']) {
+    assert.equal(f.call({action,...auth,adminReadOnly:true,adminKey:wrapKey}).status,'error');
+  }
+  assert.equal(f.call({action:'buat_rekap_submisi',...auth}).status,'error');
+  assert.equal(JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])])),before);
+  f.properties.set('LEGACY_ADMIN_PIN','962410');
+  assert.equal(f.call({action:'list_submisi_terhitung',...auth}).status,'error');
+});
+
+test('NIP Admin list uses existing login session, rejects revoked role and requires separate generation key', () => {
+  const f=profileFixture();
+  f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
+  const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+  assert.equal(f.call({action:'list_submisi_terhitung',sessionToken}).status,'success');
+  f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  assert.match(f.call({action:'buat_rekap_submisi',sessionToken}).message,/Kunci publikasi admin/);
+  assert.equal(f.call({action:'list_pendukung',sessionToken,adminReadOnly:true}).status,'success');
+  f.people.rows[1][3]='pegawai';
+  assert.match(f.call({action:'list_submisi_terhitung',sessionToken,role:'admin'}).message,/Hanya Admin/);
+  assert.equal(f.call({action:'list_pendukung',sessionToken,adminReadOnly:true}).status,'error');
+  assert.equal(f.call({action:'list_submisi_terhitung',sessionToken:'forged'}).status,'error');
+});
+
+test('legacy Admin PIN attempts are rate limited and expired sessions fail closed', () => {
+  const f=fixture();f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const login=f.call({action:'login_admin',pin:'062419'});
+  const key='admin-read:'+f.context.digest_(login.adminSessionToken);
+  f.context.CacheService.getScriptCache().put(key,JSON.stringify({pinHash:f.context.digest_('062419'),expires:0}));
+  assert.throws(()=>f.context.requireSubmissionReader_({adminSessionToken:login.adminSessionToken}),/Sesi Admin berakhir/);
+  for(let i=0;i<5;i++)assert.match(f.call({action:'login_admin',pin:'wrong'}).message,/PIN salah/);
+  assert.match(f.call({action:'login_admin',pin:'062419'}).message,/Terlalu banyak/);
 });
 test('Tukin export writes saved deduction to I and retains K formula on repeated generation', () => {
   const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';

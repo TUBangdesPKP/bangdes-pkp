@@ -3,8 +3,10 @@ import { ArrowLeft } from 'lucide-react';
 
 const tabs = [
   { id: 'data', label: 'Data Pegawai' },
-  { id: 'kompetensi', label: 'Pemenuhan Kompetensi Pegawai' },
-  { id: 'kredit', label: 'Angka Kredit Pegawai' },
+  { id: 'demografi', label: 'Demografi' },
+  { id: 'cuti', label: 'Rekap Cuti' },
+  { id: 'kredit', label: 'Angka Kredit' },
+  { id: 'kompetensi', label: 'Pemenuhan Kompetensi' },
 ];
 
 export function KepegawaianPage({ children }) {
@@ -33,7 +35,7 @@ export function KepegawaianPage({ children }) {
             aria-controls={`kepegawaian-panel-${tab.id}`} aria-selected={activeTab === tab.id}
             tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => setActiveTab(tab.id)} onKeyDown={event => handleKeyDown(event, index)}
-            className="shrink-0 px-5 md:px-8 py-3 rounded-xl text-sm md:text-base font-extrabold cursor-pointer hover:bg-white/10 aria-selected:bg-white/15 aria-selected:underline underline-offset-8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">
+            className="flex-1 shrink-0 whitespace-nowrap px-5 md:px-8 py-3 rounded-xl text-sm md:text-base font-extrabold cursor-pointer hover:bg-white/10 aria-selected:bg-white/15 aria-selected:underline underline-offset-8 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">
             {tab.label}
           </button>
         ))}

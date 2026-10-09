@@ -1,8 +1,10 @@
 export const MONTH_NAMES = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
 export const submissionIsReadOnly = period => !!period && period.status !== 'DIBUKA';
-export const submissionEntryStep = (period, admin) => submissionIsReadOnly(period) || !admin ? 5 : 2;
+export const submissionEntryStep = (period, admin) => admin ? 2 : 5;
 export const readOnlySubmissionStep = step => [1, 3, 4, 5].includes(step);
+export const selectedSubmissionEmployee = (selection, modul, period, admin) =>
+  admin && selection?.modul === modul && selection?.periode === period?.periodeEvent ? selection.employee : null;
 
 export function submissionPeriodCard(modul, year, month, status = 'DITUTUP') {
   if (!['uang-makan','tukin'].includes(modul) || !Number.isInteger(year) || year < 2000 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12) throw new Error('Bulan atau tahun submisi tidak valid.');

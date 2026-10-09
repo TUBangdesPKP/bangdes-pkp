@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep} from '../src/submission-period-model.js';
+import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee} from '../src/submission-period-model.js';
 
 test('employees enter saved recap for every month; closed periods remain readable without upload',()=>{
   for (const modul of ['uang-makan','tukin']) {
@@ -9,12 +9,24 @@ test('employees enter saved recap for every month; closed periods remain readabl
     assert.equal(submissionIsReadOnly(closed),true);
     assert.equal(submissionIsReadOnly(open),false);
     assert.equal(submissionEntryStep(closed,false),5);
-    assert.equal(submissionEntryStep(closed,true),5);
+    assert.equal(submissionEntryStep(closed,true),2);
     assert.equal(submissionEntryStep(open,false),5);
     assert.equal(submissionEntryStep(open,true),2);
   }
   assert.deepEqual([1,2,3,4,5].filter(readOnlySubmissionStep),[1,3,4,5]);
   assert.equal(readOnlySubmissionStep(6),false);
+});
+
+test('admin employee selection is scoped to the module and period and never applies to ordinary employees', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const period=submissionPeriodCard(modul,2026,8), employee={nip:'TEST',nama:'Pegawai Uji'};
+    const selection={modul,periode:period.periodeEvent,employee};
+    assert.equal(selectedSubmissionEmployee(selection,modul,period,true),employee);
+    assert.equal(selectedSubmissionEmployee(selection,modul,period,false),null);
+    assert.equal(selectedSubmissionEmployee(selection,modul,submissionPeriodCard(modul,2026,9),true),null);
+    assert.equal(selectedSubmissionEmployee(selection,modul==='tukin'?'uang-makan':'tukin',period,true),null);
+    assert.equal(selectedSubmissionEmployee(null,modul,period,true),null);
+  }
 });
 
 test('meal periods support future years, leap days and stable legacy identifiers',()=>{

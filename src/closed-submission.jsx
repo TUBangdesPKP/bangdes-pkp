@@ -2,7 +2,7 @@ import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 
 // Only read endpoints are mounted here: no upload, claim, process or save panels.
-export function ClosedSubmission({ endpoint, context, step, onStep, onPreview }) {
+export function ClosedSubmission({ endpoint, context, step, onStep, onPreview, viewingEmployee }) {
   const documents = useSubmissionDocuments({ endpoint, context, enabled: true, readOnly: true, onPreview });
   const moduleLabel = context.modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan';
   const empty = <div className="rounded-2xl border bg-white p-6 space-y-3">
@@ -10,7 +10,8 @@ export function ClosedSubmission({ endpoint, context, step, onStep, onPreview })
     <button onClick={() => onStep(3)} className="text-[#084C61] underline">Lihat dokumen tab 3</button>
   </div>;
   return <div className="space-y-5">
-    <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Periode ditutup — hanya lihat. Unggah, klaim, hapus, koreksi jam, dan penyimpanan perubahan tidak tersedia.</p>
+    <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{viewingEmployee ? `Rekap ${viewingEmployee.nama} — NIP ${viewingEmployee.nip} — hanya lihat.` : 'Periode ditutup — hanya lihat.'} Unggah, klaim, hapus, koreksi jam, dan penyimpanan perubahan tidak tersedia.</p>
+    {viewingEmployee && <button onClick={() => onStep(2)} className="text-sm font-bold text-[#084C61] underline">Kembali ke daftar pegawai (tab 2)</button>}
     {step === 3 ? <>
       {documents.render()}
       <button onClick={() => onStep(4)} className="rounded-xl bg-[#084C61] text-white px-5 py-3 text-sm">Lihat Preview Tab 4</button>

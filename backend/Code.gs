@@ -976,6 +976,10 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var payload = JSON.parse(e.postData.contents);
+    if (payload.adminReadOnly) {
+      if (['list_pendukung','preview_rekap_final'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
+      requireSubmissionReader_(payload);
+    }
     if (payload.action === 'agenda_dashboard') return json_(dashboardAgenda_(payload));
     // Read-only wrap requests must not hold the write lock while opening employee files.
     if (payload.action === 'rekap_bulanan') return json_(monthlyWrapPreview_(payload));
@@ -988,6 +992,7 @@ function doPost(e) {
     if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
     if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) requireOpenSubmission_(payload);
     if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
+    if (payload.action === 'login_admin') return json_(loginLegacyAdmin_(payload));
     if (payload.action === 'aktivasi_akun') return json_(activateEmployee_(payload));
     if (payload.action === 'profil_saya') return json_({status:'success',user:profileUser_(requireProfileSession_(payload))});
     if (payload.action === 'ubah_foto_profil') return json_(updateProfilePhoto_(payload));
@@ -1689,6 +1694,26 @@ function submissionAdmin_(payload) {
   // Legacy synthetic super-admin has no employee session: use the existing server admin key.
   requireWrapAdmin_(payload);
 }
+// Legacy admin login gets a read-only session, never authority to publish/write.
+function loginLegacyAdmin_(payload) {
+  var props=PropertiesService.getScriptProperties(), pin=props.getProperty('LEGACY_ADMIN_PIN');
+  if(!/^\d{6}$/.test(pin||''))throw new Error('Atur Script Property LEGACY_ADMIN_PIN berisi 6 angka untuk login username admin.');
+  var key='LEGACY_ADMIN_ATTEMPTS', now=Date.now(), attempts=JSON.parse(props.getProperty(key)||'{"count":0,"until":0}');
+  if(attempts.until<=now)attempts={count:0,until:now+15*60*1000};
+  if(attempts.count>=5)throw new Error('Terlalu banyak percobaan PIN. Coba lagi setelah 15 menit.');
+  if(digest_(String(payload.pin||''))!==digest_(pin)){attempts.count++;props.setProperty(key,JSON.stringify(attempts));throw new Error('PIN salah.');}
+  props.deleteProperty(key);
+  var token=Utilities.getUuid()+Utilities.getUuid();
+  CacheService.getScriptCache().put('admin-read:'+digest_(token),JSON.stringify({pinHash:digest_(pin),expires:now+30*60*1000}),1800);
+  return {status:'success',adminSessionToken:token,user:{NIP:'SUPERADMIN',Nama:'Super Administrator',Akun_Role:'admin'}};
+}
+function requireSubmissionReader_(payload) {
+  if(payload.sessionToken){submissionAdmin_({sessionToken:payload.sessionToken});return;}
+  var token=String(payload.adminSessionToken||''), pin=PropertiesService.getScriptProperties().getProperty('LEGACY_ADMIN_PIN');
+  if(!token||token.length>200||!pin)throw new Error('Sesi Admin tidak tersedia. Silakan keluar dan login kembali.');
+  var raw=CacheService.getScriptCache().get('admin-read:'+digest_(token)), session=raw?JSON.parse(raw):null;
+  if(!session||session.expires<=Date.now()||session.pinHash!==digest_(pin))throw new Error('Sesi Admin berakhir. Silakan login kembali.');
+}
 function submissionPeriodStatus_(modul, year, month) {
   if(['uang-makan','tukin'].indexOf(modul)===-1||!Number.isInteger(year)||year<2000||year>9999||!Number.isInteger(month)||month<1||month>12)throw new Error('Bulan atau tahun submisi tidak valid.');
   var key='SUBMISI_STATUS_'+modul+'_'+year+'_'+('0'+month).slice(-2);
@@ -1821,7 +1846,7 @@ function calculatedSubmissionRecords_(payload) {
   }).sort(function(a,b){return a.unit.localeCompare(b.unit)||a.nama.localeCompare(b.nama);});
 }
 function submissionCalculatedList_(payload) {
-  submissionAdmin_(payload);
+  requireSubmissionReader_(payload);
   return {status:'success',employees:calculatedSubmissionRecords_(payload).map(function(row){return {nip:row.nip,nama:row.nama,unit:row.unit,jenisAsn:row.jenisAsn};})};
 }
 function submissionRecapFolder_(records) {
@@ -1896,6 +1921,7 @@ function recapWriteBlocks_(changes) {
 }
 function createSubmissionRecaps_(payload) {
   submissionAdmin_(payload);
+  requireWrapAdmin_(payload);
   var period=submissionPeriod_(payload), records=calculatedSubmissionRecords_(payload);
   if(!records.length)throw new Error('Belum ada pegawai dengan perhitungan lengkap pada submisi ini.');
   // Read saved final attendance, not fresh financial rules or browser-supplied totals.
