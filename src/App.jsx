@@ -21,6 +21,7 @@ import { LeaveRecapPage } from './leave-recap.jsx';
 import { demographyFields } from './demography-model.js';
 import { MonitoringKinerjaPage } from './monitoring-kinerja.jsx';
 import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
+import { manualArchiveFileSelection } from './manual-archive-file.js';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
@@ -1960,6 +1961,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   const [inlineSearchQuery, setInlineSearchQuery] = useState('');
 
   const [isManualUpload, setIsManualUpload] = useState(false);
+  const [manualDragId, setManualDragId] = useState(null);
   const [manualEntries, setManualEntries] = useState([
     { id: crypto.randomUUID(), file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }
   ]);
@@ -1980,6 +1982,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
     setArsipSearchQuery('');
     setInlineSearchQuery('');
     setIsManualUpload(false);
+    setManualDragId(null);
     setManualEntries([{ id: crypto.randomUUID(), file: null, startDate: '', endDate: '', tujuan: '', searchQuery: '', pegawai: [] }]);
   };
   const handleClearFile = (id) => {
@@ -2180,10 +2183,13 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
     setManualEntries(prev => prev.map(entry => entry.id === id ? { ...entry, [field]: value } : entry));
   };
   
-  const handleManualFileChange = (id, e) => {
-    if (e.target.files && e.target.files[0]) {
-      setManualEntries(prev => prev.map(entry => entry.id === id ? { ...entry, file: e.target.files[0] } : entry));
-    }
+  const handleManualFileChange = (id, files) => {
+    if (isSubmittingArsip || isReadingArsip) return;
+    const selection = manualArchiveFileSelection(files);
+    if (!selection.file && !selection.error) return;
+    setManualEntries(prev => prev.map(entry => entry.id !== id ? entry : selection.error
+      ? {...entry, fileError: selection.error}
+      : {...entry, file: selection.file, fileError: ''}));
   };
 
   const handleAddPegawaiManual = (id, peg) => {
@@ -2207,7 +2213,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
 
   const totalManualPegawai = manualEntries.reduce((acc, curr) => acc + curr.pegawai.length, 0);
-  const isManualUploadValid = cutiCalendar.ready && (!isPeriodSpt || submissionReady) && manualEntries.every(e => e.file && /\.(pdf|jpe?g|png)$/i.test(e.file.name) && e.file.size <= 10 * 1024 * 1024 && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0 && (documentModule !== 'cuti' || countArchiveDays(e.startDate, e.endDate) > 0));
+  const isManualUploadValid = cutiCalendar.ready && !isReadingArsip && (!isPeriodSpt || submissionReady) && manualEntries.every(e => e.file && !e.fileError && !manualArchiveFileSelection([e.file]).error && e.startDate && e.endDate && e.endDate >= e.startDate && e.tujuan.trim() && e.pegawai.length > 0 && (documentModule !== 'cuti' || countArchiveDays(e.startDate, e.endDate) > 0));
 
   const handleUploadManualSubmit = async () => {
     if (!isManualUploadValid || isSubmittingArsip) return;
@@ -2394,11 +2400,11 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                   <FileText size={14} className="text-[#084C61]" /> {documentModule === 'spt' ? 'SPT' : 'Cuti'} Manual #{index + 1}
                                 </div>
                                 
-                                <label className="border-2 border-dashed border-gray-200 hover:border-[#0E5B73] bg-[#F7FAFC] rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer text-center mb-4">
-                                  <UploadCloud size={20} className="text-gray-400" />
-                                  <span className="text-xs font-semibold text-gray-600">{entry.file ? entry.file.name : `Pilih file ${documentModule === 'spt' ? 'SPT' : 'Cuti'}`}</span>
-                                  <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleManualFileChange(entry.id, e)} className="hidden" />
-                                </label>
+                                <ArchiveFileDropzone manual documentModule={documentModule} entryId={entry.id}
+                                  fileName={entry.file?.name || ''} error={entry.fileError || ''}
+                                  disabled={isSubmittingArsip || isReadingArsip} isDragging={manualDragId === entry.id}
+                                  onDragActiveChange={active => setManualDragId(previous => active ? entry.id : previous === entry.id ? null : previous)}
+                                  onFiles={files => handleManualFileChange(entry.id, files)} />
 
                                 <div className="grid grid-cols-2 gap-3 mb-3">
                                   <div>
