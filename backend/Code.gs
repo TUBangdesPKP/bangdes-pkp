@@ -2697,6 +2697,23 @@ function writeSubmissionStatus_(record, status) {
   if(column<10||target.headers.lastIndexOf('Submit_Status')>column)throw new Error('Kolom Submit_Status bentrok/duplikat.');
   target.sheet.getRange(target.row,column+1).setValue(status);
 }
+// Correct only a server-stored Director exemption, preserving the original
+// tariff, attendance and claims. Never infer historical eligibility from input.
+function directorZeroSavedResult_(saved) {
+  var corrected=JSON.parse(JSON.stringify(saved)), calc=corrected.calculation;
+  if(!calc||calc.modul!=='tukin'||calc.directorExempt!==true)throw new Error('Hasil tersimpan bukan Tukin Direktur.');
+  var amount=calc.amount;
+  if(!amount||!Number.isFinite(amount.tarif)||amount.tarif<0||amount.bruto!==amount.tarif||amount.netto!==amount.tarif||amount.potongan!==0)throw new Error('Nominal historis Direktur perlu diperiksa melalui perhitungan ulang.');
+  ['flexi','terlambat','psw','tidakMasuk','menitTelat','menitPsw','menitTanpaPresensi','totalMenit','potonganAbsensi','lupaAbsen','adjusted','unadjusted','adjustmentReported','adjustmentDocuments','adjustmentDocumentsUsed','adjustmentDocumentsUnclaimed'].forEach(function(key){calc.totals[key]=0;});
+  calc.totals.adjustmentMonths={};
+  (calc.days||[]).forEach(function(day){
+    ['flexiMenit','tl','psw','menitTelat','menitPsw','menitTanpaPresensi','potongan','adjusted','lupaAbsen'].forEach(function(key){day[key]=0;});
+    day.wajibPulang='-';day.adjustments={};
+  });
+  amount.potonganSkp=0;amount.persenPotongan=0;amount.potongan=0;
+  calc.version='2026-10-10-director-zero';
+  return corrected;
+}
 function submitFinal_(payload) {
   submissionAdmin_(payload);
   if(payload.confirmed!==true)throw new Error('Konfirmasi submit rekap diperlukan.');
@@ -2705,12 +2722,20 @@ function submitFinal_(payload) {
   if(!processedState_(state)||payload.revision!==state.revision)throw new Error('Data berubah. Periksa kembali preview sebelum submit.');
   var saved=readSavedFinalResult_(state);
   if(!saved||!saved.calculation.complete)throw new Error('Selesaikan perhitungan sebelum submit.');
+  if(payload.applyDirectorZero===true){
+    saved=directorZeroSavedResult_(saved);
+    // Keep a failed note/snapshot write out of the aggregate export. A retry
+    // uses the same registered note and snapshot, never a new file by name.
+    writeSubmissionStatus_(state.record,'Menunggu submit');
+    saved.note=saveCalculationNote_(state,saved.calculation);
+    storeFinalResult_(state.saved.book,saved);
+  }
   // Freeze the reviewed financial values into the annual-card summary. Never
   // reread Data_Pegawai rates when submitting an already reviewed calculation.
   writeCalculationMaster_(state.record,saved.calculation,saved.note||{});
   writeSubmissionStatus_(state.record,'Disubmit');
   SpreadsheetApp.flush();
-  return {status:'success',submitted:true,nip:state.record.nip,modul:state.record.modul,periode:state.record.periode,revision:state.revision};
+  return {status:'success',submitted:true,nip:state.record.nip,modul:state.record.modul,periode:state.record.periode,revision:state.revision,savedResult:payload.applyDirectorZero===true?saved:undefined};
 }
 function invalidateCalculation_(record) {
   var target = calculationMasterTarget_(record), groups = [];
@@ -2746,10 +2771,10 @@ function saveCalculationNote_(state, calculation) {
     'Flexi maksimal 60 menit. Pengganti jam pulang maksimal 60 menit. Absen kosong dikonversi 240 menit per presensi.',
     'TL: 0,5% / 0,75% / 1,25%. PSW: 0,5% / 0,75% / 1% / 1,25%. Dinas/Cuti/TB/Libur bebas TL/PSW.',
     'Potongan rupiah dibulatkan ke rupiah terdekat. Jam asli disimpan di baseline; koreksi disertai surat.', ''];
-  var notedDays = calculation.days.filter(function(day) { return day.tl || day.psw || day.menitTanpaPresensi; });
-  if (calculation.directorExempt) lines.push(
+  var notedDays = calculation.directorExempt ? [] : calculation.days.filter(function(day) { return day.tl || day.psw || day.menitTanpaPresensi; });
+  if (calculation.directorExempt) lines=lines.slice(0,4).concat([
     'Pengecualian jabatan Direktur: flexi, TL, PSW, tidak absen, kekurangan jam, dan adjustment tidak dihitung; persentase potongan SKP/absensi dicatat 0%; potongan rupiah Rp0.',
-    'Jumlah masuk mengikuti keterangan akhir WFO/WFA/WFH setelah klaim. Dinas, Cuti, TB, dan Libur dicatat terpisah.');
+    'Jumlah masuk mengikuti keterangan akhir WFO/WFA/WFH setelah klaim. Dinas, Cuti, TB, dan Libur dicatat terpisah.']);
   else if (calculation.presenceByStatus) lines.push('Direktur: uang makan mengikuti keterangan akhir WFO/WFA/WFH meskipun jam kosong; Dinas/Cuti/TB/Libur tidak dibayar uang makan.');
   lines.push('CATATAN TANGGAL DENGAN TL, PSW, ATAU TIDAK ABSEN');
   if (!notedDays.length) lines.push('Tidak ada catatan TL, PSW, atau Tidak Absen.');
@@ -2781,6 +2806,8 @@ function saveCalculationNote_(state, calculation) {
     'Potongan: ' + money(a.potongan) + ' (' + (a.persenPotongan === null ? 'belum tersedia' : a.persenPotongan + '%') + ')',
     'Diterima: ' + money(a.netto));
   if (calculation.directorExempt) {
+    lines=lines.filter(function(line){return !/^Surat lupa absen:|^Koreksi jam per bulan:/.test(line);});
+    lines.push('Catatan perbaikan diri: 0. Kekurangan jam kerja: 0 menit. Tidak ada catatan pelanggaran.');
     lines.push('Rumus Direktur: persentase potongan tercatat 0%; diterima = besaran Tukin saat perhitungan; potongan rupiah Rp0.');
   }
   else if (state.record.modul === 'tukin') lines.push('Rumus: 70% × (100% − SKP ' + a.skp + '%) + 30% × potongan absensi ' + t.potonganAbsensi + '%.');

@@ -1883,6 +1883,44 @@ test('Director zero percentage survives six-step submit, personal recap, legacy 
   assert.equal(tab.rows[9][8],0);assert.match(tab.rows[9][10],/PKP_DIREKTUR_TUKIN/);assert.equal(tab.rows[9][11],6349000);
 });
 
+test('explicit Director resubmit repairs old snapshot and notes without changing historical pay, attendance or evidence',()=>{
+  const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
+  f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+  const people=f.master.getSheetByName('Data_Pegawai');people.rows[0][4]='PIN';people.rows[1][4]='012345';people.rows[1][13]='Direktur Pembangunan';
+  const rows=Array.from({length:30},(_,i)=>{const row=Array(22).fill('');row[0]=i+1;row[1]='Hari';row[2]=new Date(Date.UTC(2026,5,11+i)).toISOString().slice(0,10);row[3]='09:00';row[4]='15:00';row[21]='WFO';return row;});
+  assert.equal(f.rawCall({adminKey:wrapKey,sheetData:rows}).status,'success');
+  const saved=confirmRecap(f), old=JSON.parse(JSON.stringify(saved));
+  old.calculation.version='2026-10-10-director-percent';
+  Object.assign(old.calculation.totals,{flexi:2,terlambat:11,psw:7,unadjusted:17,menitTelat:640,menitTanpaPresensi:4080,totalMenit:4720,potonganAbsensi:22.5,adjustmentMonths:{'2026-07':2}});
+  old.calculation.amount.persenPotongan=6.75;
+  Object.assign(old.calculation.days[0],{tl:3,psw:4,menitTelat:640,menitTanpaPresensi:480,potongan:2.5});
+  const state=f.context.finalState_(f.scope);
+  f.context.storeFinalResult_(state.saved.book,old);
+  f.context.writeCalculationMaster_(state.record,old.calculation,old.note);
+  const file=f.files.get(old.note.fileId);file.content='Catatan lama: 4720 menit, 6.75%';
+  const unchangedRows=JSON.stringify(state.saved.working.rows), count=f.files.size, attendance={...old.calculation.totals};
+  people.rows[1][16]=99999999;people.rows[1][13]='Analis'; // Do not re-read current tariff/title.
+  const login=f.rawCall({action:'login_pegawai',pin:'012345'});
+  const request={action:'submit_rekap_final',adminKey:wrapKey,revision:old.revision,confirmed:true,applyDirectorZero:true};
+  for(const extra of [{adminKey:undefined},{sessionToken:login.sessionToken},{employeeReadOnly:true,sessionToken:login.sessionToken},{confirmed:false},{revision:'stale'}]) assert.equal(f.rawCall({...request,...extra}).status,'error');
+  assert.equal(file.content,'Catatan lama: 4720 menit, 6.75%');
+  const read=f.context.readSavedFinalResult_(f.context.finalState_(f.scope));assert.equal(read.calculation.amount.persenPotongan,6.75);
+  const result=f.rawCall(request);assert.equal(result.status,'success',result.message);assert.equal(result.submitted,true);
+  assert.equal(result.savedResult.note.fileId,old.note.fileId);assert.equal(f.files.size,count);
+  assert.equal(JSON.stringify(state.saved.working.rows),unchangedRows);
+  assert.equal(result.savedResult.calculation.amount.tarif,6349000);assert.equal(result.savedResult.calculation.amount.netto,6349000);
+  for(const key of ['masuk','hariKerja','dinas','cuti','tb','libur']) assert.equal(result.savedResult.calculation.totals[key],attendance[key]);
+  for(const key of ['flexi','terlambat','psw','unadjusted','totalMenit','potonganAbsensi']) assert.equal(result.savedResult.calculation.totals[key],0);
+  assert.equal(result.savedResult.calculation.amount.persenPotongan,0);
+  assert.doesNotMatch(file.content,/4720|6\.75|Pada tanggal|Flexi maksimal|TL: 0,5|tetap dihitung adjustment/);
+  assert.match(file.content,/Catatan perbaikan diri: 0\. Kekurangan jam kerja: 0 menit/);
+  const master=f.master.getSheetByName('REKAP_TUKIN');assert.equal(master.rows[1][master.rows[0].indexOf('Hitung_Potongan_Persen')],0);
+  const repaired=f.context.readSavedFinalResult_(f.context.finalState_(f.scope));assert.equal(repaired.calculation.totals.totalMenit,0);
+  assert.equal(f.rawCall(request).status,'success');assert.equal(f.files.size,count);
+  assert.equal(f.rawCall(recapRequest(f)).status,'success');
+  for(const wrong of [{...old,calculation:{...old.calculation,modul:'uang-makan'}},{...old,calculation:{...old.calculation,directorExempt:false}},{...old,calculation:{...old.calculation,amount:{...old.calculation.amount,netto:1}}}])assert.throws(()=>f.context.directorZeroSavedResult_(wrong));
+});
+
 test('meal regeneration migrates previous long tab names and rejects ambiguous target sheets',()=>{
   const f=consolidatedFixture(), request=recapRequest(f), first=f.call(request);
   assert.equal(first.status,'success',first.message);

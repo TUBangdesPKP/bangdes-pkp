@@ -49,10 +49,13 @@ test('closed preview disables editing and saved recap has no save/upload/editor 
         assert.match(directorSaved,/besaran Tukin diterima penuh/);
         assert.match(directorSaved,/Bobot SKP 70%/);
         assert.match(directorSaved,/Nominal potongan Tukin Rp0/);
-        assert.match(directorSaved,/Catatan Perbaikan Diri/);
+        assert.doesNotMatch(directorSaved,/Catatan Perbaikan Diri|Kekurangan Jam Kerja|Rincian per tanggal dan sumber tarif/);
         const zeroSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:{...result,calculation:{...result.calculation,directorExempt:true,amount:{tarif:6349000,skp:70,persenPotongan:0,potonganSkp:0,potongan:0,netto:6349000}}},moduleLabel:modul}));
         assert.match(zeroSaved,/total potongan 0%/);assert.match(zeroSaved,/Potongan \(0,00%\)/);
         assert.doesNotMatch(zeroSaved,/Bobot SKP 70%/);
+        assert.match(zeroSaved,/Catatan perbaikan diri: 0/);
+        assert.match(zeroSaved,/Kekurangan jam kerja: 0 menit/);
+        assert.doesNotMatch(zeroSaved,/Catatan Perbaikan Diri|Kekurangan Jam Kerja/);
       } else {
         assert.match(directorHtml,/Dinas dicatat terpisah dan tidak dibayar uang makan/);
         assert.match(directorHtml,/aria-label="Koreksi/);

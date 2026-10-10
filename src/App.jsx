@@ -3293,8 +3293,15 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     if (!isSubmissionAdmin || !finalRecap || isSubmitting) throw new Error('Rekap belum siap disubmit.');
     setIsSubmitting(true);
     try {
-      const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'submit_rekap_final', revision: finalRecap.revision, confirmed: true });
+      const applyDirectorZero = finalRecap.calculation?.modul === 'tukin' && finalRecap.calculation?.directorExempt === true;
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'submit_rekap_final', revision: finalRecap.revision, confirmed: true, applyDirectorZero });
       if (result.submitted !== true || result.nip !== submission.nip || result.periode !== submission.periode || result.modul !== submission.modul) throw new Error('Server belum mengonfirmasi submit rekap. Perbarui deployment Code.gs.');
+      if (applyDirectorZero) {
+        const corrected = result.savedResult;
+        if (!corrected || corrected.nip !== submission.nip || corrected.periode !== submission.periode || corrected.calculation?.amount?.persenPotongan !== 0 || corrected.calculation?.totals?.totalMenit !== 0) throw new Error('Backend belum mengonfirmasi pembaruan catatan Direktur 0%. Perbarui deployment Code.gs dan submit kembali.');
+        setFinalRecap(corrected);
+        previewSession.current = { key: submissionKey, data: null, review: null };
+      }
     } finally { setIsSubmitting(false); }
   };
 
