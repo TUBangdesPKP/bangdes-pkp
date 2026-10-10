@@ -363,6 +363,7 @@ function sortRekapSheets() {
 
 function saveArchive_(payload) {
   var modul = payload.modul, fileName = payload.fileName, fileBase64 = payload.fileBase64;
+  var uploader = modul === 'spt' ? archiveActor_(payload) : null;
   if (!fileName || !fileBase64 || !Array.isArray(payload.sptData) || !payload.sptData.length) throw new Error('File dan data arsip diperlukan.');
   var mime = mimeForName_(fileName);
   if (['application/pdf', 'image/jpeg', 'image/png'].indexOf(mime) === -1) throw new Error('Format arsip harus PDF/JPG/PNG.');
@@ -409,6 +410,10 @@ function saveArchive_(payload) {
       var blob = Utilities.newBlob(Utilities.base64Decode(fileBase64), mimeForName_(fileName), fileName);
       var file = subFolder.createFile(blob);
       var fileUrl = file.getUrl();
+      if (uploader) {
+        try { recordArchiveUploader_(file.getId(), uploader.nip); }
+        catch (error) { file.setTrashed(true); throw error; }
+      }
 
       // Opsional: Buat file bisa dibaca agar link tidak memunculkan "Request Access"
       try {
@@ -441,7 +446,8 @@ function saveArchive_(payload) {
           
           // GUNAKAN getValues() karena getDisplayValues() sangat berat untuk sheet besar
           var existingData = sheet.getDataRange().getValues();
-          var dataMap = {}; 
+          var dataMap = {};
+          var uploadOwners = isSpt ? archiveUploaders_() : {};
           
           // Memetakan baris eksisting berdasarkan Kunci Unik: NIP_Berangkat_Pulang_Tujuan/JenisCuti
           // normStr() dipakai supaya Date object dari Sheets vs String dari Frontend
@@ -456,7 +462,8 @@ function saveArchive_(payload) {
               var exPulang = normStr(existingData[i][5]);
               
               var key = exNip + "_" + exBerangkat + "_" + exPulang + "_" + exTujuan;
-              dataMap[key] = i + 1; 
+              // A matching participant/date is not permission to overwrite another uploader's letter.
+              if (!isSpt || uploadOwners[driveId_(existingData[i][9])] === uploader.nip) dataMap[key] = i + 1;
           }
 
           // Pencarian baris terakhir di Spreadsheet (Akurat, membaca dari bawah)
@@ -915,7 +922,13 @@ function uploadExtraAttachment_(payload) {
   if (!/\.(pdf|png|jpe?g)$/i.test(name) || !encoded || encoded.length > 13981016 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error('File harus PDF/JPG/PNG, maksimal 10 MB.');
   var bytes = Utilities.base64Decode(encoded);
   if (!bytes.length || bytes.length > 10485760) throw new Error('Ukuran file tidak valid.');
-  var safeName = type + '_' + record.nip + '_' + Utilities.getUuid() + '.' + name.split('.').pop().toLowerCase();
+  var types = {lupa_absen:'Surat Lupa Absen',tugas_belajar:'Surat Tugas Belajar',lainnya:'Dokumen Lainnya'};
+  var history = registryRows_().filter(function(entry) { return sameScope_(entry,record) && Object.prototype.hasOwnProperty.call(types,entry.jenisDokumen); });
+  if (history.filter(function(entry) { return !!liveAttachment_(entry); }).length >= 10) throw new Error('Maksimal 10 dokumen pendukung lainnya per pegawai dan periode.');
+  // Include deleted entries in numbering so new letters never reuse an earlier number.
+  var sequence = String(history.length + 1).padStart(2,'0');
+  var employeeName = text_(record.nama).replace(/[\\/:*?"<>|\x00-\x1f]/g,' ').replace(/\s+/g,' ').trim();
+  var safeName = types[type] + '_' + employeeName + '_' + sequence + '_Bukti Dukung ' + (record.modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan') + '.' + name.split('.').pop().toLowerCase();
   var file = folder.createFile(Utilities.newBlob(bytes,mimeForName_(name),safeName));
   try {
     registry_(true).appendRow([new Date(),record.modul,"'"+record.nip,record.nama,record.periode,folder.getId(),file.getId(),safeName,type,'','','upload_lain','active',requestId]);
@@ -983,6 +996,11 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var payload = JSON.parse(e.postData.contents);
+    if (payload.employeeReadOnly) {
+      if (['list_pendukung','preview_rekap_final'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
+      var reader = requireProfileSession_(payload);
+      payload.nip = reader.nip;
+    }
     if (payload.adminReadOnly) {
       if (['list_pendukung','preview_rekap_final'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
       requireSubmissionReader_(payload);
@@ -998,13 +1016,17 @@ function doPost(e) {
     if (payload.action === 'proses_wrap_bulanan') return json_(saveWrapSnapshot_(payload));
     if (payload.action === 'list_periode_submisi') return json_(listSubmissionPeriods_(payload));
     lock.waitLock(30000);
+    if (payload.action === 'rekap_pegawai_tahunan') return json_(employeeAnnualRecaps_(payload));
     // Read and mutate JP under the same lock so each revision is a coherent snapshot.
     if (payload.action === 'list_pelatihan_jp') return json_(jpList_());
     if (payload.action === 'rekap_cuti_kepegawaian') return json_(personnelLeaveRecap_());
     if (payload.action === 'tambah_pelatihan_jp') return json_(jpAdd_(payload));
     if (payload.action === 'hapus_pelatihan_jp') return json_(jpDelete_(payload));
     if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
-    if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) requireOpenSubmission_(payload);
+    if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) {
+      submissionAdmin_(payload);
+      // Verified admins manage any month; employees remain read-only regardless of legacy period flags.
+    }
     if (payload.action === 'login_pegawai') return json_(loginEmployee_(payload));
     if (payload.action === 'login_admin') return json_(loginLegacyAdmin_(payload));
     if (payload.action === 'aktivasi_akun') return json_(activateEmployee_(payload));
@@ -1625,7 +1647,6 @@ function saveFinal_(payload) {
   var schedules = validateSchedules_(payload.schedules || savedSchedules_(state.saved, result), result);
   result = result.map(function(row) { return Object.assign({}, row, { jamKerja: schedules[row.tanggal] }); });
   var corrections = validateAdjustments_(state, result, payload.adjustments || {});
-  var evidenceNames = adjustmentEvidenceNamePlan_(state, corrections);
   result = applyAdjustments_(result, corrections);
   result = result.map(function(row){return Object.assign({},row,{datang:normalizedClock_(row.datang),pulang:normalizedClock_(row.pulang)});});
   // Financial inputs are read on the server, never accepted from a browser payload.
@@ -1652,7 +1673,6 @@ function saveFinal_(payload) {
   // Only metadata, not a second copy of daily attendance in the master spreadsheet.
   state.saved.baseline.getRange(1, 3).setValue(new Date().toISOString());
   saveAdjustments_(state, corrections);
-  renameAdjustmentEvidence_(state, evidenceNames);
   writeCalculationMaster_(state.record, calculation, note);
   SpreadsheetApp.flush();
   var revision = markProcessed_(payload, decisions, state);
@@ -1872,6 +1892,10 @@ function ownArchive_(payload) {
 }
 function archiveActor_(payload) {
   if (payload.modul !== 'spt' && payload.modul !== 'cuti') throw new Error('Modul arsip tidak valid.');
+  if (payload.modul === 'spt' && !payload.sessionToken && payload.adminSessionToken) {
+    requireSubmissionReader_({adminSessionToken:payload.adminSessionToken});
+    return {nip:'Admin',admin:true};
+  }
   if (!payload.sessionToken) { requireWrapAdmin_(payload); return { nip:'Admin', admin:true }; }
   var account = requireProfileSession_({sessionToken:payload.sessionToken});
   return {nip:account.nip, admin:/^(admin|superadmin|superadministrator|administrator)$/.test(profileUser_(account).Akun_Role.toLowerCase().replace(/[^a-z]/g,''))};
@@ -1883,16 +1907,39 @@ function managedArchiveSheet_(modul) {
 function managedArchiveId_(modul, row, values) {
   return row + ':' + digest_({modul:modul, values:values.slice(0,10)});
 }
+// Separate metadata avoids colliding with the per-date columns in REKAP_SPT.
+function archiveUploaders_() {
+  var sheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName('PENGUNGGAH_ARSIP');
+  if (!sheet) return {};
+  var rows = sheet.getDataRange().getDisplayValues(), owners = {};
+  if (JSON.stringify(rows[0]) !== JSON.stringify(['FileId','Pengunggah','Diunggah'])) throw new Error('Header PENGUNGGAH_ARSIP tidak sesuai.');
+  rows.slice(1).forEach(function(row) {
+    var id = text_(row[0]), owner = text_(row[1]);
+    if (!id || !owner) return;
+    owners[id] = Object.prototype.hasOwnProperty.call(owners,id) ? '' : owner;
+  });
+  return owners;
+}
+function recordArchiveUploader_(fileId, actorNip) {
+  var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet = book.getSheetByName('PENGUNGGAH_ARSIP');
+  archiveUploaders_();
+  if (!sheet) { sheet = book.insertSheet('PENGUNGGAH_ARSIP'); sheet.appendRow(['FileId','Pengunggah','Diunggah']); sheet.hideSheet(); }
+  sheet.getRange(sheet.getLastRow()+1,1,1,3).setNumberFormat('@').setValues([[fileId,actorNip,new Date().toISOString()]]);
+  SpreadsheetApp.flush();
+  if (archiveUploaders_()[fileId] !== actorNip) throw new Error('Catatan pengunggah belum terverifikasi. Upload dibatalkan.');
+}
 function managedArchiveList_(payload) {
   var actor = archiveActor_(payload), sheet = managedArchiveSheet_(payload.modul);
   var rows = sheet ? sheet.getDataRange().getDisplayValues() : [];
   if (rows.length && text_(rows[0][1]).toLowerCase() !== 'nip') throw new Error('Susunan kolom arsip tidak sesuai. Hubungi Admin.');
   var items = [];
+  var owners = payload.modul === 'spt' ? archiveUploaders_() : {};
   rows.slice(1).forEach(function(row,i) {
-    if (!nip_(row[1]) || (!actor.admin && nip_(row[1]) !== actor.nip)) return;
-    items.push({archiveId:managedArchiveId_(payload.modul,i+2,row), timestamp:row[0], nip:nip_(row[1]), nama:row[2], tujuan:row[3], tanggalBerangkat:row[4], tanggalPulang:row[5], jumlahHari:row[6], bulan:row[7], tahun:row[8], linkAkses:row[9]});
+    if (!nip_(row[1]) || (payload.modul !== 'spt' && !actor.admin && nip_(row[1]) !== actor.nip)) return;
+    var canDelete = payload.modul === 'spt' ? owners[driveId_(row[9])] === actor.nip : actor.admin || nip_(row[1]) === actor.nip;
+    items.push({archiveId:managedArchiveId_(payload.modul,i+2,row), canDelete:canDelete, timestamp:row[0], nip:nip_(row[1]), nama:row[2], tujuan:row[3], tanggalBerangkat:row[4], tanggalPulang:row[5], jumlahHari:row[6], bulan:row[7], tahun:row[8], linkAkses:row[9]});
   });
-  return {status:'success',items:items,canDeleteAll:actor.admin};
+  return {status:'success',items:items,canDeleteAll:payload.modul !== 'spt' && actor.admin};
 }
 function deleteManagedArchive_(payload) {
   var actor = archiveActor_(payload), ids = payload.archiveIds;
@@ -1901,11 +1948,14 @@ function deleteManagedArchive_(payload) {
   if (!sheet) throw new Error('Arsip sudah berubah. Muat ulang daftar.');
   var rows = sheet.getDataRange().getDisplayValues();
   if (text_(rows[0][1]).toLowerCase() !== 'nip') throw new Error('Susunan kolom arsip tidak sesuai.');
+  var owners = payload.modul === 'spt' ? archiveUploaders_() : {};
   // Validate every target before any mutation, including stale row positions after sorting.
   var targets = ids.map(function(id) {
     var rowNumber = Number(String(id).split(':')[0]), row = rows[rowNumber-1];
     if (!Number.isInteger(rowNumber) || rowNumber < 2 || !row || !nip_(row[1]) || id !== managedArchiveId_(payload.modul,rowNumber,row)) throw new Error('Arsip sudah berubah. Muat ulang daftar sebelum menghapus.');
-    if (!actor.admin && nip_(row[1]) !== actor.nip) throw new Error('Pegawai hanya boleh menghapus arsip miliknya sendiri.');
+    if (payload.modul === 'spt') {
+      if (owners[driveId_(row[9])] !== actor.nip) throw new Error('Hanya akun pengunggah yang boleh menghapus arsip surat tugas ini.');
+    } else if (!actor.admin && nip_(row[1]) !== actor.nip) throw new Error('Pegawai hanya boleh menghapus arsip miliknya sendiri.');
     return {rowNumber:rowNumber, row:row};
   });
   var transaction = Utilities.getUuid(), now = new Date().toISOString();
@@ -1944,6 +1994,28 @@ function submissionPeriod_(payload) {
   var names=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
   return {range:range,year:payment.getUTCFullYear(),month:payment.getUTCMonth()+1,monthName:names[payment.getUTCMonth()],label:names[payment.getUTCMonth()]+' '+payment.getUTCFullYear()};
 }
+// One master read, scoped to the authenticated employee. Never recompute pay from current rates.
+function employeeAnnualRecaps_(payload) {
+  var account = requireProfileSession_(payload), year = Number(payload.year);
+  var sheetName = eventSheetName_(payload.modul);
+  if (!Number.isInteger(year) || year < 2000 || year > 9999) throw new Error('Tahun rekap tidak valid.');
+  var sheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName(sheetName);
+  var rows = sheet ? sheet.getDataRange().getValues() : [], headers = rows[0] || [];
+  var statusIndex = headers.indexOf('Hitung_Status'), amountIndex = headers.indexOf('Hitung_Netto');
+  var months = Array.from({length:12}, function(_, index) { return {month:index+1, state:'missing', netto:null}; });
+  rows.slice(1).forEach(function(row) {
+    if (nip_(row[1]) !== account.nip) return;
+    var period;
+    try { period = submissionPeriod_({modul:payload.modul, periode:text_(row[3])}); } catch (_) { return; }
+    if (period.year !== year) return;
+    var status = text_(row[statusIndex]), value = row[amountIndex];
+    // Latest submission replaces any older saved amount, including pending recalculations.
+    var saved = status === 'Lengkap' && typeof value === 'number' && isFinite(value) && value >= 0;
+    months[period.month-1] = {month:period.month, state:saved ? 'saved' : status === 'Lengkap' || status === 'Perlu penyesuaian' ? 'incomplete' : 'pending', netto:saved ? value : null};
+  });
+  return {status:'success', employeeRecapVersion:1, modul:payload.modul, year:year, nip:account.nip, months:months};
+}
+
 function calculatedSubmissionRecords_(payload) {
   submissionPeriod_(payload);
   var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet=book.getSheetByName(eventSheetName_(payload.modul));
@@ -2089,49 +2161,6 @@ function normalizedClock_(value) {
   return minutes===null?'-':attendanceClock_(minutes);
 }
 var ADJUSTMENT_HEADERS = ['Modul','NIP','Periode','SpreadsheetId','Tanggal','Presensi','JamKoreksi','FileId','Status','Diperbarui'];
-function adjustmentEvidenceNamePlan_(state, corrections) {
-  var datesByFile={}, entries=registryRows_();
-  Object.keys(corrections).sort().forEach(function(date){
-    Object.keys(corrections[date]).forEach(function(punch){
-      var id=corrections[date][punch].fileId;
-      if(!datesByFile[id])datesByFile[id]=[];
-      if(datesByFile[id].indexOf(date)<0)datesByFile[id].push(date);
-    });
-  });
-  function namePart(value){return text_(value).replace(/[\\/:*?"<>|\x00-\x1f]/g,' ').replace(/\s+/g,' ').trim();}
-  return Object.keys(datesByFile).map(function(id){
-    var matches=entries.filter(function(entry){return entry.fileId===id&&entry.status==='active';});
-    if(matches.length!==1||!sameScope_(matches[0],state.record)||matches[0].jenisDokumen!=='lupa_absen')throw new Error('Surat lupa absen tidak unik atau bukan milik submisi ini.');
-    var entry=matches[0], file=liveAttachment_(entry);
-    if(!file)throw new Error('Surat lupa absen tidak tersedia untuk penamaan.');
-    var original=file.getName(), extension=original.match(/\.(pdf|png|jpe?g)$/i);
-    if(!extension)throw new Error('Ekstensi surat lupa absen harus PDF/JPG/PNG.');
-    return {file:file,fileId:id,row:entry.row,oldName:original,oldRegistryName:entry.fileName,
-      name:'Lupa Absen_'+namePart(state.record.nip)+'_'+namePart(state.record.nama)+'_'+datesByFile[id].join('+')+extension[0]};
-  });
-}
-function renameAdjustmentEvidence_(state, plans) {
-  if(!plans.length)return;
-  var sheet=registry_(false), attempted=[];
-  try {
-    plans.forEach(function(plan){
-      if(plan.oldName===plan.name&&plan.oldRegistryName===plan.name)return;
-      attempted.push(plan);
-      if(plan.oldName!==plan.name)plan.file.setName(plan.name);
-      if(plan.oldRegistryName!==plan.name)sheet.getRange(plan.row,8).setValue(plan.name);
-    });
-    SpreadsheetApp.flush();
-  } catch(error) {
-    var failed=false;
-    attempted.reverse().forEach(function(plan){
-      try { if(plan.file.getName()!==plan.oldName)plan.file.setName(plan.oldName); } catch(rollbackError){failed=true;}
-      try { sheet.getRange(plan.row,8).setValue(plan.oldRegistryName); } catch(rollbackError){failed=true;}
-    });
-    throw new Error(failed?'Penamaan bukti gagal dan pemulihan nama belum lengkap. Hubungi Admin untuk memeriksa file.':'Penamaan bukti gagal; nama sebelumnya dipulihkan. Muat ulang preview sebelum submit kembali.');
-  }
-  // Keep the processed revision, response and registry consistent with Drive.
-  plans.forEach(function(plan){state.documents.forEach(function(doc){if(doc.fileId===plan.fileId)doc.fileName=plan.name;});});
-}
 function adjustmentSheet_(create) {
   var book = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), sheet = book.getSheetByName('ADJUSTMENT_PRESENSI');
   if (!sheet && create) { sheet = book.insertSheet('ADJUSTMENT_PRESENSI'); sheet.appendRow(ADJUSTMENT_HEADERS); sheet.setFrozenRows(1); }

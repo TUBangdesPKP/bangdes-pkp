@@ -12,9 +12,12 @@ Backend tetap Google Apps Script, Spreadsheet, dan Drive.
 ## Penggunaan dan hak akses
 
 - Buka Arsip Surat Tugas atau Arsip Surat Cuti, lalu buka rincian surat. Tombol **Hapus** terdapat di sebelah nama pegawai.
-- Pegawai hanya memperoleh daftar miliknya dan hanya dapat menghapus baris dengan NIP sesi login tersebut. Nama atau role yang dikirim browser bukan dasar izin.
-- Admin berbasis NIP mengikuti Role dari Data_Pegawai pada setiap permintaan. Admin dapat menghapus baris siapa pun, atau semua peserta surat yang sedang ditampilkan. Bila daftar difilter dengan pencarian, tombol kelompok hanya menghapus peserta yang ditampilkan dan tercantum pada konfirmasi, bukan data tersembunyi.
-- Akun Admin khusus lama tanpa sesi pegawai perlu memasukkan kunci publikasi `WRAP_ADMIN_KEY`, lalu **Verifikasi & muat arsip**. Kunci hanya berada di memori halaman dan bukan PIN login.
+- **SPT:** semua akun yang login dapat melihat seluruh nama dan arsip. Hak hapus hanya untuk akun yang mengunggah file tersebut, termasuk ketika akunnya memiliki Role Admin. Nama/NIP peserta surat tidak dianggap pengunggah. Tombol kelompok hanya muncul jika seluruh baris yang ditampilkan berasal dari file milik pengunggah.
+- **Cuti:** akses lama tetap: pegawai melihat/menghapus baris milik NIP sesi login; Admin berbasis NIP dapat mengelola semua baris. Ringkasan per nama/NIP menampilkan jumlah hari berdasarkan jenis cuti, mengikuti filter bulan/tahun/pencarian yang sama dengan daftar. Tidak mengambil data pegawai lain di luar daftar yang diizinkan backend.
+- Pengunggah SPT baru dicatat server di sheet tersembunyi `PENGUNGGAH_ARSIP` (FileId, Pengunggah, Diunggah), terpisah dari kolom tanggal arsip. Upload otomatis, manual, dan upload SPT dari penghitungan menggunakan jalur ini. NIP dari sesi server, bukan nilai dari browser. NIP disimpan sebagai teks. Surat yang diklaim dari arsip tidak berpindah kepemilikan.
+- Arsip SPT lama tanpa catatan pengunggah tetap dapat dilihat tetapi **tidak dapat dihapus lewat aplikasi**, termasuk oleh Admin. Tidak ada migrasi kepemilikan berdasarkan tebakan nama. Catatan yang ambigu juga tidak memberi hak hapus.
+- Akun Admin khusus lama menggunakan sesi login admin untuk SPT; seluruh pemakai akun admin bersama dianggap satu akun pengunggah. Untuk Cuti, akses kunci publikasi `WRAP_ADMIN_KEY` tetap seperti sebelumnya. Kunci hanya berada di memori halaman dan bukan PIN login.
+- Upload SPT dengan peserta/tanggal/tujuan yang sama tidak menimpa baris milik pengunggah lain. Surat baru dicatat terpisah; surat yang diunggah ulang oleh pengunggah yang sama tetap memakai perilaku pembaruan sebelumnya.
 - Penghapusan memerlukan konfirmasi yang menampilkan nama/NIP dan jumlah data. Tidak ada tombol mengosongkan seluruh database arsip.
 
 ## Perlindungan data

@@ -66,7 +66,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     if (!ready) throw new Error('Simpan tab 2 dan muat daftar dokumen terlebih dahulu.');
     setClaiming(true);
     try {
-      const result = await sendClaimRequest(endpoint, payload);
+      const result = await sendClaimRequest(endpoint, { ...payload, ...context });
       acceptResult(result);
     } finally { setClaiming(false); }
   };

@@ -2,8 +2,11 @@ import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { SubmissionSummary } from './submission-summary.jsx';
 import { SubmissionPeriods } from './submission-periods.jsx';
+import { dashboardModules, canManageSubmission } from './dashboard-navigation.js';
+import { ArchiveLeaveSummary } from './archive-leave-summary.jsx';
+import { filterArchiveItems } from './archive-leave-summary-model.js';
 import { ClosedSubmission } from './closed-submission.jsx';
-import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee } from './submission-period-model.js';
+import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee, submissionViewerIsReadOnly } from './submission-period-model.js';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
@@ -1537,6 +1540,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterYear, setFilterYear] = useState('Semua');
+  const [filterMonth, setFilterMonth] = useState('Semua');
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
   const [archiveError, setArchiveError] = useState('');
@@ -1546,11 +1550,11 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [archiveNotice, setArchiveNotice] = useState('');
-  const needsArchiveKey = isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken;
-  const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : { adminKey: archiveAdminKey };
+  const needsArchiveKey = isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken && !(isSpt && loggedInUser?.adminSessionToken);
+  const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : isSpt && loggedInUser?.adminSessionToken ? {adminSessionToken: loggedInUser.adminSessionToken} : { adminKey: archiveAdminKey };
   const normalizeArchiveItems = items => items.map(item => ({ ...item,
     tanggalBerangkat: standardizeDate(item.tanggalBerangkat), tanggalPulang: standardizeDate(item.tanggalPulang),
-    tahun: String(item.tahun || ''), jumlahHari: Number(item.jumlahHari) || 0,
+    tahun: String(item.tahun || ''), jumlahHari: item.jumlahHari,
   }));
 
   const loadData = async (manual = false) => {
@@ -1583,6 +1587,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   const askDelete = (items, event) => {
     event.stopPropagation();
+    if (!items.length || items.some(item => !item.canDelete)) return;
     setDeleteError(''); setArchiveNotice(''); setDeleteTargets(items);
   };
   const confirmArchiveDelete = async () => {
@@ -1605,15 +1610,9 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     return Array.from(years).sort((a, b) => b - a);
   }, [sptDataList]);
 
+  const filteredArchiveItems = useMemo(() => filterArchiveItems(sptDataList, {year:filterYear,month:filterMonth,search:searchQuery}), [sptDataList,filterYear,filterMonth,searchQuery]);
   const filteredAndGroupedData = useMemo(() => {
-    const filtered = sptDataList.filter(item => {
-      if (filterYear !== 'Semua' && item.tahun !== filterYear) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (item.tujuan.toLowerCase().includes(q) || item.nama.toLowerCase().includes(q));
-      }
-      return true;
-    });
+    const filtered = filteredArchiveItems;
 
     const grouped = {};
     filtered.forEach(item => {
@@ -1636,13 +1635,13 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
             tanggalBerangkat: item.tanggalBerangkat,
             tanggalPulang: item.tanggalPulang,
             tujuan: item.tujuan,
-            jumlahHari: item.jumlahHari,
+            jumlahHari: Number(String(item.jumlahHari).replace(',', '.')) || 0,
             linkAkses: item.linkAkses,
             bulan: item.bulan,
             pegawai: []
           };
         }
-        eventGroups[eventKey].pegawai.push({ nama: item.nama, nip: item.nip, archiveId: item.archiveId });
+        eventGroups[eventKey].pegawai.push({ nama: item.nama, nip: item.nip, archiveId: item.archiveId, canDelete: item.canDelete === true });
       });
 
       const sortedEvents = Object.values(eventGroups).sort((a, b) => {
@@ -1651,7 +1650,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
         return dB - dA;
       });
 
-      const totalHari = sortedEvents.reduce((sum, ev) => sum + (ev.jumlahHari || 1), 0);
+      const totalHari = sortedEvents.reduce((sum, ev) => sum + ev.jumlahHari, 0);
       const uniqueCities = Array.from(new Set(sortedEvents.map(e => e.tujuan).filter(t => t && t !== '-')));
 
       return {
@@ -1665,7 +1664,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
         events: sortedEvents
       };
     });
-  }, [sptDataList, filterYear, searchQuery]);
+  }, [filteredArchiveItems]);
 
   useEffect(() => {
     if (expandedMonth === null && filteredAndGroupedData.length > 0) {
@@ -1730,7 +1729,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
           <Search size={16} className="absolute left-3 text-gray-400" />
           <input 
             type="text" 
-            placeholder={`Cari ${labelTujuan} atau kegiatan...`}
+            placeholder={`Cari nama, NIP, ${labelTujuan}...`}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 bg-transparent text-sm font-medium focus:outline-none text-gray-700" 
@@ -1776,6 +1775,8 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
         </div>
       </div>
 
+      <div className="mb-4"><label className="text-xs font-bold">Bulan <select aria-label="Filter bulan arsip" value={filterMonth} onChange={event => setFilterMonth(event.target.value)} className="ml-2 border rounded-xl bg-white p-2"><option value="Semua">Semua bulan</option>{['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map(month => <option key={month}>{month}</option>)}</select></label></div>
+      {!isSpt && <ArchiveLeaveSummary items={filteredArchiveItems}/>}
       {/* List Arsip dengan Style Timeline */}
       <div className="relative pl-6 sm:pl-10">
         <div className="absolute left-[11px] sm:left-[19px] top-4 bottom-8 w-[2px] bg-gray-200 z-0"></div>
@@ -1887,7 +1888,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
                                   <div className="bg-[#F8FAFC] border-t border-gray-100 p-4 pl-[80px]">
                                     <div className="flex items-center gap-2 mb-3 text-[10px] font-extrabold text-[#1C3A53] uppercase tracking-wider">
                                       <Calendar size={12} />
-                                      {shortTglBerangkatPulang.toUpperCase()} • DIUNGGAH OLEH
+                                      {shortTglBerangkatPulang.toUpperCase()} • PEGAWAI DALAM SURAT
                                     </div>
                                     <div className="space-y-2 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-px before:bg-gray-300">
                                       {ev.pegawai.map((peg, pIdx) => (
@@ -1898,7 +1899,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
                                             <div className="text-[10px] font-medium text-gray-500 font-mono mt-0.5">{peg.nip}</div>
                                           </div>
                                           <div className="flex items-center gap-2">
-                                          {peg.archiveId && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete([peg], e)} className="px-3 py-1.5 border border-red-200 text-red-700 hover:bg-red-50 rounded-lg text-[10px] font-bold">Hapus</button>}
+                                          {peg.archiveId && peg.canDelete && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete([peg], e)} className="px-3 py-1.5 border border-red-200 text-red-700 hover:bg-red-50 rounded-lg text-[10px] font-bold">Hapus</button>}
                                           <a 
                                             href={ev.linkAkses} 
                                             target="_blank" 
@@ -1912,7 +1913,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
                                         </div>
                                       ))}
                                     </div>
-                                    {canDeleteAll && ev.pegawai.length > 1 && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete(ev.pegawai, e)} className="mt-4 text-xs font-bold text-red-700 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50">Hapus semua data surat yang ditampilkan ({ev.pegawai.length} pegawai)</button>}
+                                    {(canDeleteAll || isSpt) && ev.pegawai.length > 1 && ev.pegawai.every(peg => peg.canDelete) && <button type="button" disabled={isDeleting || isRefreshing} onClick={e => askDelete(ev.pegawai, e)} className="mt-4 text-xs font-bold text-red-700 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50">Hapus semua data surat yang ditampilkan ({ev.pegawai.length} pegawai)</button>}
                                   </div>
                                 )}
                               </div>
@@ -2128,6 +2129,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
         const payload = {
           modul: documentModule,
+          sessionToken: loggedInUser.sessionToken,
+          adminSessionToken: loggedInUser.adminSessionToken,
           nip: loggedInUser.NIP,
           nama: loggedInUser.Nama,
           periode: '',
@@ -2256,6 +2259,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
           periode: '',
           bulanTahun: documentModule === 'spt' ? 'Arsip_Surat_Tugas' : 'Arsip_Surat_Cuti',
           fileName: entry.file.name,
+          sessionToken: loggedInUser.sessionToken,
+          adminSessionToken: loggedInUser.adminSessionToken,
           fileBase64: base64Data,
           sheetData: [],
           sptData: manualDataPayload,
@@ -2988,6 +2993,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
 
 export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate, currentView, activeStep }) => {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [calculationModule, setCalculationModule] = useState('uang-makan');
   const [submissionAdminKey, setSubmissionAdminKey] = useState('');
   const [selectedRecap, setSelectedRecap] = useState(null);
   
@@ -3025,6 +3031,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
   const getModuleKey = (view) => {
     switch(view) {
+      case 'penghitungan': return calculationModule;
       case 'absensi-uang-makan': return 'uang-makan';
       case 'absensi-tunjangan-kinerja': return 'tukin';
       case 'arsip-surat-tugas': return 'spt';
@@ -3038,9 +3045,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const activeTab = getModuleKey(currentView);
   const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
-  const isSubmissionAdmin = isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role);
+  const isSubmissionAdmin = canManageSubmission(currentView, loggedInUser.Akun_Role || loggedInUser.Role);
   const viewingEmployee = selectedSubmissionEmployee(selectedRecap, activeTab, selectedPeriod, isSubmissionAdmin);
-  const readOnlyPeriod = isPeriodSpt && (submissionIsReadOnly(selectedPeriod) || !!viewingEmployee);
+  const readOnlyPeriod = isPeriodSpt && submissionViewerIsReadOnly(selectedPeriod, isSubmissionAdmin, viewingEmployee);
 
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
@@ -3161,6 +3168,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const [processError, setProcessError] = useState('');
   const claimIdentity = viewingEmployee || getClaimIdentity(readOnlyPeriod ? null : parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
+  if (isPeriodSpt) Object.assign(submission, { sessionToken: loggedInUser.sessionToken, adminKey: isSubmissionAdmin ? submissionAdminKey : undefined, employeeReadOnly: !isSubmissionAdmin });
   if (viewingEmployee) Object.assign(submission, { adminReadOnly: true, sessionToken: loggedInUser.sessionToken, adminSessionToken: loggedInUser.adminSessionToken });
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
   const submissionKey = JSON.stringify(submission);
@@ -3265,6 +3273,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
       const payload = {
         modul: activeTab,
+        sessionToken: loggedInUser.sessionToken,
+        adminKey: submissionAdminKey,
         nip: nipForPayload,
         nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
         periode: selectedPeriod?.periodeEvent || parsedData.periode || '',
@@ -3404,22 +3414,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
           </div>
 
           <nav className="space-y-1">
-            <button onClick={() => handleTabClick('profil-saya')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'profil-saya' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-200 hover:bg-white/10 hover:text-white'}`}><User size={16}/>Profil Saya</button>
-            {isRecapAdmin(loggedInUser?.Akun_Role) && <button onClick={() => handleTabClick('rekap')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'rekap' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
-              <FileBarChart size={16} /> Rekap Bulanan
-            </button>}
-            <button onClick={() => handleTabClick('absensi-uang-makan')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'uang-makan' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
-              <Calendar size={16} /> Absensi Uang Makan
-            </button>
-            <button onClick={() => handleTabClick('absensi-tunjangan-kinerja')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'tukin' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
-              <FileCheck size={16} /> Absensi Tunjangan Kinerja
-            </button>
-            <button onClick={() => { setArsipSubTab('terdata'); handleTabClick('arsip-surat-tugas'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'spt' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
-              <FileText size={16} /> Arsip Surat Tugas
-            </button>
-            <button onClick={() => { setArsipSubTab('terdata'); handleTabClick('arsip-surat-cuti'); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'cuti' ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
-              <Clock size={16} /> Arsip Surat Cuti
-            </button>
+            {dashboardModules(loggedInUser.Akun_Role || loggedInUser.Role).map(item => {
+              const Icon = { profile: User, recap: FileBarChart, calculation: FileSpreadsheet, meal: Calendar, allowance: FileCheck, spt: FileText, cuti: Clock }[item.icon];
+              return <button key={item.view} onClick={() => { if (['spt','cuti'].includes(item.icon)) setArsipSubTab('terdata'); handleTabClick(item.view); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs text-left font-bold transition-all cursor-pointer ${currentView === item.view ? 'bg-[#D5C58A] text-gray-900 shadow-md' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}>
+                <Icon size={16} className="shrink-0"/>{item.label}
+              </button>;
+            })}
           </nav>
         </div>
         <div className="pt-6 border-t border-white/10 space-y-2 mt-8">
@@ -3434,7 +3434,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
       <main className={`flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full ${activeTab !== 'rekap' ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
         <div className={`w-full ${activeTab !== 'rekap' ? 'h-full min-h-0 flex flex-col' : ''}`}>
-          {activeTab === 'profil-saya' || (activeTab === 'rekap' && !isRecapAdmin(loggedInUser?.Akun_Role)) ? (
+          {currentView === 'penghitungan' && !isSubmissionAdmin ? <p role="alert" className="p-6">Halaman penghitungan hanya tersedia untuk Admin.</p> : activeTab === 'profil-saya' || (activeTab === 'rekap' && !isRecapAdmin(loggedInUser?.Akun_Role)) ? (
             <div className="overflow-y-auto h-full"><MyProfile endpoint={APPS_SCRIPT_URL} user={loggedInUser} onUpdate={onProfileUpdate} onRelogin={() => navigate('login')}/></div>
           ) : activeTab === 'rekap' ? (
             <MonthlyRecap endpoint={APPS_SCRIPT_URL} role={loggedInUser?.Akun_Role}/>
@@ -3448,7 +3448,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   </h2>
                   <p className="text-xs text-slate-200 font-medium">
                     {activeTab === 'spt' 
-                      ? 'Arsip Surat Perintah Tugas perjalanan dinas Anda' 
+                      ? 'Arsip Surat Perintah Tugas seluruh pegawai'
                       : 'Arsip Surat Cuti dan keterangan ketidakhadiran Anda'}
                   </p>
                 </div>
@@ -3491,16 +3491,16 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="inline-block shrink-0 px-2 py-0.5 rounded text-[9px] font-extrabold bg-white/20 tracking-wider uppercase">
-                      OPEN SUBMISSION
+                      {isSubmissionAdmin ? 'PENGHITUNGAN' : 'REKAP PEGAWAI'}
                     </span>
                     <h2 className="text-base sm:text-lg font-black leading-tight">
-                      {selectedPeriod ? selectedPeriod.title : (activeTab === 'uang-makan' ? 'Absensi Uang Makan' : 'Absensi Tunjangan Kinerja')}
+                      {isSubmissionAdmin ? `Penghitungan ${activeTab === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja'}` : `Rekap ${activeTab === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja'}`}
                     </h2>
                   </div>
                     <div className="flex items-center gap-2 text-xs text-gray-200">
                       <Calendar size={14} />
                       <span>
-                        {selectedPeriod ? selectedPeriod.periodeLabel : 'Pilih periode pengumpulan bukti dukung yang sedang dibuka.'}
+                        {selectedPeriod ? selectedPeriod.periodeLabel : isSubmissionAdmin ? 'Pilih bulan untuk mengelola rekap dan bukti dukung pegawai.' : 'Pilih bulan untuk melihat rekap pembayaran Anda.'}
                       </span>
                       {selectedPeriod && (
                         <>
@@ -3511,7 +3511,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                     </div>
                   </div>
 
-                  {selectedPeriod && (
+                  {selectedPeriod && isSubmissionAdmin && (
                     <div className="hidden lg:flex items-center gap-2 shrink-0">
                       <div className="text-right flex-1 hidden xl:block">
                         <p className="text-xs text-gray-200 leading-snug font-medium">
@@ -3570,7 +3570,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
             {/* KONTEN: ini saja yang scroll */}
             <div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 custom-scrollbar">
               {activeStep === 1 ? (
-                <SubmissionPeriods key={activeTab} endpoint={APPS_SCRIPT_URL} modul={activeTab} user={loggedInUser} initialPeriod={selectedPeriod} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelect={period => {
+                <SubmissionPeriods key={currentView} endpoint={APPS_SCRIPT_URL} modul={activeTab} adminMode={isSubmissionAdmin} onModuleChange={modul => { setCalculationModule(modul); setSelectedPeriod(null); resetUploadState(); navigate(currentView, 1); }} user={loggedInUser} initialPeriod={selectedPeriod} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelect={period => {
                   setSelectedRecap(null);
                   setSelectedPeriod(period);
                   if (selectedPeriod?.id !== period.id || submissionIsReadOnly(period) || !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) resetUploadState();
@@ -4131,7 +4131,7 @@ export default function App() {
   const currentView = routeData.view;
   const activeStep = routeData.step;
   const isPublicRecap = currentView === 'rekap-publik' || (currentView === 'rekap' && !loggedInUser);
-  const isDashboardView = !isPublicRecap && ['rekap', 'profil-saya', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
+  const isDashboardView = !isPublicRecap && ['rekap', 'profil-saya', 'penghitungan', 'absensi-uang-makan', 'absensi-tunjangan-kinerja', 'arsip-surat-tugas', 'arsip-surat-cuti'].includes(currentView);
 
   const renderView = () => {
     if (isPublicRecap) return <PublicRecapPage endpoint={APPS_SCRIPT_URL}/>;
@@ -4139,7 +4139,7 @@ export default function App() {
       case 'home': return <DashboardHome navigate={navigate} loggedInUser={loggedInUser} />;
       case 'kepegawaian': return <KepegawaianPage struktur={<OrganizationPage loadPeople={fetchPegawaiData}/>} demografi={<DemographyPage loadPeople={fetchPegawaiData}/>} cuti={<LeaveRecapPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL}/>} kompetensi={<CompetencyPage loadPeople={fetchPegawaiData} endpoint={APPS_SCRIPT_URL} user={loggedInUser} onAuthenticated={handleLoginSuccess}/>}><ProfileView navigate={navigate} embedded /></KepegawaianPage>;
       case 'monitoring-kinerja': return <MonitoringKinerjaPage />;
-      case 'rekap': case 'profil-saya': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
+      case 'rekap': case 'profil-saya': case 'penghitungan': case 'absensi-uang-makan': case 'absensi-tunjangan-kinerja': case 'arsip-surat-tugas': case 'arsip-surat-cuti':
         if (!loggedInUser) return <LoginView navigate={navigate} onLoginSuccess={handleLoginSuccess} sessionExpired={sessionExpired} />;
         return <UserDashboardView loggedInUser={loggedInUser} onProfileUpdate={handleProfileUpdate} onLogoutRequest={() => setShowLogoutModal(true)} navigate={navigate} currentView={currentView} activeStep={activeStep} />;
       case 'profile': return <ProfileView navigate={navigate} />;

@@ -21,6 +21,12 @@ window.fetch = async (_url, options) => {
   window.dispatchEvent(new Event('mock-request'));
   if (!options?.body) return new Response('Timestamp,NIP,Nama\n');
   const p = JSON.parse(options.body);
+  if(p.action==='rekap_pegawai_tahunan') {
+    if(p.nip!=='TEST'||p.sessionToken!=='mock-session') throw Error('Wrong annual recap session');
+    return Response.json({status:'success',employeeRecapVersion:1,modul:p.modul,year:p.year,nip:p.nip,
+      months:Array.from({length:12},(_,i)=>({month:i+1,state:i===0?'saved':'missing',netto:i===0?37000:null}))});
+  }
+  if(p.employeeReadOnly && (!['list_pendukung','preview_rekap_final'].includes(p.action)||p.nip!=='TEST'||p.sessionToken!=='mock-session'))throw Error('Employee view must remain own/read-only');
   if(p.adminReadOnly) {
     if(!['list_pendukung','preview_rekap_final'].includes(p.action))throw Error('Admin review must never mutate data');
     if(!p.sessionToken&&!p.adminSessionToken)throw Error('Admin review requires login session');
@@ -61,11 +67,11 @@ window.fetch = async (_url, options) => {
   throw Error('Unexpected request in isolated fixture: '+p.action);
 };
 function Fixture() {
-  const [route,setRoute] = useState({view:new URLSearchParams(window.location.search).get('modul')==='uang-makan'?'absensi-uang-makan':'absensi-tunjangan-kinerja',step:1});
+  const [route,setRoute] = useState({view:new URLSearchParams(window.location.search).has('calculation')?'penghitungan':new URLSearchParams(window.location.search).get('modul')==='uang-makan'?'absensi-uang-makan':'absensi-tunjangan-kinerja',step:1});
   const [requests,setRequests] = useState('{}');
   useEffect(() => { const update=()=>setRequests(JSON.stringify(counts)); window.addEventListener('mock-request',update); return ()=>window.removeEventListener('mock-request',update); },[]);
   const legacy=new URLSearchParams(window.location.search).has('legacyAdmin');
   const admin=legacy||new URLSearchParams(window.location.search).has('admin');
-  return <><div className="fixed bottom-0 left-0 z-50 bg-amber-100 text-xs p-2">SIMULASI LOKAL — tanpa akses backend produksi <output aria-label="Jumlah permintaan">{requests}</output></div><UserDashboardView loggedInUser={{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:admin?'admin':'user',sessionToken:admin&&!legacy?'mock-session':undefined,adminSessionToken:legacy?'mock-admin-session':undefined}} currentView={route.view} activeStep={route.step} navigate={(view,step=1)=>setRoute({view,step})} onLogoutRequest={()=>{}}/></>;
+  return <><div className="fixed bottom-0 left-0 z-50 bg-amber-100 text-xs p-2">SIMULASI LOKAL — tanpa akses backend produksi <output aria-label="Jumlah permintaan">{requests}</output></div><UserDashboardView loggedInUser={{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:admin?'admin':'user',sessionToken:!legacy?'mock-session':undefined,adminSessionToken:legacy?'mock-admin-session':undefined}} currentView={route.view} activeStep={route.step} navigate={(view,step=1)=>setRoute({view,step})} onLogoutRequest={()=>{}}/></>;
 }
 createRoot(document.getElementById('root')).render(<Fixture/>);

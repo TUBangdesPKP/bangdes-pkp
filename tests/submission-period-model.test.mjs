@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee} from '../src/submission-period-model.js';
+import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee, submissionViewerIsReadOnly, validateEmployeeRecaps} from '../src/submission-period-model.js';
 
 test('employees enter saved recap for every month; closed periods remain readable without upload',()=>{
   for (const modul of ['uang-makan','tukin']) {
@@ -13,8 +13,25 @@ test('employees enter saved recap for every month; closed periods remain readabl
     assert.equal(submissionEntryStep(open,false),5);
     assert.equal(submissionEntryStep(open,true),2);
   }
-  assert.deepEqual([1,2,3,4,5].filter(readOnlySubmissionStep),[1,3,4,5]);
+  assert.deepEqual([1,2,3,4,5].filter(readOnlySubmissionStep),[1,2,3,4,5]);
   assert.equal(readOnlySubmissionStep(6),false);
+});
+
+test('employees are always read-only; admin editing is retained only for open periods outside employee review', () => {
+  const open = submissionPeriodCard('tukin',2026,11,'DIBUKA');
+  assert.equal(submissionViewerIsReadOnly(open,false),true);
+  assert.equal(submissionViewerIsReadOnly(open,true),false);
+  assert.equal(submissionViewerIsReadOnly(open,true,{nip:'TEST'}),true);
+  assert.equal(submissionViewerIsReadOnly({...open,status:'DITUTUP'},true),true);
+});
+
+test('card data validates identity, module, year, twelve unique months and strict saved numeric amounts', () => {
+  const scope = {modul:'tukin',year:2026,nip:'TEST'};
+  const data = {employeeRecapVersion:1,...scope,months:Array.from({length:12},(_,i)=>({month:i+1,state:'missing',netto:null}))};
+  data.months[0]={month:1,state:'saved',netto:0};
+  assert.equal(validateEmployeeRecaps(data,scope)[0].netto,0);
+  for (const extra of [{nip:'OTHER'},{year:2027},{modul:'uang-makan'},{employeeRecapVersion:undefined},{months:[]}]) assert.throws(()=>validateEmployeeRecaps({...data,...extra},scope));
+  for(const amount of [null,'123',NaN,-1,Infinity]) assert.throws(()=>validateEmployeeRecaps({...data,months:data.months.map((m,i)=>i?m:{...m,netto:amount})},scope));
 });
 
 test('admin employee selection is scoped to the module and period and never applies to ordinary employees', () => {

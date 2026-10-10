@@ -17,7 +17,7 @@ function dragEvent(files = [], types = ['Files']) {
     preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
 }
 
-for (const documentModule of ['spt', 'cuti']) {
+for (const documentModule of ['spt', 'cuti', 'extra']) {
   test(`${documentModule}: drop and picker pass the same files to shared validation without uploading`, () => {
     const calls = [], active = [];
     const zone = ArchiveFileDropzone({ documentModule, onFiles: files => calls.push(files), onDragActiveChange: value => active.push(value) });

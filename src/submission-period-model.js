@@ -2,7 +2,19 @@ export const MONTH_NAMES = ['Januari','Februari','Maret','April','Mei','Juni','J
 
 export const submissionIsReadOnly = period => !!period && period.status !== 'DIBUKA';
 export const submissionEntryStep = (period, admin) => admin ? 2 : 5;
-export const readOnlySubmissionStep = step => [1, 3, 4, 5].includes(step);
+export const readOnlySubmissionStep = step => [1, 2, 3, 4, 5].includes(step);
+export const submissionViewerIsReadOnly = (period, admin, viewingEmployee) => !admin || submissionIsReadOnly(period) || !!viewingEmployee;
+
+export function validateEmployeeRecaps(data, { modul, year, nip }) {
+  if (data.employeeRecapVersion !== 1 || data.modul !== modul || data.year !== year || data.nip !== nip ||
+    !Array.isArray(data.months) || data.months.length !== 12 || new Set(data.months.map(item => item.month)).size !== 12 ||
+    data.months.some(item => !Number.isInteger(item.month) || item.month < 1 || item.month > 12 ||
+      !['missing', 'pending', 'incomplete', 'saved'].includes(item.state) ||
+      (item.state === 'saved' ? typeof item.netto !== 'number' || !Number.isFinite(item.netto) || item.netto < 0 : item.netto !== null))) {
+    throw new Error('Data nominal rekap tidak valid. Pastikan deployment backend sudah diperbarui.');
+  }
+  return data.months;
+}
 export const selectedSubmissionEmployee = (selection, modul, period, admin) =>
   admin && selection?.modul === modul && selection?.periode === period?.periodeEvent ? selection.employee : null;
 

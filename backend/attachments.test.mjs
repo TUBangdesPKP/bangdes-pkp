@@ -130,11 +130,66 @@ function fixture() {
       ['today', '123456', scope.nama, type === 'spt' ? 'Kota Serang' : 'Cuti Tahunan','6 Juli 2026','8 Juli 2026',3,'Juli','2026',file.getUrl()],
     ];
   }
-  const call = payload => JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...scope, ...payload }) } }).getContent());
-  return { context, properties, master, files, folders, books, Book, File, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, recapBook, working };
+  const rawCall = payload => JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ ...scope, ...payload }) } }).getContent());
+  // Existing calculation/write regressions run as an authorized administrator.
+  // Permission tests use rawCall: never inject credentials for those requests.
+  const call = payload => {
+    const mutation = !payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].includes(payload.action);
+    if (!mutation || !['uang-makan','tukin'].includes(payload.modul || scope.modul) || 'sessionToken' in payload || 'adminKey' in payload) return rawCall(payload);
+    const previous = properties.get('WRAP_ADMIN_KEY');
+    properties.set('WRAP_ADMIN_KEY', wrapKey);
+    try { return rawCall({ ...payload, adminKey: wrapKey }); }
+    finally { if (previous === undefined) properties.delete('WRAP_ADMIN_KEY'); else properties.set('WRAP_ADMIN_KEY', previous); }
+  };
+  return { context, properties, master, files, folders, books, Book, File, destination, otherDestination, spreadsheet, presensi, untouched, spt, cuti, scope, call, rawCall, recapBook, working };
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+test('employee annual cards expose only own saved net amounts, preserve zero and invalidate stale amounts', () => {
+  const f = profileFixture(), sessionToken = f.rawCall({action:'login_pegawai', pin:'012345'}).sessionToken;
+  const sheet = f.master.getSheetByName('REKAP_UANG_MAKAN');
+  sheet.rows = [['Timestamp','NIP','Nama','Periode','Hitung_Status','Hitung_Netto'],
+    ['', '123456', 'PRIVATE', '01-01-2026 s/d 31-01-2026', 'Lengkap', 925000],
+    ['', '654321', 'OTHER PRIVATE', '01-02-2026 s/d 28-02-2026', 'Lengkap', 999999],
+    ['', '123456', '', '01-03-2026 s/d 31-03-2026', 'Lengkap', 0],
+    ['', '123456', '', '01-04-2026 s/d 30-04-2026', 'Lengkap', 37000],
+    ['', '123456', '', '01-04-2026 s/d 30-04-2026', 'Menunggu perhitungan ulang', ''],
+    ['', '123456', '', '01-05-2026 s/d 31-05-2026', 'Perlu penyesuaian', 12000],
+    ['', '123456', '', '01-06-2026 s/d 30-06-2026', 'Lengkap', ''],
+    ['', '123456', '', '01-07-2025 s/d 31-07-2025', 'Lengkap', 888888]];
+  const request = {action:'rekap_pegawai_tahunan', sessionToken, year:2026};
+  const before = JSON.stringify(sheet.rows), result = f.rawCall(request);
+  assert.equal(result.status, 'success', result.message); assert.equal(result.months.length, 12);
+  assert.deepEqual(result.months.slice(0,6), [
+    {month:1,state:'saved',netto:925000}, {month:2,state:'missing',netto:null},
+    {month:3,state:'saved',netto:0}, {month:4,state:'pending',netto:null},
+    {month:5,state:'incomplete',netto:null}, {month:6,state:'incomplete',netto:null}]);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|999999|888888|654321/);
+  assert.equal(JSON.stringify(sheet.rows), before);
+  for (const extra of [{sessionToken:undefined},{sessionToken:'expired'},{nip:'654321'}, {year:2026.5}, {modul:'spt'}]) assert.equal(f.rawCall({...request,...extra}).status,'error');
+  f.master.getSheetByName('REKAP_TUKIN').rows = [sheet.rows[0],
+    ['', '123456', '', '11-09-2026 s/d 10-10-2026', 'Lengkap', 6349000],
+    ['', '123456', '', '11-11-2026 s/d 10-12-2026', 'Lengkap', 6000000]];
+  assert.equal(f.rawCall({...request,modul:'tukin'}).months[10].netto,6349000);
+  assert.equal(f.rawCall({...request,modul:'tukin',year:2027}).months[0].netto,6000000);
+});
+
+test('attendance writes reject employees and anonymous callers even for open periods and forged admin roles', () => {
+  const f = profileFixture(), sessionToken = f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const before = JSON.stringify(f.working.rows);
+  for (const modul of ['uang-makan','tukin']) {
+    for (const action of [undefined,'proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti']) {
+      for (const auth of [{}, {sessionToken}, {sessionToken,Role:'Admin'}, {sessionToken,employeeReadOnly:true}]) {
+        const result=f.rawCall({action,modul,...auth});
+        assert.equal(result.status,'error',`${modul}:${action}`);
+        assert.match(result.message,/Admin|WRAP_ADMIN_KEY|tidak mengizinkan/);
+      }
+    }
+  }
+  assert.equal(JSON.stringify(f.working.rows),before);
+  assert.equal(f.rawCall({action:'list_pendukung',sessionToken,employeeReadOnly:true}).status,'success');
+  assert.equal(f.rawCall({action:'list_pendukung',nip:'654321',sessionToken,employeeReadOnly:true}).status,'error');
+});
 test('personnel leave recap sums recorded days by NIP/type/year and never exposes letters or individual dates',()=>{
   const f=fixture(), sheet=f.master.getSheetByName('REKAP_CUTI');
   sheet.rows=[['Timestamp','NIP','Nama','Jenis Cuti','Tanggal Awal','Tanggal Akhir','Jumlah Hari Cuti','Bulan','Tahun','Link Arsip','Tanggal_1'],
@@ -268,14 +323,15 @@ test('period status persists centrally, requires admin, rejects stale updates an
   assert.equal(read('spt',2027).status,'error');assert.equal(read('uang-makan',2027.5).status,'error');
   assert.equal(f.call({...command,adminKey:wrapKey,month:13}).status,'error');
 });
-test('closed submission blocks all attendance mutations without changing files, but keeps reads available',()=>{
+test('legacy closed flags do not block verified admins, while anonymous writes remain denied',()=>{
   const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
   f.properties.set('SUBMISI_STATUS_uang-makan_2026_07','DITUTUP');
   const before=JSON.stringify(f.working.rows),count=f.files.size;
-  for(const action of [undefined,'proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'])assert.match(f.call({action}).message,/submisi ditutup/);
+  for(const action of [undefined,'proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'])assert.equal(f.rawCall({action}).status,'error');
   assert.equal(JSON.stringify(f.working.rows),before);assert.equal(f.files.size,count);
   assert.equal(f.call({action:'preview_rekap_final'}).status,'success');
   assert.equal(f.call({action:'list_pendukung'}).status,'success');
+  assert.equal(confirmRecap(f).status,'success');
 });
 test('server gates Tukin by payment month across year boundary, not attendance month',()=>{
   const f=fixture(),payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'};
@@ -306,7 +362,7 @@ test('closed meal and tukin views reuse stored results without recalculating or 
       assert.equal(empty.status,'success');assert.equal(empty.requiresTab2,true);
       assert.deepEqual(empty.documents,[]);assert.equal(empty.savedResult,undefined);
     }
-    for(const action of ['proses_bukti','simpan_rekap_final','upload_pendukung_lain','hapus_pendukung'])assert.match(f.call({action,modul}).message,/submisi ditutup/);
+    for(const action of ['proses_bukti','simpan_rekap_final','upload_pendukung_lain','hapus_pendukung'])assert.equal(f.rawCall({action,modul}).status,'error');
     assert.equal(snapshot(),before);
   }
 });
@@ -348,7 +404,7 @@ function profileFixture() {
   return {...f,people:sheet};
 }
 
-for (const modul of ['spt','cuti']) {
+for (const modul of ['cuti']) {
   test(`archive ${modul}: employee deletes only own row, preserving shared file and another employee`, () => {
     const f=profileFixture(), sheet=f.master.getSheetByName(modul==='spt'?'REKAP_SPT':'REKAP_CUTI');
     const other=[...sheet.rows[1]];other[1]='654321';other[2]='Pegawai Lain';sheet.rows.push(other);
@@ -396,6 +452,7 @@ test('archive deletion denies missing/expired credentials, spoofed admin, stale 
 
 test('archive deletion requires verified backup before removing any row',()=>{
   const f=profileFixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+  f.context.recordArchiveUploader_(f.spt.id,'Admin');
   const history=f.master.insertSheet('ARSIP_TERHAPUS');history.appendRow(['header']);
   history.getRange=()=>({setNumberFormat(){return this;},setValues(){throw Error('Backup write failed');}});
   const list=f.call({action:'list_arsip',modul:'spt',adminKey:wrapKey});
@@ -406,6 +463,7 @@ test('archive deletion requires verified backup before removing any row',()=>{
 test('deleted archive keeps existing claim calculation unchanged but rejects new claims',()=>{
   for(const modul of ['spt','cuti']) {
     const f=profileFixture();f.properties.set('WRAP_ADMIN_KEY',wrapKey);
+    if(modul==='spt')f.context.recordArchiveUploader_(f.spt.id,'Admin');
     const file=modul==='spt'?f.spt:f.cuti;
     const claim=f.call({action:'klaim_dokumen',jenisDokumen:modul,sourceUrl:file.getUrl()});
     assert.equal(claim.status,'success',claim.message);
@@ -420,17 +478,93 @@ test('deleted archive keeps existing claim calculation unchanged but rejects new
   }
 });
 
-test('archive deletion supports legacy SPT tab, invalid uploaded dates, and rejects revoked Admin role',()=>{
+test('SPT deletion supports legacy sheet and invalid dates; admin role alone never grants ownership',()=>{
   const f=profileFixture(), sheet=f.master.getSheetByName('REKAP_SPT');sheet.setName('REKAP _SPT');
   const other=[...sheet.rows[1]];other[1]='654321';other[4]='Tanggal salah';sheet.rows.push(other);
   f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
   const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
   const auth={modul:'spt',sessionToken};const items=f.call({...auth,action:'list_arsip'}).items;
   f.people.rows[1][3]='pegawai';
-  assert.match(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).message,/miliknya sendiri/);
+  assert.match(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).message,/pengunggah/);
   f.people.rows[1][3]='Admin';
+  assert.match(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).message,/pengunggah/);
+  f.context.recordArchiveUploader_(f.spt.id,'123456');
   assert.equal(f.call({...auth,action:'hapus_arsip',archiveIds:[items[1].archiveId]}).status,'success');
   assert.equal(sheet.rows.length,2);
+});
+
+test('SPT lists everyone for any authenticated role, but only verified file uploader can delete even with forged role/NIP',()=>{
+  const f=profileFixture(), sheet=f.master.getSheetByName('REKAP_SPT');
+  sheet.rows.push(['today','654321','Other','Other task','6 Juli 2026','8 Juli 2026',3,'Juli',2026,'https://drive.google.com/file/d/foreign_archive_file/view']);
+  const token=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  f.context.recordArchiveUploader_(f.spt.id,'654321');
+  f.context.recordArchiveUploader_('foreign_archive_file','123456');
+  for(const role of ['pegawai','Admin']) {
+    f.people.rows[0][3]='Role'; f.people.rows[1][3]=role;
+    const auth={modul:'spt',sessionToken:token};
+    const list=f.rawCall({...auth,action:'list_arsip'});
+    assert.equal(list.status,'success',list.message);assert.equal(list.items.length,2);
+    assert.deepEqual(list.items.map(item=>item.canDelete),[false,true]);assert.equal(list.canDeleteAll,false);
+    const before=JSON.stringify(sheet.rows);
+    assert.match(f.rawCall({...auth,action:'hapus_arsip',archiveIds:list.items.map(item=>item.archiveId),nip:'654321',uploadedBy:'123456',Role:'Admin'}).message,/pengunggah/);
+    assert.equal(JSON.stringify(sheet.rows),before);
+  }
+  const list=f.rawCall({modul:'spt',sessionToken:token,action:'list_arsip'});
+  assert.equal(f.rawCall({modul:'spt',sessionToken:token,action:'hapus_arsip',archiveIds:[list.items[1].archiveId]}).status,'success');
+  assert.equal(sheet.rows.length,2);assert.equal(f.spt.trashed,false);
+  assert.equal(f.rawCall({action:'list_arsip',modul:'spt'}).status,'error');
+});
+
+test('SPT upload records authenticated uploader rather than participants and cannot replace someone else\'s matching letter',()=>{
+  const f=profileFixture(), sheet=f.master.getSheetByName('REKAP_SPT');
+  const token=f.rawCall({action:'login_pegawai',nip:'654321',pin:'654321'}).sessionToken;
+  const request={modul:'spt',sessionToken:token,fileName:'Surat.pdf',fileBase64:Buffer.from('%PDF-test').toString('base64'),
+    nip:'123456',uploadedBy:'123456',sptData:[{nip:'123456',nama:'Participant',tujuan:'Kota Serang',tanggalBerangkat:'6 Juli 2026',tanggalPulang:'8 Juli 2026',bulan:'Juli',tahun:'2026'}]};
+  const original=[...sheet.rows[1]], count=f.files.size;
+  assert.equal(f.rawCall({...request,sessionToken:undefined}).status,'error');assert.equal(f.files.size,count);
+  const saved=f.rawCall(request);assert.equal(saved.status,'success',saved.message);
+  assert.equal(f.context.archiveUploaders_()[saved.fileId],'654321');assert.deepEqual(sheet.rows[1],original);
+  assert.equal(sheet.rows.length,3);
+  const listing=f.rawCall({action:'list_arsip',modul:'spt',sessionToken:token});
+  assert.deepEqual(listing.items.map(item=>item.canDelete),[false,true]);
+  const again=f.rawCall(request);assert.equal(again.status,'success');assert.equal(sheet.rows.length,3);
+  assert.equal(f.context.archiveUploaders_()[again.fileId],'654321');
+});
+
+test('legacy admin SPT ownership is verified by session, while unknown historical ownership stays read-only',()=>{
+  const f=fixture();f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+  const auth={modul:'spt',adminSessionToken};
+  const list=f.rawCall({...auth,action:'list_arsip'});assert.equal(list.status,'success');assert.equal(list.items[0].canDelete,false);
+  assert.match(f.rawCall({...auth,action:'hapus_arsip',archiveIds:[list.items[0].archiveId]}).message,/pengunggah/);
+  f.context.recordArchiveUploader_(f.spt.id,'Admin');
+  assert.equal(f.rawCall({...auth,action:'list_arsip'}).items[0].canDelete,true);
+  assert.equal(f.rawCall({...auth,action:'hapus_arsip',archiveIds:[list.items[0].archiveId]}).status,'success');
+  assert.equal(f.rawCall({...auth,adminSessionToken:'expired',action:'list_arsip'}).status,'error');
+});
+
+test('uploader registry preserves long NIP text; ambiguous metadata never grants deletion',()=>{
+  const f=profileFixture(), nip='001234567890123456';
+  f.people.rows[1][0]=nip;
+  const token=f.rawCall({action:'login_pegawai',nip,pin:'012345'}).sessionToken;
+  f.context.recordArchiveUploader_(f.spt.id,nip);
+  assert.equal(f.context.archiveUploaders_()[f.spt.id],nip);
+  const auth={action:'list_arsip',modul:'spt',sessionToken:token};
+  assert.equal(f.rawCall(auth).items[0].canDelete,true);
+  f.master.getSheetByName('PENGUNGGAH_ARSIP').appendRow([f.spt.id,nip,'duplicate']);
+  const result=f.rawCall(auth);assert.equal(result.items[0].canDelete,false);
+  assert.match(f.rawCall({...auth,action:'hapus_arsip',archiveIds:[result.items[0].archiveId]}).message,/pengunggah/);
+});
+
+test('SPT metadata write failure does not create deletable or published archive rows',()=>{
+  const f=profileFixture(), token=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const metadata=f.master.insertSheet('PENGUNGGAH_ARSIP');metadata.appendRow(['FileId','Pengunggah','Diunggah']);
+  metadata.getRange=()=>({setNumberFormat(){return this;},setValues(){throw Error('Owner write failed');}});
+  const before=JSON.stringify(f.master.getSheetByName('REKAP_SPT').rows), active=[...f.files.values()].filter(file=>!file.trashed).length;
+  const result=f.rawCall({modul:'spt',sessionToken:token,fileName:'New.pdf',fileBase64:Buffer.from('%PDF-test').toString('base64'),sptData:[{nip:'123456',tanggalBerangkat:'6 Juli 2026',tanggalPulang:'8 Juli 2026'}]});
+  assert.equal(result.status,'error');assert.match(result.message,/Owner write failed/);
+  assert.equal(JSON.stringify(f.master.getSheetByName('REKAP_SPT').rows),before);
+  assert.equal([...f.files.values()].filter(file=>!file.trashed).length,active);
 });
 test('login uses authoritative Role D and Jabatan M rather than conflicting earlier aliases',()=>{
   const f=profileFixture();
@@ -1406,7 +1540,7 @@ test('new summary columns append without overwriting custom formulas/headers', (
 
 const uploadExtra = (f, extra = {}) => f.call({action:'upload_pendukung_lain',jenisDokumen:'lupa_absen',fileName:'Surat.pdf',fileBase64:Buffer.from('%PDF-test').toString('base64'),requestId:'extra-1',...extra});
 
-test('tab 4 save names adjustment evidence from saved NIP/name and corrected dates without replacing files', () => {
+test('tab 3 assigns sequential names; tab 4 never renames evidence when adjustments change', () => {
   for (const modul of ['uang-makan','tukin']) {
     const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[8][3]='-';
     const doc=uploadExtra(f,{modul,fileName:'Surat.PNG'}).document;
@@ -1417,8 +1551,8 @@ test('tab 4 save names adjustment evidence from saved NIP/name and corrected dat
     const corrections={'2026-07-06':{datang:{fileId:doc.fileId,time:'07:30'}}};
     const saved=f.call({action:'simpan_rekap_final',modul,confirmed:true,revision:preview.revision,adjustments:corrections});
     assert.equal(saved.status,'success',saved.message);
-    const prefix=`Lupa Absen_${f.scope.nip}_${f.scope.nama}_`;
-    assert.equal(file.name,prefix+'2026-07-06.png');assert.equal(file.parent,parent);assert.equal(file.trashed,false);
+    const expected=`Surat Lupa Absen_${f.scope.nama}_01_Bukti Dukung ${modul==='tukin'?'Tunjangan Kinerja':'Uang Makan'}.png`;
+    assert.equal(oldName,expected);assert.equal(file.name,expected);assert.equal(file.parent,parent);assert.equal(file.trashed,false);
     assert.equal(saved.adjustmentDocuments.find(d=>d.fileId===doc.fileId).fileName,file.name);
     const listed=f.call({action:'list_pendukung',modul});
     assert.equal(listed.processed,true);assert.equal(listed.documents.find(d=>d.fileId===doc.fileId).fileUrl,doc.fileUrl);
@@ -1426,7 +1560,7 @@ test('tab 4 save names adjustment evidence from saved NIP/name and corrected dat
     assert.equal(f.call({action:'preview_rekap_final',modul}).revision,saved.revision);
     corrections['2026-07-07']={datang:{fileId:doc.fileId,time:'07:30'}};
     const multi=confirmRecap(f,corrections,{modul});assert.equal(multi.status,'success',multi.message);
-    assert.equal(file.name,prefix+'2026-07-06+2026-07-07.png');
+    assert.equal(file.name,expected);
     const countAfterSave=f.files.size;
     assert.equal(confirmRecap(f,corrections,{modul}).status,'success');
     assert.equal(f.files.size,countAfterSave);assert.ok(f.files.size>=count); // calculation note only, no evidence copy
@@ -1445,13 +1579,13 @@ test('invalid tab 4 corrections never rename evidence', () => {
   }
 });
 
-test('failed Drive rename restores earlier evidence names and registry names without deleting files', () => {
+test('final adjustments need no Drive rename permission and preserve all original names', () => {
   const f=fixture();payrollFixture(f);f.working.rows[7][3]='-';f.working.rows[8][3]='-';
   const a=uploadExtra(f).document,b=uploadExtra(f,{requestId:'second'}).document;
   const first=f.files.get(a.fileId), second=f.files.get(b.fileId), originalA=first.name, originalB=second.name;
   second.setName=()=>{throw Error('Simulated Drive failure');};
   const result=confirmRecap(f,{'2026-07-06':{datang:{fileId:a.fileId,time:'07:30'}},'2026-07-07':{datang:{fileId:b.fileId,time:'07:30'}}});
-  assert.equal(result.status,'error');assert.match(result.message,/nama sebelumnya dipulihkan/);
+  assert.equal(result.status,'success',result.message);
   assert.equal(first.name,originalA);assert.equal(second.name,originalB);
   for(const doc of [a,b]){
     assert.equal(f.context.registryRows_().find(row=>row.fileId===doc.fileId).fileName,doc.fileName);
@@ -1463,6 +1597,24 @@ const confirmRecap = (f, adjustments = {}, extra = {}) => {
   assert.equal(p.status,'success',p.message);
   return f.call({action:'simpan_rekap_final',revision:p.revision,confirmed:true,adjustments,...extra});
 };
+
+test('extra upload enforces ten active files server-side, preserves retry IDs and never reuses deleted sequence numbers', () => {
+  const f=fixture(), docs=[];
+  for(let i=0;i<10;i++) {
+    const result=uploadExtra(f,{requestId:`batch-${i}`,jenisDokumen:i%2?'lainnya':'lupa_absen',nama:'Forged Name'});
+    assert.equal(result.status,'success',result.message); docs.push(result.document);
+    assert.match(result.document.fileName,new RegExp(`_${String(i+1).padStart(2,'0')}_Bukti Dukung Uang Makan\\.pdf$`));
+    assert.ok(result.document.fileName.includes(f.scope.nama));assert.ok(!result.document.fileName.includes('Forged'));
+  }
+  const count=f.files.size;
+  assert.equal(uploadExtra(f,{requestId:'batch-0'}).document.fileId,docs[0].fileId);
+  assert.match(uploadExtra(f,{requestId:'eleventh'}).message,/Maksimal 10/);
+  assert.equal(f.files.size,count);
+  assert.equal(f.call({action:'hapus_pendukung',fileId:docs[0].fileId}).status,'success');
+  const next=uploadExtra(f,{requestId:'eleventh'});assert.equal(next.status,'success');
+  assert.match(next.document.fileName,/_11_Bukti Dukung/);
+  assert.equal(uploadExtra(f,{modul:'tukin',requestId:'other-module'}).status,'success');
+});
 test('extra supporting files upload once, list, process, and safely delete without touching archives', () => {
   const f=fixture();
   for(const type of ['lupa_absen','tugas_belajar','lainnya']) {

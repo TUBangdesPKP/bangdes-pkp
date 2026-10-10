@@ -1,7 +1,7 @@
 import { UploadCloud } from 'lucide-react';
 
 export function ArchiveFileDropzone({ documentModule, disabled, isDragging, onDragActiveChange, onFiles, manual = false, entryId, fileName = '', error = '' }) {
-  const label = documentModule === 'spt' ? 'SPT' : 'Cuti';
+  const label = documentModule === 'spt' ? 'SPT' : documentModule === 'extra' ? 'pendukung lainnya' : 'Cuti';
   const inputId = manual ? `manual-upload-${documentModule}-${entryId}` : `arsip-upload-${documentModule}`;
   const stopDrag = event => {
     event.preventDefault();
@@ -31,7 +31,7 @@ export function ArchiveFileDropzone({ documentModule, disabled, isDragging, onDr
       </div>
       <div className="min-w-0 max-w-full">
         <p className={`${manual ? 'text-xs font-semibold break-words' : 'text-sm font-bold'} text-gray-700 group-hover:text-[#0E5B73]`}>{isDragging && !disabled ? 'Lepaskan file di sini' : manual && fileName ? fileName : manual ? `Klik atau drag & drop file ${label}` : 'Klik atau drag & drop file'}</p>
-        <p className="text-[10px] font-medium text-gray-400 mt-1">{manual ? '1 file PDF, JPG, PNG (maks. 10 MB)' : 'PDF (1 halaman), JPG, PNG (max 10MB)'}</p>
+        <p className="text-[10px] font-medium text-gray-400 mt-1">{manual ? '1 file PDF, JPG, PNG (maks. 10 MB)' : documentModule === 'extra' ? 'PDF, JPG, PNG · Maksimal 10 dokumen, 10 MB per file' : 'PDF (1 halaman), JPG, PNG (max 10MB)'}</p>
         {error && <p id={`${inputId}-error`} role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
       </div>
       <input id={inputId} aria-label={`Pilih dokumen ${label}${manual ? ' manual' : ''}`} aria-invalid={!!error} aria-describedby={error ? `${inputId}-error` : undefined} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple={!manual} disabled={disabled}
