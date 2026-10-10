@@ -146,6 +146,57 @@ function fixture() {
 
 const wrapKey = 'local-test-key-only-1234567890';
 
+test('PDF references are stored in the exact employee folder and restored independently of the calculation sheet', () => {
+  for (const modul of ['uang-makan','tukin']) {
+    const f=fixture(); f.scope.modul=modul;
+    let sheetData=fullJulyAttendance(f.working.rows.slice(5,-1));
+    if(modul==='tukin') {
+      f.scope.periode='11-06-2026 s/d 10-07-2026';
+      f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+      sheetData=sheetData.slice(0,30).map((row,i)=>{const copy=[...row];copy[2]=new Date(Date.UTC(2026,5,11+i)).toISOString().slice(0,10);return copy;});
+    }
+    const referencePdf={fileName:'Referensi.PDF',fileBase64:Buffer.from('%PDF-1.7\nTest attendance\n%%EOF').toString('base64')};
+    const result=f.call({sheetData,referencePdf});
+    assert.equal(result.status,'success',result.message);
+    const pdf=f.files.get(result.referenceDocument.fileId);
+    assert.equal(pdf.mime,'application/pdf');assert.equal(pdf.parent.id,f.destination.id);assert.match(pdf.name,/^Presensi_.*\.pdf$/);
+    assert.equal(Buffer.from(pdf.content).toString(),'%PDF-1.7\nTest attendance\n%%EOF');
+    const record=f.context.submissionRecord_(f.scope);
+    assert.equal(record.presensiId,pdf.id);assert.equal(record.spreadsheetId,result.spreadsheetId);assert.notEqual(record.presensiId,record.spreadsheetId);
+    f.properties.set('LEGACY_ADMIN_PIN','062419');
+    const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+    const restored=f.rawCall({action:'presensi_tersimpan',adminSessionToken});
+    assert.equal(restored.referenceDocument.fileId,pdf.id);assert.equal(restored.rows.length,sheetData.length);
+    const replacement=f.call({sheetData,referencePdf});assert.equal(replacement.status,'success',replacement.message);
+    assert.equal(pdf.trashed,false);assert.equal(f.presensi.trashed,false);assert.equal(f.untouched.trashed,false);
+    assert.equal(f.rawCall({action:'presensi_tersimpan',adminSessionToken}).referenceDocument.fileId,replacement.referenceDocument.fileId);
+    const latest=f.files.get(replacement.referenceDocument.fileId);
+    latest.parent=f.otherDestination;
+    assert.equal(f.rawCall({action:'presensi_tersimpan',adminSessionToken}).referenceDocument,null);
+    latest.parent=f.destination;latest.trashed=true;
+    assert.equal(f.rawCall({action:'presensi_tersimpan',adminSessionToken}).referenceDocument,null);
+  }
+});
+
+test('PDF storage rejects malformed, non-PDF, oversized and unauthorized requests before creating files', () => {
+  const f=fixture(), sheetData=fullJulyAttendance(f.working.rows.slice(5,-1));
+  const count=f.files.size;
+  for (const referencePdf of [{fileName:'test.xlsx',fileBase64:'JVBERi0='},{fileName:'test.pdf',fileBase64:'invalid!'}, {fileName:'test.pdf',fileBase64:Buffer.from('not a PDF').toString('base64')}, {fileName:'test.pdf',fileBase64:'A'.repeat(14*1024*1024+1)}]) {
+    assert.equal(f.call({sheetData,referencePdf}).status,'error');assert.equal(f.files.size,count);assert.equal(f.spreadsheet.trashed,false);
+  }
+  assert.equal(f.rawCall({sheetData,referencePdf:{fileName:'test.pdf',fileBase64:'JVBERi0='}}).status,'error');
+  assert.equal(f.files.size,count);
+});
+
+test('uncommitted PDF is cleaned up on master write failure, without deleting any previous document', () => {
+  const f=fixture(), sheet=f.master.getSheetByName('REKAP_UANG_MAKAN'), original=sheet.getRange.bind(sheet), before=JSON.stringify(sheet.rows);
+  sheet.getRange=(...args)=>{const range=original(...args);if(args[0]===2&&args[1]===1)range.setValues=()=>{throw Error('Write failed');};return range;};
+  const result=f.call({sheetData:fullJulyAttendance(f.working.rows.slice(5,-1)),referencePdf:{fileName:'test.pdf',fileBase64:'JVBERi0='}});
+  assert.equal(result.status,'error');assert.match(result.message,/Write failed/);
+  const newPdf=[...f.files.values()].find(file=>file.id.startsWith('upload_document_'));
+  assert.ok(newPdf);assert.equal(newPdf.trashed,true);assert.equal(f.presensi.trashed,false);assert.equal(f.spreadsheet.trashed,false);assert.equal(JSON.stringify(sheet.rows),before);
+});
+
 test('admin roster includes unsubmitted master employees, checks server role and reads latest period status', () => {
   const f=consolidatedFixture();
   f.properties.set('LEGACY_ADMIN_PIN','062419');

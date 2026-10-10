@@ -204,6 +204,7 @@ function doGet(e) {
 // 4. POST DATA (SIMPAN DATA / CEK STATUS)
 // ==========================================
 function legacyDoPost_(e) {
+  var newReferenceFile = null, referenceCommitted = false;
   try {
     var payload = JSON.parse(e.postData.contents);
     
@@ -234,6 +235,7 @@ function legacyDoPost_(e) {
     // LOGIKA LAMA: UANG MAKAN & TUNJANGAN KINERJA
     // ========================================================
     else {
+      var referenceBytes = attendanceReferenceBytes_(payload);
       var formattedBulan = "";
       
       if (modul === "tukin") {
@@ -252,7 +254,7 @@ function legacyDoPost_(e) {
       individuFolder = resolvePresensiFolder_(payload);
       // Tidak menghapus isi folder. Salinan SPT/Cuti dan file lain tetap utuh.
 
-      // Tab 2 consumes parsed data only. The reference PDF/XLSX stays on the user's device.
+      // Preserve the parsed recap for calculation; optionally retain the original PDF alongside it.
 
       var newSpreadsheetName = "Riwayat_Presensi_" + folderPegawaiName + "_" + labelModul + "_" + formattedBulan;
       var targetSpreadsheetId = DriveApp.getFileById(TEMPLATE_ID).makeCopy(newSpreadsheetName, individuFolder).getId();
@@ -285,6 +287,13 @@ function legacyDoPost_(e) {
       }));
       var masterSheet = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheetByName(modul === "uang-makan" ? "REKAP_UANG_MAKAN" : "REKAP_TUKIN");
       if (!masterSheet) throw new Error("Sheet rekap presensi tidak ditemukan.");
+      var referenceDocument = null;
+      if (referenceBytes) {
+        var referenceName = ('Presensi_' + folderPegawaiName + '_' + labelModul + '_' + formattedBulan).replace(/[\\/:*?"<>|]/g, ' ') + '.pdf';
+        newReferenceFile = individuFolder.createFile(Utilities.newBlob(referenceBytes, 'application/pdf', referenceName));
+        referenceDocument = { fileId: newReferenceFile.getId(), fileName: newReferenceFile.getName(), fileUrl: newReferenceFile.getUrl() };
+      }
+      var referenceUrl = referenceDocument ? referenceDocument.fileUrl : fileUrl;
       if (masterSheet) {
         var timestamp = Utilities.formatDate(new Date(), "Asia/Jakarta", "dd/MM/yyyy HH:mm:ss");
 
@@ -292,8 +301,8 @@ function legacyDoPost_(e) {
         var safeNip = "'" + nip.toString().trim();
 
         var dataToInsert = modul === "uang-makan" 
-          ? [timestamp, safeNip, nama, periode, ringkasan.totalHariKalender || 31, ringkasan.totalHariMasuk || 0, ringkasan.totalJamKerja || "-", fileUrl, individuFolder.getUrl(), targetSpreadsheetId]
-          : [timestamp, safeNip, nama, periode, ringkasan.totalHariMasuk || 0, ringkasan.totalTelat || "0", ringkasan.totalPSW || "0", fileUrl, individuFolder.getUrl(), targetSpreadsheetId];
+          ? [timestamp, safeNip, nama, periode, ringkasan.totalHariKalender || 31, ringkasan.totalHariMasuk || 0, ringkasan.totalJamKerja || "-", referenceUrl, individuFolder.getUrl(), targetSpreadsheetId]
+          : [timestamp, safeNip, nama, periode, ringkasan.totalHariMasuk || 0, ringkasan.totalTelat || "0", ringkasan.totalPSW || "0", referenceUrl, individuFolder.getUrl(), targetSpreadsheetId];
         
         var values = masterSheet.getDataRange().getValues();
         var rowIndexToUpdate = -1;
@@ -324,12 +333,16 @@ function legacyDoPost_(e) {
         }
       }
 
-      // Keep any legacy original upload; retire only the previously generated recap.
+      referenceCommitted = true;
+      // Keep previous original PDFs; retire only the previously generated recap.
       invalidateCalculation_(submissionRecord_(payload));
       retirePreviousPresensi_(previousPresensi && Object.assign({}, previousPresensi, { presensiId: '' }), individuFolder, '', targetSpreadsheetId);
-      return json_({ status: "success", message: "Berhasil!", folderId: individuFolder.getId(), folderUrl: individuFolder.getUrl(), spreadsheetId: targetSpreadsheetId });
+      return json_({ status: "success", message: "Berhasil!", folderId: individuFolder.getId(), folderUrl: individuFolder.getUrl(), spreadsheetId: targetSpreadsheetId, referenceDocument: referenceDocument });
     }
   } catch (error) {
+    if (newReferenceFile && !referenceCommitted) {
+      try { newReferenceFile.setTrashed(true); } catch (_) { Logger.log('PDF baru yang belum tercatat gagal dibersihkan.'); }
+    }
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: error.toString() })).setMimeType(ContentService.MimeType.JSON);
   }
 }
@@ -2076,6 +2089,24 @@ function submissionRoster_(payload) {
   employees.sort(function(a,b){return a.nama.localeCompare(b.nama,'id')||a.nip.localeCompare(b.nip);});
   return {status:'success',rosterVersion:1,modul:payload.modul,periode:payload.periode,employees:employees};
 }
+function attendanceReferenceBytes_(payload) {
+  if (payload.referencePdf == null) return null;
+  var reference = payload.referencePdf;
+  if (!reference || typeof reference !== 'object' || !/\.pdf$/i.test(text_(reference.fileName))) throw new Error('Referensi presensi yang disimpan harus PDF.');
+  var encoded = reference.fileBase64;
+  if (typeof encoded !== 'string' || !encoded || encoded.length > 14 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error('Data PDF presensi tidak valid atau melebihi 10 MB.');
+  var bytes = Utilities.base64Decode(encoded);
+  if (bytes.length > 10 * 1024 * 1024 || bytes.length < 5 || [37,80,68,70,45].some(function(value,index){return bytes[index] !== value;})) throw new Error('Berkas referensi bukan PDF valid atau melebihi 10 MB.');
+  return bytes;
+}
+function attendanceReferenceView_(record) {
+  if (!record.presensiId || record.presensiId === record.spreadsheetId) return null;
+  var file;
+  try { file = DriveApp.getFileById(record.presensiId); }
+  catch (error) { if (/No file|not found|does not exist|No item with the given ID/i.test(String(error.message))) return null; throw error; }
+  if (file.isTrashed() || file.getMimeType() !== 'application/pdf' || !hasOnlyParent_(file, record.folderId)) return null;
+  return { fileId: file.getId(), fileName: file.getName(), fileUrl: file.getUrl() };
+}
 function storedAttendance_(payload) {
   requireSubmissionReader_(payload);
   submissionPeriod_(payload);
@@ -2086,8 +2117,9 @@ function storedAttendance_(payload) {
   recordedFolder_(record);
   var saved=savedPresensi_(record);
   result.nama=record.nama;
+  result.referenceDocument=attendanceReferenceView_(record);
   result.rows=saved.rows.map(function(row){return {tanggal:row.tanggal,hari:row.hari,datang:row.datang,pulang:row.pulang,keterangan:row.keteranganAwal};});
-  // Original PDF is intentionally not stored. Restore the immutable parsed baseline.
+  // Restore the parsed baseline and the exact registered PDF, never a file matched by name.
   return result;
 }
 function submissionRecapFolder_(records) {

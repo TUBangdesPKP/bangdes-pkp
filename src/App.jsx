@@ -26,6 +26,7 @@ import { demographyFields } from './demography-model.js';
 import { MonitoringKinerjaPage } from './monitoring-kinerja.jsx';
 import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
 import { AttendanceFileDropzone } from './attendance-file-dropzone.jsx';
+import { attendanceReferencePayload, isAttendancePdf, MAX_ATTENDANCE_PDF_BYTES, readFileDataUrl } from './attendance-reference.js';
 import { manualArchiveFileSelection } from './manual-archive-file.js';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
@@ -3132,6 +3133,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       if (e.target.files.length !== 1 || !/\.(pdf|xlsx|xls)$/i.test(file.name) || !file.size) {
         setAttendanceError('Pilih satu file presensi PDF atau Excel (.xlsx, .xls) yang tidak kosong.'); return;
       }
+      if (isAttendancePdf(file) && file.size > MAX_ATTENDANCE_PDF_BYTES) {
+        setAttendanceError('Ukuran PDF presensi maksimal 10 MB.'); return;
+      }
       setAttendanceError('');
       const requestId = ++referenceRequest.current;
       setExistingCheckError(''); setIsCheckingExisting(false);
@@ -3177,7 +3181,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
   const handlePreviewPdf = async (file) => {
     try {
-      const dataUrl = await fileToBase64(file);
+      const dataUrl = await readFileDataUrl(file);
       setPreviewPdfName(file.name);
       setPreviewPdfUrl(dataUrl);
     } catch (e) {
@@ -3312,6 +3316,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       const bulanTahunForPayload = selectedPeriod ? selectedPeriod.title : (parsedData.periodeFolder || 'Periode_Unknown');
 
       const payload = {
+        ...await attendanceReferencePayload(selectedFile),
         modul: activeTab,
         sessionToken: loggedInUser.sessionToken,
         adminKey: submissionAdminKey,
@@ -3349,11 +3354,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       }
 
       if (json.status === 'success') {
-        const stored = { ...parsedData, fromSaved: true };
+        if (isAttendancePdf(selectedFile) && !json.referenceDocument?.fileId) throw new Error('Rekap tersimpan, tetapi penyimpanan PDF belum dikonfirmasi. Perbarui deployment Code.gs lalu unggah ulang PDF.');
+        const stored = { ...parsedData, fromSaved: true, referenceDocument: json.referenceDocument || null };
         setStoredAttendance(stored); setParsedData(stored); setSelectedFile(null); setReplacingAttendance(false);
         setSubmitResult({ 
           type: 'success', 
-          message: 'Spreadsheet rekap berhasil disimpan. File referensi tidak diunggah ke Google Drive.',
+          message: json.referenceDocument ? 'Rekap dan PDF presensi berhasil disimpan di folder pegawai.' : 'Spreadsheet rekap berhasil disimpan.',
           url: json.folderUrl 
         });
         setIsAlreadyUploaded(true);
@@ -3637,7 +3643,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                              <li>• File hasil export dari <strong>eOffice</strong> atau <strong>myPKP</strong></li>
                              <li>• Format yang diterima: <strong>PDF atau Excel (.xlsx)</strong></li>
                              <li>• Sistem otomatis mencocokkan <strong>Nama berdasarkan NIP</strong></li>
-                             <li>• File hanya dibaca sebagai referensi. Yang disimpan ke Drive adalah <strong>spreadsheet rekap hasil bacaan</strong>.</li>
+                             <li>• <strong>PDF presensi</strong> disimpan bersama rekap di folder pegawai (maks. 10 MB). Untuk Excel, yang disimpan adalah hasil bacaannya.</li>
                           </ul>
                         </div>
 
@@ -3646,9 +3652,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                           {loadingAttendance && <p role="status" className="text-xs text-slate-500 py-3">Memuat preview presensi tersimpan...</p>}
                           {storedAttendance && <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 mb-3 flex flex-wrap items-center gap-3 text-xs">
                             <span className="font-bold text-teal-800">Sudah ada file presensi</span>
+                            {storedAttendance.referenceDocument?.fileId && <button type="button" onClick={() => { setPreviewPdfName(storedAttendance.referenceDocument.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + storedAttendance.referenceDocument.fileId + '/preview'); }} className="inline-flex items-center gap-1 text-[#084C61] underline"><Eye size={14}/>Lihat Dokumen</button>}
                             <button type="button" disabled={isParsing || isSubmitting} onClick={() => setReplacingAttendance(true)} className="text-[#084C61] underline disabled:opacity-40">Ubah file presensi</button>
                           </div>}
                           {(!storedAttendance || replacingAttendance) && <AttendanceFileDropzone disabled={isParsing || isSubmitting || loadingAttendance || !viewingEmployee} fileName={selectedFile?.name} onFiles={files => handleFileChange({ target: { files } })}/>}
+                          {isAttendancePdf(selectedFile) && <button type="button" onClick={() => handlePreviewPdf(selectedFile)} className="mt-2 mr-3 inline-flex items-center gap-1 text-xs text-[#084C61] underline"><Eye size={14}/>Lihat PDF yang dipilih</button>}
                           {(selectedFile || replacingAttendance) && !isParsing && <button type="button" disabled={isSubmitting} onClick={handleClearFile} className="mt-2 text-xs text-slate-500 underline">{storedAttendance ? 'Batal mengganti file' : 'Batalkan pilihan file'}</button>}
                           {attendanceError && <div role="alert" className="text-xs text-red-700 mt-3 space-y-2"><p>{attendanceError}</p><button type="button" disabled={isParsing || isSubmitting} onClick={() => setAttendanceReload(value => value + 1)} className="underline">Muat ulang presensi tersimpan</button></div>}
                         </div>
@@ -3666,12 +3674,6 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                             <span>File presensi milik <strong className="font-extrabold text-[#114053]">{parsedData.nama}</strong> {parsedData.totalRows ? `(${parsedData.totalRows} baris)` : ''}</span>
                           </div>
                         )}
-
-                        {!isParsing && parsedData?.isValid && parsedData.pdfReadInfo && <p role="status" className="text-xs text-teal-800 rounded-xl border border-teal-100 bg-teal-50 p-3">
-                          {parsedData.pdfReadInfo.mode}. {parsedData.pdfReadInfo.continuedDates.length > 0
-                            ? `Baris disambungkan dari halaman berikutnya: ${parsedData.pdfReadInfo.continuedDates.join(', ')}.`
-                            : 'Kolom Masuk dan Keluar dibaca terpisah.'}
-                        </p>}
 
                         {!isParsing && isAlreadyUploaded && !submitResult && selectedFile && (
                           <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 shadow-sm">

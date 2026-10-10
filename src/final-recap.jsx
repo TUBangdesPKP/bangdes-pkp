@@ -90,7 +90,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
       <h2 className="text-lg font-extrabold text-[#084C61]">Preview Bukti {moduleLabel}</h2>
       <p className="text-sm text-gray-600">{readOnly ? 'Menampilkan presensi dan penyesuaian yang sudah tersimpan. Seluruh isian hanya dapat dilihat.' : 'Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.'}</p>
       <p className="text-xs text-teal-800">Adjustment maksimal 4 kejadian per bulan kalender, dihitung bersama Uang Makan dan Tukin. Jika datang dan pulang sama-sama kosong, hanya satu yang boleh dikoreksi. Jam koreksi digunakan untuk menghitung TL/PSW; absen yang masih kosong tetap dikenai potongan.</p>
-      {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap presensi. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>}
+      {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap presensi. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan.</p>}
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
     {loading && <p role="status" className="p-5 text-sm">{readOnly ? 'Memuat preview tersimpan...' : 'memproses data terbaru'}</p>}
