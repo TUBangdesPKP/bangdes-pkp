@@ -12,6 +12,7 @@ import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
 import { AccountActivation } from './account-activation.jsx';
 import { MyProfile } from './my-profile.jsx';
+import { readStoredSession, startActivitySession, revokeSession } from './activity-session.js';
 import { PkpLogo } from './pkp-logo.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
 import { FaqManager } from './faq-manager.jsx';
@@ -29,9 +30,11 @@ import { AttendanceFileDropzone } from './attendance-file-dropzone.jsx';
 import { attendanceReferencePayload, isAttendancePdf, MAX_ATTENDANCE_PDF_BYTES, readFileDataUrl } from './attendance-reference.js';
 import { manualArchiveFileSelection } from './manual-archive-file.js';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
+import { claimSourceKey, uniqueClaimItems } from './claim-batch.js';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
 import { validateAttendancePeriod, assertAttendanceEmployee } from './attendance-period.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
+import { extractCutiType } from './cuti-type.js';
 import { useCutiCalendar } from './use-cuti-calendar.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -60,7 +63,6 @@ const PALETTE_PKP = {
 };
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFp99KsR0PfXVG3IhQ1X2s2n0h44yRhRQuW9tQtxxiXfnUNiQicfpJBGbQwrApYlXw/exec";
-const SESSION_DURATION = 30 * 60 * 1000;
 
 const extractDriveId = (url) => {
   if (!url) return '';
@@ -537,7 +539,7 @@ const isValidSptLocation = (tujuan) => {
   return false;
 };
 
-const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', cutiPeriod = null) => {
+const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', cutiPeriod = null, cutiType = null) => {
   const nipSet = new Set();
   let dateBerangkat = '-';
   let datePulang = '-';
@@ -747,35 +749,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', 
     }
   }
 
-  let detectedJenisCuti = '';
-  if (modul === 'cuti') {
-    const marks = '([vVxX✓✔√])';
-    const cutiPatterns = [
-      { name: "Cuti Tahunan", regex: new RegExp(`(?:1\\.?\\s*)?CUTI\\s*TAHUNAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
-      { name: "Cuti Besar", regex: new RegExp(`(?:2\\.?\\s*)?CUTI\\s*BESAR[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
-      { name: "Cuti Sakit", regex: new RegExp(`(?:3\\.?\\s*)?CUTI\\s*SAKIT[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
-      { name: "Cuti Melahirkan", regex: new RegExp(`(?:4\\.?\\s*)?CUTI\\s*MELAHIRKAN[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
-      { name: "Cuti Karena Alasan Penting", regex: new RegExp(`(?:5\\.?\\s*)?(?:CUTI\\s*KARENA\\s*)?ALASAN\\s*PENTING[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') },
-      { name: "Cuti diluar Tanggungan Negara", regex: new RegExp(`(?:6\\.?\\s*)?CUTI\\s*DILUAR\\s*TANGGUNGAN\\s*NEGARA[\\s\\|\\]\\[\\:\\.]*${marks}(?:\\b|[\\s\\|\\]\\[])`, 'i') }
-    ];
-
-    let jenisCutiBlock = '';
-    let inJenisCuti = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (/JENIS CUTI/i.test(lines[i])) inJenisCuti = true;
-      if (inJenisCuti) jenisCutiBlock += ' ' + lines[i];
-      if (/ALASAN CUTI|LAMANYA CUTI/i.test(lines[i])) break;
-    }
-    
-    let textToScan = jenisCutiBlock.length > 20 ? jenisCutiBlock : fullText;
-
-    for (const pattern of cutiPatterns) {
-      if (pattern.regex.test(textToScan)) {
-        detectedJenisCuti = pattern.name;
-        break;
-      }
-    }
-  }
+  const detectedJenisCuti = modul === 'cuti' ? (cutiType || extractCutiType(fullText)) : null;
 
   let finalTujuan = rawTujuan || '-';
 
@@ -800,7 +774,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', 
   } else if (modul === 'cuti') {
     if (detectedJenisCuti) {
       finalTujuan = detectedJenisCuti;
-    } else if (finalTujuan === '-') {
+    } else {
       finalTujuan = 'Cuti / Alasan Lainnya';
     }
   }
@@ -828,7 +802,7 @@ const extractArsipData = async (lines, fullText, dbPegawai = [], modul = 'spt', 
   return { pegawaiList, dateBerangkat, datePulang, tanggalSurat, cutiDuration, cutiWarning: found?.warning || '', tujuan: finalTujuan };
 };
 
-const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = null, onProgress = null) => {
+const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = null, onProgress = null, cutiHolidays = DAFTAR_LIBUR_NASIONAL) => {
   const fileName = file.name.toLowerCase();
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
   let fullText = '';
@@ -836,6 +810,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   let excelRows = [];
   let pdfRows = null;
   let cutiPeriod = null;
+  let cutiType = null;
 
   if (isExcel) {
     if (!window.XLSX) {
@@ -937,7 +912,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     const isTooShort = fullText.trim().length < 50;
     let needsCutiOcr = false;
     if (activeTab === 'cuti') {
-      try { needsCutiOcr = !!extractCutiPeriod(fullText).warning; } catch { needsCutiOcr = true; }
+      cutiType = extractCutiType(fullText);
+      try { cutiPeriod = extractCutiPeriod(fullText); needsCutiOcr = !!cutiPeriod.warning || !cutiType; } catch { needsCutiOcr = true; }
     }
 
     if (!hasNip || isTooShort || needsCutiOcr) {
@@ -968,6 +944,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
 
         const cutiRead = activeTab === 'cuti' ? await recognizeCutiImage(canvas, window.Tesseract, onProgress) : null;
         if (cutiRead?.period && (!cutiPeriod || cutiPeriod.warning)) cutiPeriod = cutiRead.period;
+        if (cutiRead?.type && !cutiType) cutiType = cutiRead.type;
         const text = cutiRead ? cutiRead.text : (await window.Tesseract.recognize(canvas, 'eng')).data.text;
         const pageLines = text.split('\n').map(l => l.trim()).filter(l => l);
         lines = lines.concat(pageLines);
@@ -994,7 +971,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
       bitmap.close();
       const result = await recognizeCutiImage(canvas,window.Tesseract,onProgress);
-      text = result.text; cutiPeriod = result.period;
+      text = result.text; cutiPeriod = result.period; cutiType = result.type;
     } else text = (await window.Tesseract.recognize(file, 'eng')).data.text;
     fullText = text;
     lines = text.split('\n').map(line => line.trim()).filter(Boolean);
@@ -1013,11 +990,11 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   }
 
   if (activeTab === 'spt' || activeTab === 'cuti') {
-    const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab, cutiPeriod);
+    const arsipData = await extractArsipData(lines, fullText, dbPegawai, activeTab, cutiPeriod, cutiType);
     
     let finalNames = arsipData.pegawaiList;
     if (activeTab === 'cuti') {
-      const calculatedDays = hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang));
+      const calculatedDays = hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang), cutiHolidays);
       if (calculatedDays === 0 || arsipData.tujuan === 'Cuti / Alasan Lainnya' || arsipData.cutiWarning) {
         finalNames = finalNames.map(p => ({ ...p, selected: false }));
       }
@@ -1034,7 +1011,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       arsipDatePulang: arsipData.datePulang,
       arsipTanggalSurat: arsipData.tanggalSurat,
       arsipTujuan: arsipData.tujuan,
-      arsipJumlahHariCuti: arsipData.cutiDuration,
+      arsipJumlahHariCuti: activeTab === 'cuti' ? hitungHariKerjaAktif(formatIndoToYMD(arsipData.dateBerangkat), formatIndoToYMD(arsipData.datePulang), cutiHolidays) : null,
+      arsipJumlahHariPadaSurat: arsipData.cutiDuration,
       arsipCutiWarning: arsipData.cutiWarning,
       arsipNames: finalNames,
       nip: '-',
@@ -1198,18 +1176,7 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
 };
 
 const getStoredUser = () => {
-  const stored = localStorage.getItem('pkp_session');
-  if (stored) {
-    try {
-      const { user, timestamp } = JSON.parse(stored);
-      const now = new Date().getTime();
-      if (now - timestamp < SESSION_DURATION) return user;
-      localStorage.removeItem('pkp_session');
-    } catch(e) {
-      localStorage.removeItem('pkp_session');
-    }
-  }
-  return null;
+  return readStoredSession()?.user || null;
 };
 
 export const Header = ({ navigate, loggedInUser, onLogoutRequest, currentView }) => {
@@ -1326,7 +1293,7 @@ const LoginView = ({ navigate, onLoginSuccess, sessionExpired }) => {
   const [pinDigits, setPinDigits] = useState(['', '', '', '', '', '']);
   const [message, setMessage] = useState(
     sessionExpired 
-      ? { type: 'error', text: 'Waktu sesi Anda telah berakhir (30 Menit Tanpa Aktivitas). Silakan login kembali untuk keamanan.' } 
+      ? { type: 'error', text: 'Sesi berakhir setelah 6 jam tanpa aktivitas atau tidak lagi valid. Silakan login kembali.' }
       : { type: '', text: '' }
   );
   const [loading, setLoading] = useState(false);
@@ -1997,6 +1964,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
   const handleBacaDokumenArsip = async () => {
     if (isReadingArsip || isSubmittingArsip) return;
+    if (!cutiCalendar.ready) { setArsipSubmitResult({ type: 'error', message: 'Tunggu kalender hari libur selesai dimuat sebelum membaca cuti.' }); return; }
     const pendingFiles = arsipFiles.filter(f => f.status === 'pending');
     if (pendingFiles.length === 0) return;
 
@@ -2011,7 +1979,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
       setArsipFiles([...currentList]);
       
       try {
-        const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, documentModule); 
+        const result = await parseDocumentPresensi(fileObj.file, selectedPeriod, documentModule, null, cutiCalendar.dates || DAFTAR_LIBUR_NASIONAL);
         currentList = currentList.map(f => f.id === fileObj.id ? { 
           ...f, 
           status: 'success', 
@@ -2040,8 +2008,9 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
   };
 
   const handleSaveArsipDetails = (fileId) => {
-    if (documentModule === 'cuti' && (!Number.isInteger(Number(editArsipForm.jumlahHariCuti)) || Number(editArsipForm.jumlahHariCuti) < 1)) {
-      setArsipSubmitResult({ type: 'error', message: 'Jumlah hari cuti harus diisi sesuai Bab IV pada surat.' });
+    const computedCutiDays = documentModule === 'cuti' ? countArchiveDays(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang)) : null;
+    if (documentModule === 'cuti' && (!cutiCalendar.ready || computedCutiDays < 1)) {
+      setArsipSubmitResult({ type: 'error', message: 'Periksa tanggal mulai/selesai dan kalender libur. Rentang cuti harus memuat minimal satu hari kerja.' });
       return;
     }
     updateArsipFileData(fileId, pd => {
@@ -2062,7 +2031,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
         arsipDateBerangkat: editArsipForm.berangkat,
         arsipDatePulang: editArsipForm.pulang,
         arsipTanggalSurat: editArsipForm.tanggalSurat,
-        arsipJumlahHariCuti: documentModule === 'cuti' ? Number(editArsipForm.jumlahHariCuti) : pd.arsipJumlahHariCuti,
+        arsipJumlahHariCuti: documentModule === 'cuti' ? computedCutiDays : pd.arsipJumlahHariCuti,
         arsipCutiWarning: '',
         arsipTujuan: newTujuan,
         arsipNames: newNames
@@ -2584,8 +2553,8 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                         )}
                                         {documentModule === 'cuti' && (
                                           <div className="flex items-center gap-3">
-                                            <label className="w-20 text-xs font-bold text-[#114053]">Hari pada surat:</label>
-                                            <input aria-label="Jumlah hari cuti pada surat" type="number" min="1" step="1" value={editArsipForm.jumlahHariCuti ?? ''} onChange={e => setEditArsipForm({...editArsipForm, jumlahHariCuti: e.target.value})} className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs" />
+                                            <span className="w-20 text-xs font-bold text-[#114053]">Total cuti:</span>
+                                            <output aria-label="Jumlah hari cuti otomatis" className="flex-1 px-3 py-1.5 bg-white border border-[#CDE5F1] rounded-lg text-xs">{cutiCalendar.ready ? `${countArchiveDays(formatIndoToYMD(editArsipForm.berangkat), formatIndoToYMD(editArsipForm.pulang))} hari kerja (otomatis)` : 'Menunggu kalender libur'}</output>
                                           </div>
                                         )}
                                         <div className="flex items-center gap-3">
@@ -2639,12 +2608,14 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                             <span className="font-extrabold text-[13px] text-[#114053] leading-tight">{pd.arsipDateBerangkat} - {pd.arsipDatePulang}</span>
                                             <span className="ml-1 px-2 py-0.5 rounded-md border border-[#CDE5F1] bg-white text-[9px] text-gray-500 font-bold whitespace-nowrap">({documentModule === 'cuti' ? (cutiCalendar.ready ? countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) + ' Hari Kerja' : 'Menunggu kalender') : hitungHariDinas(pd.arsipDateBerangkat, pd.arsipDatePulang) + ' Hari'})</span>
                                           </div>
-                                          {documentModule === 'cuti' && pd.arsipJumlahHariCuti != null && (
-                                            <p className="text-xs text-[#114053]">Bab IV pada surat: {pd.arsipJumlahHariCuti} hari cuti.
-                                              {cutiCalendar.ready && pd.arsipJumlahHariCuti !== countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah pada surat berbeda. Yang disimpan adalah hari kerja pada rentang cuti, tanpa Sabtu–Minggu, libur nasional, dan cuti bersama.</span>}
+                                          {documentModule === 'cuti' && <p className="text-[11px] text-gray-500">Dihitung otomatis dari tanggal mulai–selesai, tanpa Sabtu–Minggu, libur nasional, dan cuti bersama pada kalender sistem.</p>}
+                                          {documentModule === 'cuti' && pd.arsipJumlahHariPadaSurat != null && (
+                                            <p className="text-xs text-[#114053]">Bab IV pada surat: {pd.arsipJumlahHariPadaSurat} hari cuti.
+                                              {cutiCalendar.ready && pd.arsipJumlahHariPadaSurat !== countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) && <span className="text-amber-700"> Jumlah pada surat berbeda. Yang disimpan adalah hasil hitung kalender kerja.</span>}
                                             </p>
                                           )}
                                           {pd.arsipCutiWarning && <p role="alert" className="text-xs text-amber-700">{pd.arsipCutiWarning}</p>}
+                                          {documentModule === 'cuti' && pd.arsipTujuan === 'Cuti / Alasan Lainnya' && <p role="alert" className="text-xs text-amber-700">Tanda centang jenis cuti belum jelas atau lebih dari satu pilihan. Periksa bagian Jenis Cuti melalui Ubah Data.</p>}
                                           {documentModule !== 'cuti' && (
                                             <div className="flex items-center gap-2 pl-[22px]">
                                               <FileText size={12} className="text-gray-400 shrink-0" />
@@ -2657,7 +2628,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                                           </div>
                                         </div>
                                         <button onClick={() => {
-                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-', jumlahHariCuti: pd.arsipJumlahHariCuti ?? countArchiveDays(formatIndoToYMD(pd.arsipDateBerangkat), formatIndoToYMD(pd.arsipDatePulang)) });
+                                          setEditArsipForm({ berangkat: pd.arsipDateBerangkat, pulang: pd.arsipDatePulang, tanggalSurat: pd.arsipTanggalSurat, tujuan: pd.arsipTujuan || '-' });
                                           setEditingArsipId(fileObj.id);
                                         }} className="absolute top-4 right-4 px-3 py-1.5 bg-white hover:bg-[#EAF5FA] text-[#084C61] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer border border-[#CDE5F1] shadow-sm">
                                           <Edit3 size={14} /> Ubah Data
@@ -2822,7 +2793,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
 
 const hasArchiveLink = value => /^https?:\/\//i.test(String(value || ''));
 
-const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, selectedPeriod, archiveRevision, documents, readOnly = false }) => {
+const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, selectedPeriod, archiveRevision, documents, blocked = false, readOnly = false }) => {
   const label = documentModule === 'spt' ? 'SPT' : 'Cuti';
   // State untuk Tahap 3: Daftar Klaim SPT
   const [sptKlaimList, setSptKlaimList] = useState([]);
@@ -2830,6 +2801,8 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   const [isSptListExpanded, setIsSptListExpanded] = useState(true);
   
   const [isClaimingSptId, setIsClaimingSptId] = useState(null);
+  const [selectedClaims, setSelectedClaims] = useState([]);
+  const [claimProgress, setClaimProgress] = useState('');
 
   const [claimError, setClaimError] = useState('');
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -2842,7 +2815,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   const currentContext = useRef(contextKey);
   currentContext.current = contextKey;
   const loadedArchive = useRef('');
-  const reset = () => { loadedArchive.current = ''; setSptKlaimList([]); setClaimError(''); setIsClaimingSptId(null); };
+  const reset = () => { loadedArchive.current = ''; setSptKlaimList([]); setClaimError(''); setIsClaimingSptId(null); setSelectedClaims([]); setClaimProgress(''); };
   useEffect(() => { reset(); }, [activeTab, identityNip, identityName, period, periodTitle]);
   useEffect(() => {
     if (!enabled || activeStep !== 3 || !period) return;
@@ -2855,7 +2828,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
     (documentModule === 'spt' ? fetchLiveSptData : fetchLiveCutiData)({ throwOnError: true })
       .then(items => {
         if (!cancelled) {
-          setSptKlaimList(filterArchiveForClaim(items, { nip: identityNip, nama: identityName }, period));
+          setSptKlaimList(uniqueClaimItems(filterArchiveForClaim(items, { nip: identityNip, nama: identityName }, period)));
           loadedArchive.current = requestKey;
         }
       })
@@ -2864,14 +2837,34 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
     return () => { cancelled = true; };
   }, [enabled, activeStep, contextKey, documentModule, identityNip, identityName, period, archiveRevision, refreshVersion]);
 
-  const handleKlaimSpt = async (item) => {
-    if (readOnly || !selectedPeriod || !documents.ready || isClaimingSptId || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)) return;
-    const id = crypto.randomUUID();
-    const payload = createClaimPayload({ item, documentModule, activeTab, identity, selectedPeriod, id });
-    setIsClaimingSptId(item.linkAkses);
+  const claimDisabled = readOnly || blocked || documents.busy || documents.loading || !documents.ready || !!isClaimingSptId;
+  const availableClaims = sptKlaimList.filter(item => hasArchiveLink(item.linkAkses) && !documents.isClaimed(item.linkAkses, documentModule));
+  const selectedItems = availableClaims.filter(item => selectedClaims.includes(claimSourceKey(item.linkAkses)));
+  const handleKlaimSpt = async items => {
+    if (claimDisabled || !selectedPeriod) return;
+    const queue = uniqueClaimItems(items).filter(item => hasArchiveLink(item.linkAkses) && !documents.isClaimed(item.linkAkses, documentModule));
+    if (!queue.length) return;
+    const payloads = queue.map(item => createClaimPayload({ item, documentModule, activeTab, identity, selectedPeriod, id: crypto.randomUUID() }));
+    setSelectedClaims(previous => [...new Set([...previous, ...queue.map(item => claimSourceKey(item.linkAkses))])]);
+    setIsClaimingSptId(queue[0].linkAkses);
     setClaimError('');
     try {
-      await documents.claim(payload);
+      const report = await documents.claimMany(payloads, ({ current, total, payload }) => {
+        if (currentContext.current !== contextKey) return;
+        setIsClaimingSptId(payload.sourceUrl);
+        setClaimProgress(`Mencatat ${label} ${current} dari ${total} dokumen…`);
+      });
+      if (currentContext.current !== contextKey) return;
+      const succeeded = new Set(report.succeeded.map(({ payload }) => claimSourceKey(payload.sourceUrl)));
+      setSelectedClaims(previous => previous.filter(key => !succeeded.has(key)));
+      setClaimProgress(`${report.succeeded.length} dokumen ${label} berhasil dicatat.${report.remaining.length ? ` ${report.remaining.length} dokumen belum diproses.` : ''}`);
+      if (report.failed.length) {
+        const details = report.failed.map(({ payload, error }) => {
+          const item = queue.find(row => claimSourceKey(row.linkAkses) === claimSourceKey(payload.sourceUrl));
+          return `${item?.tujuan || label} (${item?.tanggalBerangkat || '-'}): ${error.message}`;
+        });
+        setClaimError(details.join(' · ') + ' Dokumen yang belum terkonfirmasi tetap dipilih. Periksa daftar tersimpan sebelum mencoba kembali.');
+      }
     } catch (error) {
       if (currentContext.current === contextKey) setClaimError('Gagal klaim ' + label + ': ' + error.message);
     } finally { if (currentContext.current === contextKey) setIsClaimingSptId(null); }
@@ -2881,7 +2874,7 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
     <section aria-label={'Rekapitulasi ' + label} className="space-y-4">
       {claimError && <div role="alert" className="p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 text-xs">
         {claimError}
-        <button type="button" onClick={() => setRefreshVersion(v => v + 1)} className="ml-3 font-bold underline">Muat ulang rekap</button>
+        <button type="button" disabled={claimDisabled} onClick={() => setRefreshVersion(v => v + 1)} className="ml-3 font-bold underline disabled:opacity-50">Muat ulang rekap</button>
       </div>}
                   <div className="bg-white border border-[#CDE5F1] rounded-2xl overflow-hidden shadow-sm">
                     <div 
@@ -2900,6 +2893,14 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
 
                     {isSptListExpanded && (
                       <div className="p-4 bg-white border-t border-[#CDE5F1] space-y-3">
+                        {!isSptKlaimLoading && availableClaims.length > 0 && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#F0F7F9] p-3">
+                          <label className="flex items-center gap-2 text-xs font-bold text-[#084C61]">
+                            <input type="checkbox" disabled={claimDisabled} checked={selectedItems.length === availableClaims.length} onChange={event => setSelectedClaims(event.target.checked ? availableClaims.map(item => claimSourceKey(item.linkAkses)) : [])} className="accent-[#084C61] h-4 w-4"/>
+                            Pilih semua {label} ({selectedItems.length}/{availableClaims.length})
+                          </label>
+                          <button type="button" disabled={claimDisabled || !selectedItems.length} onClick={() => handleKlaimSpt(selectedItems)} className="rounded-lg bg-[#084C61] px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Klaim {selectedItems.length} Dokumen {label}</button>
+                        </div>}
+                        {claimProgress && <p role="status" className="text-xs text-teal-700">{claimProgress}</p>}
                         {isSptKlaimLoading ? (
                           <div className="text-center py-10 text-gray-400">
                             <div className="w-6 h-6 border-2 border-[#084C61] border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
@@ -2926,7 +2927,8 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
                             }
 
                             return (
-                              <div key={idx} className="border border-gray-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                              <div key={claimSourceKey(item.linkAkses) || idx} className="border border-gray-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-[#CDE5F1] transition-colors shadow-2xs">
+                                <input type="checkbox" aria-label={`Pilih ${label}: ${item.tujuan} ${dateRange}`} disabled={claimDisabled || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)} checked={!documents.isClaimed(item.linkAkses, documentModule) && selectedClaims.includes(claimSourceKey(item.linkAkses))} onChange={event => setSelectedClaims(previous => event.target.checked ? [...new Set([...previous, claimSourceKey(item.linkAkses)])] : previous.filter(key => key !== claimSourceKey(item.linkAkses)))} className="h-4 w-4 shrink-0 accent-[#084C61]"/>
                                 <div>
                                   <h4 className="text-sm font-extrabold text-gray-900 mb-1">
                                     {item.tujuan} {dateRange ? `(${dateRange})` : ''}
@@ -2946,8 +2948,8 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
                                     <Eye size={14} /> View
                                   </a>
                                   <button 
-                                    onClick={() => handleKlaimSpt(item)}
-                                    disabled={!documents.ready || !hasArchiveLink(item.linkAkses) || !!isClaimingSptId || documents.isClaimed(item.linkAkses, documentModule)}
+                                    onClick={() => handleKlaimSpt([item])}
+                                    disabled={claimDisabled || !hasArchiveLink(item.linkAkses) || documents.isClaimed(item.linkAkses, documentModule)}
                                     className={`px-3 py-1.5 text-[11px] font-bold rounded-lg flex items-center gap-1.5 transition-colors ${
                                       documents.isClaimed(item.linkAkses, documentModule) 
                                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
@@ -3218,7 +3220,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   });
   const uploadOptions = {
     isPeriodSpt, selectedPeriod, loggedInUser, dbPegawai, handlePreviewPdf, submission,
-    submissionReady: documents.ready && !readOnlyPeriod,
+    submissionReady: documents.ready && !documents.busy && !documents.loading && !readOnlyPeriod,
     onUploaded: result => {
       if (isPeriodSpt) documents.acceptResult(result);
       setArchiveRevision(revision => revision + 1);
@@ -3259,7 +3261,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     } finally { setIsProcessingEvidence(false); }
   };
 
-  const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision, documents, readOnly: readOnlyPeriod };
+  const claimOptions = { activeTab, activeStep, identity: claimIdentity, selectedPeriod, archiveRevision, documents, blocked: evidenceBusy || isProcessingEvidence, readOnly: readOnlyPeriod };
   const sptClaims = useArchiveClaims({ ...claimOptions, documentModule: 'spt' });
   const cutiClaims = useArchiveClaims({ ...claimOptions, documentModule: 'cuti' });
 
@@ -3623,7 +3625,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   navigateRoute(currentView, submissionEntryStep(period, isSubmissionAdmin));
                 }}/>
               ) : activeStep === 0 && isSubmissionAdmin && selectedPeriod ? (
-                <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelectEmployee={employee => {
+                <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} onSelectEmployee={employee => {
                   resetUploadState(); setSelectedRecap({ modul: activeTab, periode: selectedPeriod.periodeEvent, employee }); navigate(currentView, 2);
                 }}/>
               ) : readOnlyPeriod && !(isSubmissionAdmin && activeStep === 2) ? (
@@ -3875,7 +3877,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                 </div>}
                 </div>
               ) : activeStep === 3 && selectedPeriod ? (
-                <fieldset disabled={isProcessingEvidence} className="max-w-7xl mx-auto space-y-6 min-w-0">
+                <fieldset disabled={isProcessingEvidence || evidenceBusy} className="max-w-7xl mx-auto space-y-6 min-w-0">
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm flex gap-4 items-start">
                     <div className="mt-1 text-gray-400"><FolderOpen size={24} /></div>
                     <div>
@@ -4091,7 +4093,7 @@ export default function App() {
   };
 
   const [routeData, setRouteData] = useState(getHashData());
-  const [loggedInUser, setLoggedInUser] = useState(getStoredUser());
+  const [loggedInUser, setLoggedInUser] = useState(getStoredUser);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
 
@@ -4108,27 +4110,11 @@ export default function App() {
 
   useEffect(() => {
     if (!loggedInUser) return;
-    const handleActivity = () => {
-      const stored = localStorage.getItem('pkp_session');
-      if (stored) { try { const data = JSON.parse(stored); data.timestamp = new Date().getTime(); localStorage.setItem('pkp_session', JSON.stringify(data)); } catch(e) {} }
-    };
-    window.addEventListener('click', handleActivity);
-    window.addEventListener('hashchange', handleActivity);
-
-    const interval = setInterval(() => {
-      const stored = localStorage.getItem('pkp_session');
-      if (stored) {
-        try {
-          const { timestamp } = JSON.parse(stored);
-          if (new Date().getTime() - timestamp >= SESSION_DURATION) {
-            setLoggedInUser(null); localStorage.removeItem('pkp_session'); setSessionExpired(true);
-            if (!['home','monitoring-kinerja','kepegawaian','profile','rekap-publik','rekap'].includes(getHashData().view)) navigate('login');
-          }
-        } catch(e) {}
-      }
-    }, 10000);
-
-    return () => { window.removeEventListener('click', handleActivity); window.removeEventListener('hashchange', handleActivity); clearInterval(interval); };
+    return startActivitySession({ user: loggedInUser, endpoint: APPS_SCRIPT_URL, onExpire: () => {
+      setLoggedInUser(null); setSessionExpired(true); setShowLogoutModal(false);
+      window.location.hash = '#/login';
+      setRouteData({ view: 'login', step: 1 });
+    } });
   }, [loggedInUser]);
 
   const navigate = (viewName, step = 1) => {
@@ -4140,6 +4126,7 @@ export default function App() {
   };
 
   const handleLogoutConfirm = () => {
+    void revokeSession(APPS_SCRIPT_URL, loggedInUser);
     setLoggedInUser(null); localStorage.removeItem('pkp_session'); setShowLogoutModal(false); navigate('home');
   };
 

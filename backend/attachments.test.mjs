@@ -63,6 +63,9 @@ function fixture() {
     constructor(id, name, parent, mime = 'application/pdf') { Object.assign(this, { id, name, parent, mime, trashed: false }); files.set(id, this); }
     getId() { return this.id; } getName() { return this.name; } getUrl() { return `https://drive.google.com/file/d/${this.id}/view`; }
     getMimeType() { return this.mime; } isTrashed() { return this.trashed; }
+    getSize() { return this.size ?? Buffer.byteLength(this.content || 'PDF test'); }
+    getLastUpdated() { return new Date(this.updated || '2026-10-10T00:00:00Z'); }
+    getBlob() { return {getBytes:()=>Buffer.from(this.content || 'PDF test')}; }
     setContent(content) { this.content = content; return this; }
     setName(name) { this.name = name; return this; }
     getParents() { return iterator(this.parent ? [this.parent] : []); }
@@ -80,6 +83,7 @@ function fixture() {
     moveTo(parent) { this.parent=parent; return this; }
     getParents() { return iterator(this.parent ? [this.parent] : []); }
     getFoldersByName(name) { return iterator([...folders.values()].filter(f => f.parent === this && f.name === name)); }
+    getFolders() { return iterator([...folders.values()].filter(f => f.parent === this)); }
     createFolder(name) { return new Folder(`folder_created_${++sequence}`, name, this); }
     getFiles() { return iterator([...files.values()].filter(f => f.parent === this && !f.trashed)); }
     getFilesByName(name) { return iterator([...files.values()].filter(f => f.parent === this && f.name === name && !f.trashed)); }
@@ -94,7 +98,7 @@ function fixture() {
     CacheService: { getScriptCache: () => ({get:key=>cache.get(key)||null,put:(key,value)=>cache.set(key,value),remove:key=>cache.delete(key)}) },
     DriveApp: { getFolderById: id => { if (!folders.has(id)) throw Error('No folder'); return folders.get(id); }, getFileById: id => { if (!files.has(id)) throw Error('No file'); return files.get(id); }, Access: {}, Permission: {} },
     SpreadsheetApp: { flush() {}, openById: id => { if (!books.has(id)) throw Error('No spreadsheet'); return books.get(id); } },
-    Utilities: { DigestAlgorithm: {SHA_256:'sha256'}, computeDigest: (algorithm, value) => [...crypto.createHash(algorithm).update(value).digest()], getUuid: () => `uuid_${++sequence}`, formatDate: (date, timeZone, format) => format === 'yyyy-MM-dd' ? new Intl.DateTimeFormat('en-CA', {timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date) : '19/09/2026 10:00:00', base64Decode: data => Buffer.from(data, 'base64'), newBlob: (data, mime, name) => ({ data, mime, name }) },
+    Utilities: { DigestAlgorithm: {SHA_256:'sha256'}, computeDigest: (algorithm, value) => [...crypto.createHash(algorithm).update(value).digest()], getUuid: () => `uuid_${++sequence}`, formatDate: (date, timeZone, format) => format === 'yyyy-MM-dd' ? new Intl.DateTimeFormat('en-CA', {timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date) : '19/09/2026 10:00:00', base64Encode: data => Buffer.from(data).toString('base64'), base64Decode: data => Buffer.from(data, 'base64'), newBlob: (data, mime, name) => ({ data, mime, name }) },
   });
   vm.runInContext(sourceCode, context);
   const master = new Book(); books.set(context.TARGET_SPREADSHEET_ID, master);
@@ -145,6 +149,158 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+
+function recapRequest(f) {
+  f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+  return {action:'buat_rekap_submisi',adminSessionToken,confirmed:true,expectedSubmittedCount:1};
+}
+
+function sessionClock(f) {
+  let time=Date.parse('2026-10-10T00:00:00Z');
+  f.context.Date=class extends Date { constructor(...args){super(...(args.length?args:[time]));} static now(){return time;} };
+  return {advance:ms=>{time+=ms;},now:()=>time};
+}
+
+test('employee and legacy admin sessions survive cache eviction and active use beyond six hours; idle timeout is exactly six hours',()=>{
+  for(const type of ['profile','admin']){
+    const f=profileFixture(), clock=sessionClock(f), idle=6*60*60*1000;
+    f.properties.set('LEGACY_ADMIN_PIN','062419');
+    const login=f.rawCall(type==='profile'?{action:'login_pegawai',pin:'012345'}:{action:'login_admin',pin:'062419'});
+    const token=login.sessionToken||login.adminSessionToken, auth=type==='profile'?{sessionToken:token}:{adminSessionToken:token};
+    const key=f.context.activitySessionKey_(type,token), initial=JSON.parse(f.properties.get(key));
+    assert.equal(initial.expires,clock.now()+idle);
+    assert.equal(f.context.CacheService.getScriptCache().get((type==='profile'?'profile:':'admin-read:')+f.context.digest_(token)),null);
+    const read=()=>type==='profile'?f.rawCall({...auth,action:'profil_saya'}):f.rawCall({...auth,action:'list_submisi_terhitung'});
+    clock.advance(31*60000);assert.equal(read().status,'success');
+    assert.equal(JSON.parse(f.properties.get(key)).expires,initial.expires); // Reads/polling do not renew.
+    for(let hour=0;hour<8;hour++){
+      clock.advance(60*60000);
+      const result=f.rawCall({...auth,action:'aktivitas_sesi',activityAgeMs:0});
+      assert.equal(result.status,'success',result.message);assert.equal(result.expiresAt,clock.now()+idle);
+    }
+    clock.advance(idle-1);assert.equal(read().status,'success');
+    clock.advance(1);assert.equal(read().code,'SESSION_EXPIRED');
+    assert.equal(f.rawCall({...auth,action:'aktivitas_sesi',activityAgeMs:0,expires:clock.now()+idle}).code,'SESSION_EXPIRED');
+  }
+});
+
+test('session heartbeat uses actual last-activity age and logout/PIN changes revoke server access',()=>{
+  const f=profileFixture(), clock=sessionClock(f), sessionToken=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const auth={sessionToken}, key=f.context.activitySessionKey_('profile',sessionToken);
+  clock.advance(60000);
+  const renewed=f.rawCall({...auth,action:'aktivitas_sesi',activityAgeMs:15000});
+  assert.equal(renewed.expiresAt,clock.now()-15000+6*60*60*1000);
+  const before=f.properties.get(key);
+  for(const activityAgeMs of [-1,'0',6*60*60*1000,null])assert.equal(f.rawCall({...auth,action:'aktivitas_sesi',activityAgeMs}).status,'error');
+  assert.equal(f.properties.get(key),before);
+  assert.equal(f.rawCall({...auth,action:'aktivitas_sesi',activityAgeMs:60000}).expiresAt,renewed.expiresAt); // Late heartbeat never shortens.
+  assert.equal(f.rawCall({...auth,action:'keluar_sesi'}).status,'success');assert.equal(f.properties.has(key),false);
+  assert.equal(f.rawCall({...auth,action:'profil_saya'}).code,'SESSION_EXPIRED');
+  assert.equal(f.rawCall({...auth,action:'keluar_sesi'}).status,'success');
+  const second=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  f.people.rows[1][4]='111111';
+  assert.equal(f.rawCall({action:'aktivitas_sesi',sessionToken:second,activityAgeMs:0}).code,'SESSION_EXPIRED');
+  assert.equal(f.rawCall({action:'aktivitas_sesi',sessionToken:'forged',activityAgeMs:0,role:'admin'}).code,'SESSION_EXPIRED');
+});
+
+test('login prunes expired durable sessions without clearing active sessions or unrelated properties',()=>{
+  const f=profileFixture(), clock=sessionClock(f);
+  f.properties.set('SETTING_KEEP','value');
+  const first=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  clock.advance(6*60*60*1000);
+  const second=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  assert.equal(f.properties.has(f.context.activitySessionKey_('profile',first)),false);
+  assert.equal(f.rawCall({action:'profil_saya',sessionToken:second}).status,'success');
+  assert.equal(f.properties.get('SETTING_KEEP'),'value');
+});
+
+function downloadFixture(modul='uang-makan',periode='01-07-2026 s/d 31-07-2026') {
+  const f=fixture(), Folder=f.destination.constructor;
+  f.scope.modul=modul;f.scope.periode=periode;
+  const period=f.context.submissionPeriod_(f.scope), root=f.folders.get(f.context.ROOT_FOLDER_ID);
+  const category=new Folder('download_category',modul==='tukin'?'BUKTI_TUNJANGAN_KINERJA':'BUKTI_UANG_MAKAN',root);
+  const periodFolder=new Folder('download_period',(modul==='tukin'?'Tunjangan Kinerja':'Uang Makan')+'_'+String(period.month).padStart(2,'0')+'_'+period.monthName+(period.year===2026?'':'_'+period.year),category);
+  const pns=new Folder('download_pns','PNS',periodFolder);f.destination.moveTo(pns);
+  const {adminSessionToken}=recapRequest(f), exports=[];
+  f.context.ScriptApp={getOAuthToken:()=> 'server-only-token'};
+  f.context.UrlFetchApp={fetch:(url,options)=>{exports.push({url,options});return {getResponseCode:()=>200,getBlob:()=>({getBytes:()=>Buffer.from('PK spreadsheet export')})};}};
+  return {...f,periodFolder,exports,request:{action:'daftar_unduhan_bukti',adminSessionToken}};
+}
+
+test('download traverses only the exact module/payment period, preserving employee folders and exporting Sheets', () => {
+  for(const [modul,periode,label] of [['uang-makan','01-07-2026 s/d 31-07-2026','Uang Makan_Juli 2026'],['tukin','11-09-2026 s/d 10-10-2026','Tukin_November 2026'],['tukin','11-11-2026 s/d 10-12-2026','Tukin_Januari 2027']]) {
+    const f=downloadFixture(modul,periode), before=[f.files.size,f.folders.size], result=f.rawCall({...f.request,folderId:f.context.ROOT_FOLDER_ID,bulanTahun:'SALAH'});
+    assert.equal(result.status,'success',result.message);assert.equal(result.fileName,`Bukti Dukung ${label}.zip`);
+    assert.equal(result.entries.length,3);assert.ok(result.entries.every(entry=>entry.path.includes('/PNS/Pegawai/')));
+    assert.deepEqual([f.files.size,f.folders.size],before);
+    assert.equal(f.rawCall(f.request).revision,result.revision);
+    const sheet=result.entries.find(entry=>entry.fileId===f.spreadsheet.id);assert.match(sheet.path,/Rekap\.xlsx$/);
+    const output=f.rawCall({...f.request,action:'unduh_berkas_bukti',fileId:sheet.fileId,version:sheet.version});
+    assert.equal(output.status,'success',output.message);assert.equal(Buffer.from(output.base64,'base64').toString(),'PK spreadsheet export');
+    assert.match(f.exports[0].url,/googleapis.com\/drive\/v3\/files\/presensi_spreadsheet_123\/export\?mimeType=/);
+    assert.equal(f.exports[0].options.headers.Authorization,'Bearer server-only-token');assert.doesNotMatch(JSON.stringify(output),/server-only-token/);
+    const pdf=result.entries.find(entry=>entry.fileId===f.presensi.id);
+    assert.equal(f.rawCall({...f.request,action:'unduh_berkas_bukti',...pdf}).base64,Buffer.from('PDF test').toString('base64'));
+    assert.deepEqual([f.files.size,f.folders.size],before);
+  }
+});
+
+test('download requires a live admin session for every file and rejects cross-period IDs, stale files and shortcuts', () => {
+  const f=downloadFixture(), manifest=f.rawCall(f.request), pdf=manifest.entries.find(entry=>entry.fileId===f.presensi.id);
+  const get={...f.request,...pdf,action:'unduh_berkas_bukti'};
+  assert.equal(f.rawCall({...f.request,adminSessionToken:undefined,role:'admin',adminKey:wrapKey}).status,'error');
+  assert.equal(f.rawCall({...get,adminSessionToken:undefined}).status,'error');
+  assert.equal(f.rawCall({...get,fileId:f.spt.id,version:f.context.evidenceFileVersion_(f.spt)}).status,'error');
+  assert.equal(f.rawCall({...get,modul:'tukin'}).status,'error');
+  assert.equal(f.rawCall({...get,periode:'01-08-2026 s/d 31-08-2026'}).status,'error');
+  f.presensi.updated='2026-10-11T00:00:00Z';assert.match(f.rawCall(get).message,/berubah/);
+  assert.notEqual(f.rawCall(f.request).revision,manifest.revision);
+  f.presensi.parent=f.otherDestination;assert.match(f.rawCall({...get,version:f.context.evidenceFileVersion_(f.presensi)}).message,/bukan bagian/);
+  const shortcut=new f.File('shortcut','Surat',f.destination,'application/vnd.google-apps.shortcut');
+  assert.match(f.rawCall(f.request).message,/shortcut/);shortcut.trashed=true;
+  f.properties.set('LEGACY_ADMIN_PIN','123456');assert.equal(f.rawCall(f.request).status,'error');assert.equal(f.rawCall(get).status,'error');
+  const employee=profileFixture(), sessionToken=employee.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  for(const action of ['daftar_unduhan_bukti','unduh_berkas_bukti'])assert.match(employee.rawCall({action,sessionToken,role:'admin'}).message,/Hanya Admin/);
+});
+
+test('download reports empty, oversized, failed export and ambiguous folders without partial success or Drive writes', () => {
+  const f=downloadFixture();
+  const before=[f.files.size,f.folders.size];
+  f.presensi.size=26*1024*1024;assert.match(f.rawCall(f.request).message,/batas aman/);delete f.presensi.size;
+  const manifest=f.rawCall(f.request), sheet=manifest.entries.find(entry=>entry.fileId===f.spreadsheet.id);
+  f.context.UrlFetchApp.fetch=()=>({getResponseCode:()=>403});
+  assert.match(f.rawCall({...f.request,...sheet,action:'unduh_berkas_bukti'}).message,/Ekspor.*HTTP 403/);
+  const Folder=f.destination.constructor;
+  new Folder('ambiguous',f.periodFolder.name,f.periodFolder.parent);assert.match(f.rawCall(f.request).message,/ganda/);f.folders.delete('ambiguous');
+  for(const file of f.files.values())if(file.parent===f.destination)file.trashed=true;
+  assert.match(f.rawCall(f.request).message,/Belum ada file/);assert.deepEqual([f.files.size,f.folders.size],before);
+  f.periodFolder.name='other-period';assert.match(f.rawCall(f.request).message,/Belum ada folder/);assert.deepEqual([f.files.size,f.folders.size],before);
+});
+
+test('ZIP paths sanitize special names and disambiguate duplicates, including native export extensions', () => {
+  const f=downloadFixture();
+  new f.File('duplicate_name','Rekap.xlsx',f.destination);
+  new f.File('unsafe_name','../Surat: α.pdf',f.destination);
+  new f.destination.constructor('empty_folder','Kosong',f.periodFolder);
+  const response=f.rawCall(f.request);assert.equal(response.status,'success',response.message);
+  assert.equal(new Set(response.entries.map(e=>e.path.toLowerCase())).size,response.entries.length);
+  assert.ok(response.entries.some(e=>e.path.endsWith('/Rekap (2).xlsx')));
+  assert.ok(response.directories.some(path=>path.endsWith('/Kosong/')));
+  assert.ok(response.entries.every(e=>!e.path.split('/').includes('..')&&!e.path.includes(':')));
+});
+
+test('recap generation needs no publication password but requires admin, confirmation and current submitted count', () => {
+  const f=consolidatedFixture(), payload=recapRequest(f), before=f.files.size;
+  f.properties.delete('WRAP_ADMIN_KEY');
+  for(const override of [{confirmed:false},{confirmed:undefined},{expectedSubmittedCount:2},{expectedSubmittedCount:'1'},{adminSessionToken:undefined,role:'admin',adminKey:wrapKey}]) {
+    assert.equal(f.rawCall({...payload,...override}).status,'error');assert.equal(f.files.size,before);
+  }
+  const result=f.rawCall(payload);assert.equal(result.status,'success',result.message);assert.equal(result.employees,1);
+  assert.equal(result.files.length,2);
+  const employee=profileFixture(), sessionToken=employee.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  assert.match(employee.rawCall({...payload,adminSessionToken:undefined,sessionToken,role:'admin'}).message,/Hanya Admin/);
+});
 
 test('PDF references are stored in the exact employee folder and restored independently of the calculation sheet', () => {
   for (const modul of ['uang-makan','tukin']) {
@@ -247,7 +403,14 @@ test('recap key is verified on the server; tab 6 submit is revision-bound and la
   const payload={...auth,action:'submit_rekap_final',confirmed:true,revision:saved.revision};
   assert.equal(f.rawCall({...payload,revision:'stale'}).status,'error');
   assert.equal(f.rawCall({...payload,adminKey:undefined}).status,'error');
+  // Approval freezes the reviewed amount, even if rates/summary cells changed
+  // between the preview and the final Submit click.
+  f.master.getSheetByName('Data_Pegawai').rows[1][19]=999999;
+  const mealMaster=f.master.getSheetByName('REKAP_UANG_MAKAN');
+  mealMaster.rows[1][mealMaster.rows[0].indexOf('Hitung_Netto')]=1;
   assert.equal(f.rawCall(payload).submitted,true);assert.equal(roster().submitted,true);
+  assert.equal(mealMaster.rows[1][mealMaster.rows[0].indexOf('Hitung_Netto')],saved.calculation.amount.netto);
+  assert.equal(mealMaster.rows[1][mealMaster.rows[0].indexOf('Hitung_Tarif')],saved.calculation.amount.tarif);
   assert.equal(f.rawCall(payload).submitted,true);
   assert.equal(f.rawCall({...auth,action:'klaim_spt',sourceUrl:f.spt.getUrl()}).status,'success');
   assert.equal(roster().submitted,false);assert.equal(f.rawCall(payload).status,'error');
@@ -891,6 +1054,57 @@ test('SPT and Cuti claims copy to exact tab 2 folder, preserve source, deduplica
   assert.equal(f.spreadsheet.trashed, false);
 });
 
+test('multiple SPT/Cuti claims keep separate registry rows, dates and copies under the write lock', () => {
+  const f = fixture();
+  let locked = false, flushes = 0;
+  f.context.LockService.getScriptLock = () => ({
+    waitLock() { assert.equal(locked, false); locked = true; },
+    hasLock: () => locked, releaseLock() { locked = false; },
+  });
+  f.context.SpreadsheetApp.flush = () => { assert.equal(locked, true); flushes++; };
+  const requests = [];
+  for (const [type, source] of [['spt', f.spt], ['cuti', f.cuti]]) {
+    const archive = f.master.getSheetByName(type === 'spt' ? 'REKAP_SPT' : 'REKAP_CUTI');
+    for (let i = 0; i < 3; i++) {
+      const file = i ? new f.File(`batch_${type}_${i}`, source.name, source.parent, source.mime) : source;
+      if (i) { const row = [...archive.rows[1]]; row[4] = row[5] = `${6+i} Juli 2026`; row[6] = 1; row[9] = file.getUrl(); archive.appendRow(row); }
+      requests.push({ action: 'klaim_dokumen', jenisDokumen: type, sourceUrl: file.getUrl(), requestId: `batch-${type}-${i}` });
+    }
+  }
+  const documents = requests.map(request => {
+    const result = f.call(request); assert.equal(result.status, 'success', result.message);
+    assert.equal(locked, false); return result.document;
+  });
+  assert.equal(flushes, 6);
+  assert.equal(new Set(documents.map(doc => doc.fileId)).size, 6);
+  const registry = f.master.getSheetByName(f.context.ATTACHMENT_SHEET);
+  const before = registry.rows.slice(1).map(row => JSON.stringify(row.slice(1)));
+  assert.equal(before.length, 6);
+  for (let i = 0; i < requests.length; i++) {
+    assert.equal(registry.rows[i+1][9], documents[i].sourceFileId);
+    assert.equal(registry.rows[i+1][8], requests[i].jenisDokumen);
+    assert.equal(registry.rows[i+1].slice(14).filter(Boolean).length, i % 3 === 0 ? 3 : 1);
+    const retry = f.call({ ...requests[i], requestId: `retry-${i}`, sourceUrl: `https://drive.google.com/open?id=${documents[i].sourceFileId}` });
+    assert.equal(retry.document.fileId, documents[i].fileId);
+  }
+  assert.deepEqual(registry.rows.slice(1).map(row => JSON.stringify(row.slice(1))), before);
+  assert.equal(f.call({ action: 'list_pendukung' }).documents.length, 6);
+  const processed = f.call({ action: 'proses_bukti' });
+  assert.equal(processed.status, 'success', processed.message);
+  assert.equal(processed.rows.length, 6); // Multiple letters never add duplicate attendance dates.
+  assert.equal(new Set(processed.rows.map(row => row.tanggal)).size, 6);
+  assert.equal(processed.rows.filter(row => row.konflik).length, 3);
+});
+
+test('claim lock contention fails without appending rows or making copies', () => {
+  const f = fixture(), filesBefore = f.files.size;
+  f.context.LockService.getScriptLock = () => ({ waitLock() { throw new Error('Penulisan lain sedang berjalan'); }, hasLock: () => false, releaseLock() { assert.fail('must not release another writer lock'); } });
+  const result = f.call({ action: 'klaim_spt', sourceUrl: f.spt.getUrl() });
+  assert.equal(result.status, 'error');
+  assert.equal(f.files.size, filesBefore);
+  assert.equal(f.master.getSheetByName(f.context.ATTACHMENT_SHEET), null);
+});
+
 test('deletion trashes only registered copy, not source, rows or other documents; claim again works', () => {
   const f = fixture();
   const request = { action: 'klaim_dokumen', jenisDokumen: 'spt', sourceUrl: f.spt.getUrl() };
@@ -1315,14 +1529,29 @@ test('preview recomputes original dates rather than using shifted legacy date co
 
 const employeeRate = { uangMakan:37000, pajak:5, tukin:6349000, skp:100, jabatan:'Analis', golongan:'III', warnings:[] };
 test('saved final result and legacy summaries reopen read-only even if master rates change', () => {
-  for(const legacy of [false,true]){
-    const f=fixture();payrollFixture(f);const saved=confirmRecap(f);assert.equal(saved.status,'success');
+  for(const modul of ['uang-makan','tukin'])for(const legacy of [false,true]){
+    const f=fixture(); f.scope.modul=modul;
+    if(modul==='tukin'){
+      f.scope.periode='11-06-2026 s/d 10-07-2026';
+      f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+    }
+    payrollFixture(f);
+    const people=f.master.getSheetByName('Data_Pegawai');
+    people.rows[0][4]='PIN'; people.rows[1][4]='012345';
+    const sessionToken=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+    assert.ok(sessionToken);
+    const saved=confirmRecap(f);assert.equal(saved.status,'success');
     if(legacy)f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
-    f.master.getSheetByName('Data_Pegawai').rows[1][19]=999999;
+    people.rows[1][19]=999999; people.rows[1][16]=99999999; people.rows[1][18]='10%'; people.rows[1][20]='30%';
     const before=JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])]));
-    const result=f.call({action:'preview_rekap_final'});
+    const auth={sessionToken,employeeReadOnly:true};
+    const result=f.rawCall({...auth,action:'preview_rekap_final'});
     assert.equal(result.savedResult.calculation.amount.netto,saved.calculation.amount.netto);
-    assert.equal(f.call({action:'list_pendukung'}).savedResult.calculation.amount.netto,saved.calculation.amount.netto);
+    assert.equal(result.savedResult.calculation.amount.tarif,saved.calculation.amount.tarif);
+    assert.equal(f.rawCall({...auth,action:'list_pendukung'}).savedResult.calculation.amount.netto,saved.calculation.amount.netto);
+    const annual=f.rawCall({action:'rekap_pegawai_tahunan',sessionToken,year:2026});
+    assert.equal(annual.status,'success',annual.message);
+    assert.equal(annual.months[modul==='tukin'?7:6].netto,saved.calculation.amount.netto);
     assert.equal(JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])])),before);
     f.working.rows[7][3]='09:01';
     assert.equal(f.call({action:'preview_rekap_final'}).status,'error');
@@ -1371,7 +1600,7 @@ test('submission list is complete-only and uses latest row, authoritative ASN an
   assert.equal(f.call(payload).employees.length,0);
 });
 test('meal recap generates PNS and PPPK siblings and overwrites owned cells with stable file IDs', () => {
-  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const f=consolidatedFixture(), payload=recapRequest(f);
   const result=f.call(payload);assert.equal(result.status,'success',result.message);assert.equal(result.files.length,2);
   const pns=result.files[0], file=f.files.get(pns.fileId), sheet=f.books.get(pns.fileId).getSheetByName('Uang Makan Juli 2026');
   for(const output of result.files){
@@ -1399,10 +1628,14 @@ test('template plan handles holiday, approved dinas/cuti, missing punches and mo
   assert.equal(cell(5,8).value,'');assert.equal(cell(5,9).value,1);assert.equal(cell(6,10).background,'#f4cccc');
   assert.equal(cell(5,33).background,'#eeeeee');assert.equal(cell(5,33).value,'');
   assert.ok(f.context.recapWriteBlocks_(plan).length<10);
+  person.presenceByStatus=true;
+  const directorPlan=f.context.templateRecapPlan_(sheet,[person],{modul:'uang-makan'},period,['2024-02-07']);
+  assert.equal(directorPlan.find(x=>x.row===5&&x.col===8).value,1);
+  assert.equal(directorPlan.find(x=>x.row===5&&x.col===4).value,''); // Dinas never paid
 });
 
 test('meal headers migrate legacy sheets without changing IDs and roll back names on failure', () => {
-  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const f=consolidatedFixture(), payload=recapRequest(f);
   const first=f.call(payload);assert.equal(first.status,'success',first.message);
   const tabs=first.files.map(file=>f.books.get(file.fileId).getSheetByName('Uang Makan Juli 2026'));
   tabs.forEach(tab=>{tab.setName('UM_BULAN');tab.getRange(1,3).setValue('Uang Makan Juli 2026');tab.getRange(2,3).setValue('Judul lama');tab.getRange(3,2).setValue(7);});
@@ -1419,8 +1652,11 @@ test('tukin template uses percentage points in I, preserves formulas and rolls p
   const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');
   const payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'}, period=f.context.submissionPeriod_(payload);
   assert.equal(period.label,'Januari 2027');
-  const plan=f.context.templateRecapPlan_(sheet,[{nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5}],payload,period,[]);
+  const plan=f.context.templateRecapPlan_(sheet,[{nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5,besaranTukin:6349000}],payload,period,[],46305);
   assert.equal(plan.find(x=>x.row===10&&x.col===9).value,2.5);
+  assert.equal(plan.find(x=>x.row===10&&x.col===12).value,6349000);
+  assert.equal(plan.find(x=>x.row===10&&x.col===8).value,46305);
+  assert.equal(plan.find(x=>x.row===9&&x.col===8).value,'Tanggal');
   assert.equal(plan.some(x=>x.col===10||x.col===11),false);
   assert.equal(plan.find(x=>x.row===10&&x.col===5).value,2027);
   assert.equal(plan.find(x=>x.row===10&&x.col===4).value,'Januari');
@@ -1428,9 +1664,16 @@ test('tukin template uses percentage points in I, preserves formulas and rolls p
   assert.equal(plan.find(x=>x.row===4&&x.col===4).value,payload.periode);
   assert.equal(f.context.templateRecapPlan_(sheet,[],payload,period,[]).find(x=>x.row===10&&x.col===9).value,'');
   assert.throws(()=>f.context.submissionPeriod_({modul:'tukin',periode:'01-11-2026 s/d 30-11-2026'}),/11 sampai 10/);
+  const director={nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:0,besaranTukin:6349000,directorExempt:true};
+  const exemption=f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===11);
+  assert.equal(exemption.value,'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))');
+  sheet.rows[9][10]=exemption.value;
+  assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===11).value,exemption.value);
+  director.directorExempt=false;
+  assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===11).value,'=I10*30%+J10*70%');
 });
 test('aggregate export restores existing spreadsheets after a second-file write failure', () => {
-  const f=consolidatedFixture(), payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const f=consolidatedFixture(), payload=recapRequest(f);
   const first=f.call(payload);assert.equal(first.status,'success');
   const firstSheet=f.books.get(first.files[0].fileId).getSheetByName('Uang Makan Juli 2026');
   firstSheet.rows[4][8]=88;
@@ -1443,17 +1686,18 @@ test('aggregate export restores existing spreadsheets after a second-file write 
 test('aggregate generation refuses stale sources and ambiguous template identities without writes', () => {
   const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES['uang-makan'].PNS).getSheetByName('UM_BULAN');
   sheet.rows[5][1]=f.scope.nip;
-  assert.match(f.call({action:'buat_rekap_submisi',adminKey:wrapKey}).message,/duplikat/);
+  const payload=recapRequest(f);
+  assert.match(f.call(payload).message,/duplikat/);
   assert.equal([...f.folders.values()].some(folder=>folder.name==='REKAP'),false);
   sheet.rows[5][1]='199001012025011003';f.working.rows[7][3]='12:00';
-  assert.equal(f.call({action:'buat_rekap_submisi',adminKey:wrapKey}).status,'error');
+  assert.equal(f.call(payload).status,'error');
 });
 test('non-admin employee session cannot access the all-employee submission list', () => {
   const f=profileFixture(), session=f.call({action:'login_pegawai',pin:'012345'});
   assert.match(f.call({action:'list_submisi_terhitung',sessionToken:session.sessionToken,role:'admin'}).message,/Hanya Admin/);
 });
 
-test('legacy Admin session reads saved employee recap without generation password and cannot generate without it', () => {
+test('legacy Admin session reads saved employee recap but cannot generate without confirmation', () => {
   const f=consolidatedFixture();
   assert.match(f.call({action:'login_admin',pin:'062419'}).message,/LEGACY_ADMIN_PIN/);
   f.properties.set('LEGACY_ADMIN_PIN','062419');
@@ -1478,13 +1722,13 @@ test('legacy Admin session reads saved employee recap without generation passwor
   assert.equal(f.call({action:'list_submisi_terhitung',...auth}).status,'error');
 });
 
-test('NIP Admin list uses existing login session, rejects revoked role and requires separate generation key', () => {
+test('NIP Admin list uses existing login session and rejects revoked role', () => {
   const f=profileFixture();
   f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
   const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
   assert.equal(f.call({action:'list_submisi_terhitung',sessionToken}).status,'success');
   f.properties.set('WRAP_ADMIN_KEY',wrapKey);
-  assert.match(f.call({action:'buat_rekap_submisi',sessionToken}).message,/Kunci publikasi admin/);
+  assert.match(f.call({action:'buat_rekap_submisi',sessionToken}).message,/Belum ada pegawai|belum dikonfirmasi/);
   assert.equal(f.call({action:'list_pendukung',sessionToken,adminReadOnly:true}).status,'success');
   f.people.rows[1][3]='pegawai';
   assert.match(f.call({action:'list_submisi_terhitung',sessionToken,role:'admin'}).message,/Hanya Admin/);
@@ -1495,9 +1739,9 @@ test('NIP Admin list uses existing login session, rejects revoked role and requi
 test('legacy Admin PIN attempts are rate limited and expired sessions fail closed', () => {
   const f=fixture();f.properties.set('LEGACY_ADMIN_PIN','062419');
   const login=f.call({action:'login_admin',pin:'062419'});
-  const key='admin-read:'+f.context.digest_(login.adminSessionToken);
-  f.context.CacheService.getScriptCache().put(key,JSON.stringify({pinHash:f.context.digest_('062419'),expires:0}));
-  assert.throws(()=>f.context.requireSubmissionReader_({adminSessionToken:login.adminSessionToken}),/Sesi Admin berakhir/);
+  const key=f.context.activitySessionKey_('admin',login.adminSessionToken);
+  f.properties.set(key,JSON.stringify({pinHash:f.context.digest_('062419'),expires:0}));
+  assert.throws(()=>f.context.requireSubmissionReader_({adminSessionToken:login.adminSessionToken}),/Sesi berakhir/);
   for(let i=0;i<5;i++)assert.match(f.call({action:'login_admin',pin:'wrong'}).message,/PIN salah/);
   assert.match(f.call({action:'login_admin',pin:'062419'}).message,/Terlalu banyak/);
 });
@@ -1505,11 +1749,14 @@ test('Tukin export writes saved deduction to I and retains K formula on repeated
   const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
   f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
   const saved=confirmRecap(f);assert.equal(saved.status,'success',saved.message);
-  const payload={action:'buat_rekap_submisi',adminKey:wrapKey};
+  const payload=recapRequest(f);
   const result=f.call(payload);assert.equal(result.status,'success',result.message);
   assert.equal(result.files[0].name,'Rekap Potongan Tunjangan Kinerja Agustus 2026 PNS Dit Bangdes');
   const sheet=f.books.get(result.files[0].fileId).getSheetByName('TUKIN_BULAN');
   assert.equal(sheet.rows[9][8],saved.calculation.totals.potonganAbsensi);
+  assert.equal(sheet.rows[9][11],saved.calculation.amount.tarif);
+  assert.equal(typeof sheet.rows[9][11],'number');
+  assert.equal(sheet.rows[8][7],'Tanggal');
   assert.equal(sheet.rows[9][10],'=I10*30%+J10*70%');
   for(const output of result.files){
     const tab=f.books.get(output.fileId).getSheetByName('TUKIN_BULAN');
@@ -1518,6 +1765,46 @@ test('Tukin export writes saved deduction to I and retains K formula on repeated
   }
   assert.equal(f.books.get(result.files[1].fileId).getSheetByName('TUKIN_BULAN').rows[9][8],'');
   assert.equal(f.call(payload).files[0].fileId,result.files[0].fileId);
+});
+
+test('Tukin regeneration pins submitted rates, uses Jakarta generation date and preserves template formulas', () => {
+  for (const legacy of [false,true]) {
+    const f=consolidatedFixture(); f.scope.modul='tukin'; f.scope.periode='11-06-2026 s/d 10-07-2026';
+    f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+    const saved=confirmRecap(f); assert.equal(saved.status,'success',saved.message);
+    if(legacy)f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
+    const clock=sessionClock(f); clock.advance(16*3600000+59*60000);
+    const request=recapRequest(f);
+    f.master.getSheetByName('Data_Pegawai').rows[1][16]=99999999;
+    const first=f.call(request); assert.equal(first.status,'success',first.message);
+    const sheet=f.books.get(first.files[0].fileId).getSheetByName('TUKIN_BULAN');
+    assert.equal(sheet.rows[9][11],saved.calculation.amount.tarif);
+    assert.equal(f.context.isoDate_(sheet.rows[9][7]),'2026-10-10');
+    const empty=f.books.get(first.files[1].fileId).getSheetByName('TUKIN_BULAN');
+    assert.equal(empty.rows[9][11],''); assert.equal(empty.rows[9][7],'');
+    sheet.rows[8][7]='TGL.'; sheet.rows[9][7]=1; sheet.rows[9][11]=123;
+    sheet.rows[9][12]='=L10*(100-K10)/100';
+    clock.advance(2*60000); // Already 11 October in Jakarta.
+    const again=f.call(request); assert.equal(again.status,'success',again.message);
+    assert.equal(again.files[0].fileId,first.files[0].fileId);
+    assert.equal(f.context.isoDate_(sheet.rows[9][7]),'2026-10-11');
+    assert.equal(sheet.rows[9][11],saved.calculation.amount.tarif);
+    assert.equal(sheet.rows[8][7],'Tanggal');
+    assert.equal(sheet.rows[9][12],'=L10*(100-K10)/100');
+    assert.equal(sheet.rows[9][10],'=I10*30%+J10*70%');
+    assert.equal(f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN').rows[9][11],'');
+  }
+});
+
+test('Tukin export refuses missing saved rate rather than substituting live master rates', () => {
+  const f=consolidatedFixture(); f.scope.modul='tukin'; f.scope.periode='11-06-2026 s/d 10-07-2026';
+  const master=f.master.getSheetByName('REKAP_TUKIN'); master.rows[1][3]=f.scope.periode;
+  assert.equal(confirmRecap(f).status,'success');
+  f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
+  master.rows[1][master.rows[0].indexOf('Hitung_Tarif')]='';
+  const count=f.files.size, result=f.call(recapRequest(f));
+  assert.equal(result.status,'error'); assert.match(result.message,/Besaran Tukin saat submit/);
+  assert.equal(f.files.size,count);
 });
 test('normalizing presentation does not invalidate a legacy saved revision with unpadded clocks', () => {
   const f=fixture();payrollFixture(f);assert.equal(confirmRecap(f).status,'success');
@@ -1535,6 +1822,65 @@ function payrollFixture(f) {
   row[0]=f.scope.nip; row[1]=f.scope.nama; row[13]='Analis'; row[16]=6349000; row[17]=17; row[18]='100%'; row[19]=37000; row[20]='5.00%';
   f.master.getSheetByName('Data_Pegawai').rows=[headers,row];
 }
+test('Director title words exempt only Tukin deductions, preserving final claim status counts',()=>{
+  const f=fixture();
+  const rows=[attendanceDay({datang:'11:00',pulang:'12:00'}),attendanceDay({datang:'-',pulang:'-',adjusted:1,adjustments:{datang:{fileId:'x',time:'09:00'}}}),
+    ...['Dinas','Cuti','Libur','TB','WFA','WFH'].map(keterangan=>attendanceDay({keterangan,datang:'-',pulang:'-'}))];
+  for(const jabatan of ['Direktur','DIREKTUR PEMBANGUNAN PERUMAHAN PERDESAAN','Plt. Direktur Pembangunan',' direktur ']) for(const skp of [null,70,100]) {
+    const calc=f.context.calculateAttendance_(rows,{...employeeRate,jabatan,skp},'tukin');
+    f.context.addAdjustmentEvidenceCounts_(calc,[{jenisDokumen:'lupa_absen',fileId:'x'}]);
+    assert.equal(calc.directorExempt,true);assert.equal(calc.complete,true);
+    assert.equal(calc.totals.masuk,4);assert.equal(calc.totals.dinas,1);assert.equal(calc.totals.cuti,1);assert.equal(calc.totals.tb,1);assert.equal(calc.totals.libur,1);
+    for(const field of ['flexi','terlambat','psw','tidakMasuk','menitTelat','menitPsw','menitTanpaPresensi','totalMenit','potonganAbsensi','lupaAbsen','adjusted','unadjusted','adjustmentReported','adjustmentDocuments']) assert.equal(calc.totals[field],0,field);
+    assert.equal(calc.amount.netto,employeeRate.tukin);assert.equal(calc.amount.persenPotongan,0);assert.equal(calc.amount.potongan,0);assert.equal(calc.amount.potonganSkp,0);
+    assert.ok(calc.days.every(day=>day.flexiMenit===0&&day.tl===0&&day.psw===0&&day.potongan===0));
+  }
+  for(const jabatan of ['Analis Direktorat','Direktural','Admin','']) {
+    const calc=f.context.calculateAttendance_([rows[0]],{...employeeRate,jabatan},'tukin');
+    assert.equal(calc.directorExempt,false);assert.ok(calc.amount.potongan>0);
+  }
+  const missing=f.context.calculateAttendance_([rows[0]],{...employeeRate,jabatan:'Direktur',tukin:null},'tukin');
+  assert.equal(missing.complete,false);assert.equal(missing.amount.netto,null);
+});
+
+test('Director meal pay uses WFO/WFA status without clocks, excludes Dinas and retains tax',()=>{
+  const f=fixture(),rows=['WFO','WFA','Dinas','Cuti','Libur'].map(keterangan=>attendanceDay({keterangan,datang:'-',pulang:'-'}));
+  const director=f.context.calculateAttendance_(rows,{...employeeRate,jabatan:'Direktur Pembangunan'},'uang-makan');
+  assert.equal(director.directorExempt,false);assert.equal(director.totals.masuk,2);assert.equal(director.totals.dinas,1);
+  assert.equal(director.amount.bruto,74000);assert.equal(director.amount.potongan,3700);assert.equal(director.amount.netto,70300);
+  const regular=f.context.calculateAttendance_(rows,employeeRate,'uang-makan');
+  assert.equal(regular.totals.masuk,0);assert.equal(regular.amount.netto,0);
+});
+
+test('Director rules are server-derived, survive save/reload, and honor SPT claims in both modules',()=>{
+  for(const modul of ['tukin','uang-makan']) {
+    const f=fixture();payrollFixture(f);
+    const person=f.master.getSheetByName('Data_Pegawai').rows[1];person[13]='Direktur Pembangunan Perumahan Perdesaan';person[18]='70%';
+    f.working.rows.slice(5,-1).forEach(row=>{row[3]='-';row[4]='-';});
+    const spt=f.master.getSheetByName('REKAP_SPT').rows[1];spt[4]='6 Juli 2026';spt[5]='6 Juli 2026';
+    const call=p=>f.call({modul,...p});
+    assert.equal(call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}).status,'success');
+    const preview=call({action:'proses_bukti'});
+    assert.equal(preview.presenceByStatus,true);assert.equal(preview.directorExempt,modul==='tukin');
+    const saved=call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true,...(modul==='tukin'?{adjustments:{invalid:'ignored'}}:{})});
+    assert.equal(saved.status,'success',saved.message);assert.equal(saved.calculation.totals.masuk,2);assert.equal(saved.calculation.totals.dinas,1);
+    assert.equal(saved.calculation.amount.netto,modul==='tukin'?6349000:70300);
+    if(modul==='tukin') {
+      assert.deepEqual(saved.adjustments,{});
+      const note=f.files.get(saved.note.fileId).content;assert.match(note,/Rumus Direktur/);assert.doesNotMatch(note,/Rumus: 70%|tetap dihitung adjustment/);
+    }
+    person[13]='Analis';person[16]=9999999;
+    const reopened=call({action:'preview_rekap_final'}).savedResult;
+    assert.equal(reopened.calculation.amount.netto,saved.calculation.amount.netto);
+    assert.equal(reopened.calculation.directorExempt,modul==='tukin');
+    assert.equal(reopened.calculation.presenceByStatus,true);
+    if(modul==='tukin') {
+      const spoof=call({action:'simpan_rekap_final',revision:reopened.revision,confirmed:true,directorExempt:true,presenceByStatus:true,jabatan:'Direktur'});
+      assert.equal(spoof.calculation.directorExempt,false);assert.ok(spoof.calculation.amount.potongan>0);
+    }
+  }
+});
+
 test('regular and Ramadan lateness boundaries, flexi and Friday departure are exact', () => {
   const f=fixture(), run=extra=>f.context.calculateAttendance_([attendanceDay(extra)],employeeRate,'tukin');
   for (const [jamKerja, start] of [['biasa',450],['ramadan',480]]) {

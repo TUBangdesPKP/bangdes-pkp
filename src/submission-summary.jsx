@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { CheckCircle2, XCircle, FileSpreadsheet, RefreshCw, Download } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
+import { collectEvidenceDownload, saveEvidenceDownload } from './evidence-download.js';
+import { confirmSubmittedRecap } from './submission-recap.js';
 
 export function SubmissionEmployeeCards({ employees, onSelectEmployee, disabled = false }) {
   const sorted = [...employees].sort((a, b) => a.nama.localeCompare(b.nama, 'id') || a.nip.localeCompare(b.nip));
@@ -22,20 +24,19 @@ export function SubmissionEmployeeCards({ employees, onSelectEmployee, disabled 
   })}</div>;
 }
 
-export function SubmissionSummary({ endpoint, context, user, adminKey, onAdminKeyChange, onSelectEmployee }) {
+export function SubmissionSummary({ endpoint, context, user, onSelectEmployee }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [files, setFiles] = useState([]);
   const [reload, setReload] = useState(0);
-  const [verification, setVerification] = useState(null);
-  const [verifying, setVerifying] = useState(false);
-  const verificationRequest = useRef(0);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState('');
+  const operation = useRef(0);
+  const busy = useRef(false);
   const { modul, periode } = context;
   const token = user?.sessionToken, adminToken = user?.adminSessionToken;
   const key = JSON.stringify([endpoint, modul, periode, token, adminToken, reload]);
-  const verificationKey = JSON.stringify([endpoint, modul, periode, token, adminToken, adminKey]);
-  const verified = verification?.key === verificationKey && verification.valid;
   const ready = result?.key === key;
   const data = ready ? result.employees || [] : [];
   useEffect(() => {
@@ -47,41 +48,43 @@ export function SubmissionSummary({ endpoint, context, user, adminKey, onAdminKe
       }).catch(err => { if (!cancelled) setResult({ key, error: err.message }); });
     return () => { cancelled = true; };
   }, [endpoint, modul, periode, token, adminToken, key]);
-  useEffect(() => () => { verificationRequest.current++; }, []);
-  const verify = async () => {
-    if (!adminKey.trim() || verified || verifying) return;
-    const request = ++verificationRequest.current;
-    setVerifying(true);
-    try {
-      const response = await sendClaimRequest(endpoint, { action: 'validasi_kunci_rekap', sessionToken: token, adminSessionToken: adminToken, adminKey });
-      if (response.verified !== true) throw new Error('Backend belum mendukung verifikasi kunci rekap.');
-      if (request === verificationRequest.current) setVerification({ key: verificationKey, valid: true });
-    } catch (err) { if (request === verificationRequest.current) setVerification({ key: verificationKey, valid: false, error: err.message }); }
-    finally { if (request === verificationRequest.current) setVerifying(false); }
-  };
+  useEffect(() => () => { operation.current++; }, [endpoint, modul, periode, token, adminToken]);
+  const submitted = data.filter(row => row.submitted);
   const generate = async () => {
-    if (creating || !verified) return;
+    if (busy.current || !ready || !submitted.length) return;
+    if (!confirmSubmittedRecap({ modul, periode }, submitted.length)) return;
+    busy.current = true;
+    const current = ++operation.current;
     setCreating(true); setError(''); setFiles([]);
     try {
-      const response = await sendClaimRequest(endpoint, { action: 'buat_rekap_submisi', modul, periode, sessionToken: token, adminKey }, undefined, { timeoutMs: 300000 });
-      setFiles(response.files || []);
-    } catch (err) { setError(err.message + ' Jika koneksi terputus, periksa folder REKAP sebelum mencoba kembali.'); }
-    finally { setCreating(false); }
+      const response = await sendClaimRequest(endpoint, { action: 'buat_rekap_submisi', modul, periode, sessionToken: token, adminSessionToken: adminToken, confirmed: true, expectedSubmittedCount: submitted.length }, undefined, { timeoutMs: 300000 });
+      if (current === operation.current) setFiles(response.files || []);
+    } catch (err) { if (current === operation.current) { setError(err.message + ' Jika koneksi terputus, periksa folder REKAP sebelum mencoba kembali.'); setReload(value => value + 1); } }
+    finally { if (current === operation.current) { busy.current = false; setCreating(false); } }
   };
-  const submitted = data.filter(row => row.submitted);
+  const download = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    const current = ++operation.current;
+    setDownloading(true); setError(''); setDownloadStatus('Menyiapkan daftar bukti dukung...');
+    try {
+      const archive = await collectEvidenceDownload(endpoint, { modul, periode, sessionToken: token, adminSessionToken: adminToken }, {
+        cancelled: () => current !== operation.current,
+        onProgress: ({ done, total }) => { if (current === operation.current) setDownloadStatus(`Mengambil berkas ${done}/${total}...`); },
+      });
+      if (current === operation.current) { saveEvidenceDownload(archive); setDownloadStatus('ZIP siap. Unduhan telah dikirim ke browser.'); }
+    } catch (err) { if (current === operation.current) { setError(err.message); setDownloadStatus(''); } }
+    finally { if (current === operation.current) { busy.current = false; setDownloading(false); } }
+  };
   return <section aria-label="Pilih pegawai untuk penghitungan" className="max-w-7xl mx-auto space-y-6">
     <div className="flex flex-wrap justify-between items-start gap-5">
-      <div className="space-y-3 w-full max-w-sm">
-        <form onSubmit={event => { event.preventDefault(); verify(); }} className="space-y-2">
-          <label className="block text-xs text-slate-600">Password / kunci Buat Rekap
-            <input aria-label="Kunci admin rekap submisi" type="password" autoComplete="off" value={adminKey} disabled={creating}
-              onChange={event => { verificationRequest.current++; setVerifying(false); setVerification(null); onAdminKeyChange(event.target.value); }} onBlur={verify}
-              placeholder="Kunci publikasi rekap, bukan PIN login" className="block mt-1 border rounded-lg bg-white px-3 py-2 w-full"/>
-          </label>
-          <button disabled={creating || verifying || !adminKey.trim() || verified} className="text-xs text-[#084C61] underline disabled:opacity-50">{verifying ? 'Memverifikasi...' : verified ? 'Kunci terverifikasi' : 'Verifikasi kunci'}</button>
-        </form>
-        {verification?.key === verificationKey && verification.error && <p role="alert" className="text-xs text-red-700">{verification.error}</p>}
-        <button onClick={generate} disabled={!submitted.length || creating || !ready || !verified} className="bg-[#084C61] text-white rounded-xl px-4 py-2.5 text-xs font-bold flex gap-2 items-center disabled:opacity-40"><FileSpreadsheet size={16}/>{creating ? 'Membuat rekapan...' : 'Buat Rekapan PNS & PPPK'}</button>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={generate} disabled={!submitted.length || creating || downloading || !ready} className="bg-[#084C61] text-white rounded-xl px-4 py-2.5 text-xs font-bold flex gap-2 items-center disabled:opacity-40"><FileSpreadsheet size={16}/>{creating ? 'Membuat rekapan...' : 'Buat Rekapan PNS & PPPK'}</button>
+          <button onClick={download} disabled={creating || downloading || (!token && !adminToken)} className="border border-[#084C61] bg-white text-[#084C61] rounded-xl px-4 py-2.5 text-xs font-bold flex gap-2 items-center hover:bg-teal-50 disabled:opacity-40"><Download size={16}/>{downloading ? 'Menyiapkan unduhan...' : `Download Bukti Dukung ${modul === 'tukin' ? 'Tukin' : 'Uang Makan'}`}</button>
+        </div>
+        {downloadStatus && <p role="status" className="text-xs text-slate-600">{downloadStatus}</p>}
+        {downloading && <button onClick={() => { operation.current++; busy.current = false; setDownloading(false); setDownloadStatus('Unduhan dibatalkan.'); }} className="text-xs text-[#084C61] underline">Batalkan unduhan</button>}
       </div>
       <div className="text-sm font-bold text-slate-950 space-y-2">
         <p>Sudah submit:</p>
@@ -89,12 +92,12 @@ export function SubmissionSummary({ endpoint, context, user, adminKey, onAdminKe
           {['PNS', 'PPPK'].map(type => <div key={type} className="contents"><dt>{type}</dt><dd>{ready ? submitted.filter(row => row.jenisAsn === type).length : '—'} Orang</dd></div>)}
           <dt>Total</dt><dd>{ready ? submitted.length : '—'} Orang</dd>
         </dl>
-        <button disabled={!ready || creating} onClick={() => setReload(value => value + 1)} className="text-xs font-normal flex gap-1 items-center text-slate-500 disabled:opacity-40"><RefreshCw size={13}/>Muat ulang daftar</button>
+        <button disabled={!ready || creating || downloading} onClick={() => setReload(value => value + 1)} className="text-xs font-normal flex gap-1 items-center text-slate-500 disabled:opacity-40"><RefreshCw size={13}/>Muat ulang daftar</button>
       </div>
     </div>
     {!ready && <p role="status" className="text-sm text-slate-500">Memuat daftar pegawai...</p>}
     {(error || (ready && result.error)) && <p role="alert" className="text-sm text-red-700">{error || result.error}</p>}
     {!!files.length && <div role="status" className="text-xs text-teal-800 flex gap-4 flex-wrap"><span>Rekapan tersimpan.</span>{files.map(file => <a key={file.fileId} href={file.url} target="_blank" rel="noreferrer" className="underline">Buka rekap {file.jenisAsn}</a>)}</div>}
-    {ready && !result.error && <SubmissionEmployeeCards employees={data} onSelectEmployee={onSelectEmployee} disabled={creating}/>}
+    {ready && !result.error && <SubmissionEmployeeCards employees={data} onSelectEmployee={onSelectEmployee} disabled={creating || downloading}/>}
   </section>;
 }

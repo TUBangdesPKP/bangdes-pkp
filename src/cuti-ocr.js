@@ -1,4 +1,8 @@
 import { extractCutiPeriod } from './document-parsers.js';
+import { cutiTypeRegion, extractCutiType } from './cuti-type.js';
+
+const ocrLines = data => data.lines || (data.blocks || []).flatMap(block =>
+  (block.paragraphs || []).flatMap(paragraph => paragraph.lines || []));
 
 // Geometry comes from the current document's OCR, not a hard-coded form position.
 export function cutiOcrRegions(lines, width, height) {
@@ -24,19 +28,34 @@ function candidate(text) {
 export async function recognizeCutiImage(canvas, Tesseract, onProgress) {
   const worker = await Tesseract.createWorker('eng');
   try {
-    const {data} = await worker.recognize(canvas);
+    const {data} = await worker.recognize(canvas, {}, { text: true, blocks: true });
+    const finish = async (period, lines = ocrLines(data)) => {
+      let type = extractCutiType(data.text);
+      if (!type) {
+        const rectangle = cutiTypeRegion(lines, canvas.width, canvas.height);
+        if (rectangle) {
+          onProgress?.('Membaca tanda centang pada bagian Jenis Cuti...');
+          // Isolate Bab II from table borders, approval checks and footnotes.
+          // PSM 6 keeps the two rows in reading order instead of mixing columns.
+          await worker.setParameters({ tessedit_pageseg_mode: '6' });
+          const retry = (await worker.recognize(canvas, { rectangle })).data;
+          type = extractCutiType('JENIS CUTI YANG DIAMBIL\n' + retry.text);
+        }
+      }
+      return { text: data.text, period, type };
+    };
     let period = candidate(data.text);
-    if (period && !period.warning) return {text:data.text, period};
+    if (period && !period.warning) return await finish(period);
     onProgress?.('Membaca ulang baris Lamanya Cuti...');
-    let lines = data.lines || [];
+    let lines = ocrLines(data);
     let regions = cutiOcrRegions(lines, canvas.width, canvas.height);
     // A photo can lose its heading under automatic page segmentation.
     if (!regions) {
       await worker.setParameters({tessedit_pageseg_mode:'6'});
-      const retry = (await worker.recognize(canvas)).data;
+      const retry = (await worker.recognize(canvas, {}, { text: true, blocks: true })).data;
       const alternative = candidate(retry.text);
-      if (alternative && !alternative.warning) return {text:data.text, period:alternative};
-      lines = retry.lines || [];
+      if (alternative && !alternative.warning) return await finish(alternative, ocrLines(retry));
+      lines = ocrLines(retry);
       regions = cutiOcrRegions(lines,canvas.width,canvas.height);
       period = alternative || period;
     }
@@ -44,17 +63,17 @@ export async function recognizeCutiImage(canvas, Tesseract, onProgress) {
       await worker.setParameters({tessedit_pageseg_mode:'7'});
       const rowText = (await worker.recognize(canvas,{rectangle:regions.row})).data.text;
       let rowPeriod = candidate('LAMANYA CUTI\n' + rowText);
-      if (rowPeriod && !rowPeriod.warning) return {text:data.text, period:rowPeriod};
+      if (rowPeriod && !rowPeriod.warning) return await finish(rowPeriod, lines);
       if (rowPeriod) {
         // Narrow crop retains the duration that a table grid or skew can hide.
         const durationText = (await worker.recognize(canvas,{rectangle:regions.duration})).data.text;
         rowPeriod = candidate('LAMANYA CUTI\n' + durationText + '\nMulai Tanggal\n' + rowText) || rowPeriod;
-        if (!rowPeriod.warning) return {text:data.text, period:rowPeriod};
+        if (!rowPeriod.warning) return await finish(rowPeriod, lines);
       }
       period = rowPeriod || period;
     }
     // An incomplete read may be shown for manual review, but never auto-selected.
-    return {text:data.text, period};
+    return await finish(period, lines);
   } finally {
     await worker.terminate();
   }

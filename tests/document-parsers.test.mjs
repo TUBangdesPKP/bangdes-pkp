@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from '../src/document-parsers.js';
 import { recognizeCutiImage, cutiOcrRegions } from '../src/cuti-ocr.js';
+import { extractCutiType } from '../src/cuti-type.js';
 import { validateAttendancePeriod } from '../src/attendance-period.js';
 
 const letter = `Jakarta, 21 Agustus 2026
@@ -41,7 +42,6 @@ test('unreadable Bab IV never falls back to header, signature, or unrelated date
     'Jakarta 21 Agustus 2026 IV. LAMANYA CUTI Selama 2 hari Mulai Tanggal 3 September 2026 V. CATATAN CUTI 4 September 2026',
     'LAMANYA CUTI Selama 2 hari Mulai Tanggal 31 September 2026 s/d 1 Oktober 2026',
     'LAMANYA CUTI Selama 2 hari Mulai Tanggal 4 September 2026 s/d 3 September 2026',
-    'LAMANYA CUTI Selama 3 hari Mulai Tanggal 3 September 2026 s/d 4 September 2026',
   ]) assert.throws(()=>extractCutiPeriod(body),/Bab IV/);
 });
 test('Excel D and E stay independent, including absent arrival, absent departure and equal clocks', () => {
@@ -55,22 +55,57 @@ test('Excel D and E stay independent, including absent arrival, absent departure
 // regressions (flattened CSV, lost columns, overwritten '-') are covered as well.
 const appSource=fs.readFileSync(new URL('../src/App.jsx',import.meta.url),'utf8');
 const holidayContext=vm.createContext({});
-vm.runInContext(appSource.slice(appSource.indexOf('const DAFTAR_LIBUR_NASIONAL ='),appSource.indexOf('const removeTitlesFromName ='))+'\nglobalThis.holidays = DAFTAR_LIBUR_NASIONAL; globalThis.workdays = hitungHariKerjaAktif;',holidayContext);
+vm.runInContext(appSource.slice(appSource.indexOf('const parseIndoDate ='),appSource.indexOf('const removeTitlesFromName ='))+'\nglobalThis.holidays = DAFTAR_LIBUR_NASIONAL; globalThis.workdays = hitungHariKerjaAktif; globalThis.toYmd = formatIndoToYMD;',holidayContext);
 function reader(sheets, ocrText=letter, digitalText='', pdfPages=null) {
   const context=vm.createContext({
-    attendanceExcelClocks,attendancePdfRows,extractCutiPeriod,recognizeCutiImage,validateAttendancePeriod,console,
+    attendanceExcelClocks,attendancePdfRows,extractCutiPeriod,extractCutiType,recognizeCutiImage,validateAttendancePeriod,console,
     DAFTAR_LIBUR_NASIONAL:holidayContext.holidays,
     localStorage:{getItem:()=>JSON.stringify([{NIP:'199001012020011001',Nama:'Pegawai Uji'}])},
     parseIndoDate:value=>{const parts=value.split(' '), months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];return new Date(+parts[2],months.indexOf(parts[1].slice(0,3)),+parts[0]);},
-    formatIndoToYMD:()=>'',hitungHariKerjaAktif:()=>2,
+    formatIndoToYMD:holidayContext.toYmd,hitungHariKerjaAktif:holidayContext.workdays,
     document:{createElement:()=>({getContext:()=>({})})},
     window:{XLSX:{read:()=>({SheetNames:Object.keys(sheets),Sheets:sheets}),utils:{sheet_to_json:(sheet,options)=>{
       assert.equal(options.header,1);assert.equal(options.raw,false);assert.equal(options.range,0);return sheet;
     }}},pdfjsLib:{getDocument:()=>({promise:Promise.resolve({numPages:pdfPages?.length||1,getPage:async n=>({getTextContent:async()=>({items:pdfPages?pdfPages[n-1]:digitalText?[{str:digitalText,transform:[0,0,0,0,0,0]}]:[]}),getViewport:()=>({width:100,height:100}),render:()=>({promise:Promise.resolve()})})})})},Tesseract:{recognize:async()=>({data:{text:ocrText}}),createWorker:async()=>({recognize:async()=>({data:{text:ocrText}}),setParameters:async()=>{},terminate:async()=>{}})}},
   });
   vm.runInContext(appSource.slice(appSource.indexOf('const extractArsipData ='),appSource.indexOf('const getStoredUser ='))+'\nglobalThis.readFile = parseDocumentPresensi;',context);
-  return (name, module='uang-makan', period=null)=>context.readFile({name,arrayBuffer:async()=>new ArrayBuffer(0)},period,module);
+  return (name, module='uang-makan', period=null, holidays=holidayContext.holidays)=>context.readFile({name,arrayBuffer:async()=>new ArrayBuffer(0)},period,module,null,holidays);
 }
+
+test('archive day count derives from dates and live holidays, never printed duration',async()=>{
+  for(const duration of ['','Selama 9 hari']) {
+    const body=`II. JENIS CUTI YANG DIAMBIL\nCUTI TAHUNAN V\nIV. LAMANYA CUTI\n${duration} Mulai Tanggal 25 Mei 2026 s/d 2 Juni 2026\nV. CATATAN CUTI`;
+    const parse=reader({},body);
+    const result=await parse('leave.pdf','cuti');
+    assert.equal(result.arsipJumlahHariCuti,4);
+    assert.equal(result.arsipJumlahHariPadaSurat,duration?9:null);
+    assert.equal(result.arsipCutiWarning,'');
+    const custom=await parse('leave.pdf','cuti',null,[...holidayContext.holidays,'2026-05-26']);
+    assert.equal(custom.arsipJumlahHariCuti,3);
+  }
+});
+
+test('three supplied leave layouts: exact dates and one working day without requiring printed duration',async()=>{
+  const cases=[
+    ['CUTI TAHUNANV 3. CUTI SAKIT','1 (hari/bulan/tahun)* 18 Mei 2026 18 Mei 2026','18 Mei 2026','Cuti Tahunan'],
+    ['CUTI TAHUNAN 3. CUTI SAKIT V__5. CUTI KARENA ALASAN PENTING','Selama 1 arifouianfahun) tanggal [29 September 2026','29 September 2026','Cuti Sakit'],
+    ['CUTI TAHUNAN v3. CUTISAKIT','29 Mei 2026 29 Mei 2026','29 Mei 2026','Cuti Tahunan'],
+  ];
+  for(const [typeText,dates,date,type] of cases){
+    const text=`II. JENIS CUTI YANG DIAMBIL\n${typeText}\nIII. ALASAN CUTI\nKeperluan pribadi\nIV. LAMANYA CUTI\n${dates}\nV. CATATAN CUTI`;
+    const result=await reader({},text)('example.pdf','cuti');
+    assert.equal(result.arsipDateBerangkat,date);assert.equal(result.arsipDatePulang,date);
+    assert.equal(result.arsipTujuan,type);assert.equal(result.arsipJumlahHariCuti,1);assert.equal(result.arsipCutiWarning,'');
+  }
+});
+
+test('digital Bab IV survives OCR retries for an unreadable type mark',async()=>{
+  const digital='NIP 199001012020011001\n'+letter.replace('Cuti Tahunan v','Cuti Tahunan');
+  const ocr='II. JENIS CUTI YANG DIAMBIL\nCuti Sakit V\nIII. ALASAN CUTI';
+  const result=await reader({},ocr,digital)('hybrid.pdf','cuti');
+  assert.equal(result.arsipTujuan,'Cuti Sakit');assert.equal(result.arsipJumlahHariCuti,2);
+  assert.equal(result.arsipDateBerangkat,'3 September 2026');assert.equal(result.arsipDatePulang,'4 September 2026');
+});
 
 const pdfItem = (str,x,y,width=20) => ({str,width,transform:[1,0,0,1,x,y]});
 const pdfHeaders = () => [pdfItem('No',34,550),pdfItem('Tanggal',82,550),pdfItem('Masuk',204,558),pdfItem('Keluar',348,558),pdfItem('Status',782,550),pdfItem('Waktu',163,540),pdfItem('Lokasi',234,540),pdfItem('Waktu',307,540),pdfItem('Lokasi',378,540)];
@@ -99,6 +134,20 @@ test('digital PDF carries a split row across page headers and isolates arrival/d
   assert.equal(rows[1].lokasiDatangRaw,'Kantor 09:00');assert.equal(rows[1].status,'WFO');
   const changed=splitPdf();changed[1]=changed[1].map(item=>item.str==='07:17 WIB'?{...item,str:'7:17 WIB'}:item.str==='16:31 WIB'?{...item,str:'07:17 WIB'}:item);
   const equal=attendancePdfRows(changed)[1];assert.equal(equal.datang,'07:17');assert.equal(equal.pulang,'07:17');
+});
+
+test('numeric Indonesian UTC suffixes in PDF punches retain exact local clocks, including fragmented text',()=>{
+  for(const suffix of ['+07','+08','+09','+07:00','+0800','WIB','WITA','WIT']){
+    const pages=splitPdf();pages[0]=pages[0].map(item=>item.str==='07:35 WIB'?{...item,str:`07:35 ${suffix}`}:item.str==='17:36 WIB'?{...item,str:`20:44 ${suffix}`}:item);
+    assert.equal(attendancePdfRows(pages)[0].datang,'07:35');assert.equal(attendancePdfRows(pages)[0].pulang,'20:44');
+  }
+  const fragmented=splitPdf(), index=fragmented[0].findIndex(item=>item.str==='07:35 WIB');
+  fragmented[0].splice(index,1,pdfItem('07:35',158,506,17),pdfItem('+07',180,506,10));
+  assert.equal(attendancePdfRows(fragmented)[0].datang,'07:35');
+  for(const bad of ['07:35 +70','07:35 +07:99','07:35 +07 09:00','24:00 +07','07:60 +07','07:35:99 +07']){
+    const pages=splitPdf();pages[0]=pages[0].map(item=>item.str==='07:35 WIB'?{...item,str:bad}:item);
+    assert.throws(()=>attendancePdfRows(pages),/kolom Masuk/);
+  }
 });
 
 test('PDF.js 3 fragmented Total Data header and footer cannot terminate the attendance table', async()=>{
@@ -179,6 +228,23 @@ const suppliedPdfCases = [
   { env:'PRESENSI_PDF_FIXTURE_B', split:'9 September 2026', wfa:true, expected:['08:05/16:49','08:15/18:46','07:43/16:26','-/-','-/-','08:08/17:17','08:05/19:10','07:51/17:32','07:59/20:08','07:18/16:32','-/-','-/-','07:24/18:14','07:58/17:53','08:16/17:15','08:07/17:00','07:59/17:34','-/-','-/-','08:07/17:11','08:07/16:55','07:59/17:18','07:52/16:53','08:04/17:30','-/-','-/-','08:17/17:22','08:08/17:27','08:13/16:55','08:05/16:45'] },
   { env:'PRESENSI_PDF_FIXTURE_C', split:'8 September 2026', expected:['07:52/16:30','08:17/16:51','08:00/16:42','-/-','-/-','08:03/20:04','07:52/16:58','07:57/16:47','07:54/16:31','07:54/16:43','-/-','-/-','08:01/17:07','08:02/16:43','08:00/16:32','08:00/17:35','07:57/17:03','-/-','-/-','08:05/17:09','07:59/17:27','08:16/17:07','07:55/16:31','08:07/16:39','-/-','-/-','08:04/17:39','07:53/16:37','07:54/16:52','07:57/16:54'] },
 ];
+test('optional supplied numeric-offset PDF: all 30 dates, both punch columns and exact Tukin period match', {skip:!process.env.PRESENSI_PDF_NUMERIC_OFFSET}, async()=>{
+  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const loading=getDocument({data:new Uint8Array(fs.readFileSync(process.env.PRESENSI_PDF_NUMERIC_OFFSET))});
+  try {
+    const pdf=await loading.promise, pages=[];
+    for(let n=1;n<=pdf.numPages;n++)pages.push((await(await pdf.getPage(n)).getTextContent()).items);
+    const expected=['-/-','07:35/20:44','07:12/18:52','10:01/-','07:13/20:33','07:02/17:19','-/-','-/-','07:02/19:20','07:44/20:11','07:22/18:50','07:28/16:52','07:04/16:04','-/-','-/-','07:49/20:21','07:09/19:05','07:16/17:46','07:16/17:38','07:38/16:14','-/-','-/-','07:02/18:13','07:03/16:02','07:51/16:49','07:09/17:42','07:10/16:30','-/-','-/-','07:50/18:22'];
+    assert.deepEqual(attendancePdfRows(pages).map(row=>`${row.datang}/${row.pulang}`),expected);
+    const parse=reader({},'','',pages), preview=await parse('attendance.pdf','tukin',{periodeEvent:'11-09-2026 s/d 10-10-2026'});
+    assert.equal(preview.isValid,true,preview.errorMessage);assert.equal(preview.rows.length,30);assert.equal(preview.totalHariMasuk,21);
+    assert.deepEqual(Array.from(preview.rows,row=>`${row.datang}/${row.pulang}`),expected);
+    assert.deepEqual(Array.from(preview.rows,row=>row.tanggal),Array.from({length:30},(_,i)=>i<10?`${10-i} Okt 2026`:`${40-i} Sep 2026`));
+    assert.equal(preview.rows.filter(row=>row.keterangan==='Libur').length,9);
+    const wrong=await parse('attendance.pdf','uang-makan',{periodeEvent:'01-09-2026 s/d 30-09-2026'});
+    assert.equal(wrong.isValid,false);assert.equal(wrong.rows.length,30);
+  }finally{await loading.destroy();}
+});
 for (const runtime of ['installed','browser3']) for(const sample of suppliedPdfCases) test(`optional supplied multipage PDF ${sample.env} (${runtime}): all dates and punches match source`, {skip:!process.env[sample.env] || (runtime==='browser3'&&!process.env.PRESENSI_PDFJS3_DIR)},async()=>{
   const lib=runtime==='browser3'
     ? createRequire(import.meta.url)(process.env.PRESENSI_PDFJS3_DIR+'/pdf.cjs')
@@ -262,9 +328,9 @@ test('observed OCR accepts missing Selama, CUT without I, border noise and share
   for(const sep of ['s/d','s.d','s.d.','s / d','-']) assert.equal(extractCutiPeriod(`LAMANYA CUTI Selama 2 hari tanggal 26 Agustus ${sep} 27 Agustus 2026`).berangkat,'26 Agustus 2026');
 });
 
-test('missing duration keeps incomplete dates for review, never silently asserts one day',()=>{
+test('a single date without duration keeps an uncertain end date for review',()=>{
   const result=extractCutiPeriod('Jakarta 21 Agustus 2026\nIV. LAMANYA CUTI\n4 September 2026\nV. CATATAN CUTI');
-  assert.equal(result.duration,null);assert.match(result.warning,/Jumlah hari belum terbaca/);
+  assert.equal(result.duration,null);assert.match(result.warning,/Tanggal akhir belum terkonfirmasi/);
 });
 
 function mockOcr(responses) {
@@ -282,14 +348,15 @@ test('Ayu regression: retry the actual date row when whole-page OCR only sees th
   assert.equal(mock.stats().calls,2);assert.equal(mock.stats().closed,1);
   assert.ok(mock.stats().options[1].rectangle.top>646);
 });
-test('skewed photo recovers missing duration from the left-hand cells of the same row',async()=>{
+test('skewed photo uses both recovered dates without requiring a duration crop',async()=>{
   const mock=mockOcr([{text:'mula tanggal 21Agustus 2026 | sia | 26 Agustus 2026',lines:[
     {text:'FORMULIR CUTI',bbox:{x0:90,y0:450,x1:1300,y1:480}},
     {text:'mula tanggal 21Agustus 2026 | sia | 26 Agustus 2026',bbox:{x0:728,y0:891,x1:1649,y1:922}}
   ]},{text:'milal tanggal 21Agustus 2026 | sid | 26 Agustus 2026'},{text:'[Seema | 3 (harikeray mi'}]);
   const result=await recognizeCutiImage({width:1800,height:2560},mock.Tesseract);
-  assert.equal(result.period.duration,3);assert.equal(result.period.pulang,'26 Agustus 2026');
-  assert.equal(mock.stats().calls,3);assert.equal(mock.stats().closed,1);
+  assert.equal(result.period.duration,null);assert.equal(result.period.pulang,'26 Agustus 2026');
+  assert.equal(result.period.warning,undefined);
+  assert.equal(mock.stats().calls,2);assert.equal(mock.stats().closed,1);
 });
 test('OCR worker is released on failure and a letter date alone cannot become a leave date',async()=>{
   const mock=mockOcr([new Error('OCR failed')]);

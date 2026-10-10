@@ -1,15 +1,21 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronUp, Eye, Trash2 } from 'lucide-react';
 import { driveFileId, sendClaimRequest } from './archive-claims.js';
 import { EXTRA_TYPES } from './extra-documents.jsx';
+import { runClaimBatch } from './claim-batch.js';
 
 // One server-backed collection shared by SPT/Cuti claims and direct uploads.
 export function useSubmissionDocuments({ endpoint, context, enabled, revision, onPreview, readOnly = false }) {
   const key = JSON.stringify(context);
+  const scope = useMemo(() => ({ key }), [key]);
+  const currentScope = useRef(scope);
   const currentKey = useRef(key);
-  currentKey.current = key;
+  useLayoutEffect(() => { currentScope.current = scope; currentKey.current = key; }, [scope, key]);
   const requestVersion = useRef(0);
   const loadedRequest = useRef('');
+  const mutation = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
@@ -28,7 +34,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
   }, [key]);
 
   useEffect(() => {
-    if (!enabled || !context.periode || (!context.nip && !context.nama)) return;
+    if (!enabled || claiming || !context.periode || (!context.nip && !context.nama)) return;
     const requestKey = JSON.stringify([endpoint, key, revision, refreshVersion]);
     if (loadedRequest.current === requestKey) return;
     const version = ++requestVersion.current;
@@ -48,31 +54,58 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       .catch(err => { if (!cancelled && currentKey.current === key && requestVersion.current === version) { setError(err.message); setReady(false); setProcessed(false); } })
       .finally(() => { if (!cancelled && currentKey.current === key && requestVersion.current === version) setLoading(false); });
     return () => { cancelled = true; };
-  }, [endpoint, key, enabled, revision, refreshVersion]);
+  }, [endpoint, key, enabled, revision, refreshVersion, claiming]);
 
   const acceptResult = useCallback(result => {
-    if (!result.document?.fileId || !result.document?.fileUrl) throw new Error('Backend belum mengembalikan ID salinan. Perbarui Code.gs sebelum melanjutkan.');
-    if (currentKey.current !== key) return;
+    if (!result.document?.fileId || !result.document?.fileUrl) throw Object.assign(new Error('Backend belum mengembalikan ID salinan. Perbarui Code.gs sebelum melanjutkan.'), { transport: true });
+    if (currentScope.current !== scope) return;
     requestVersion.current++;
     setLoading(false);
     setFiles(previous => [...previous.filter(file => file.fileId !== result.document.fileId), result.document]);
     setReady(true);
     setProcessed(false);
     setError('');
-  }, [key]);
+  }, [scope]);
 
-  const claim = async payload => {
+  const claimMany = async (payloads, onProgress = () => {}, reconcile = true) => {
     if (readOnly) throw new Error('Periode ditutup. Dokumen hanya dapat dilihat.');
-    if (!ready) throw new Error('Simpan presensi dan muat daftar dokumen terlebih dahulu.');
+    if (!ready || loading) throw new Error('Simpan presensi dan muat daftar dokumen terlebih dahulu.');
+    if (mutation.current) throw new Error('Tunggu pencatatan dokumen yang sedang berjalan.');
+    mutation.current = true;
+    requestVersion.current++;
     setClaiming(true);
     try {
-      const result = await sendClaimRequest(endpoint, { ...payload, ...context });
-      acceptResult(result);
-    } finally { setClaiming(false); }
+      const report = await runClaimBatch(payloads, {
+        isCurrent: () => mounted.current && currentScope.current === scope,
+        onProgress,
+        claim: async payload => {
+          const result = await sendClaimRequest(endpoint, { ...payload, ...context });
+          if (mounted.current) acceptResult(result);
+          return result;
+        },
+      });
+      reconcile = reconcile || report.failed.some(item => item.error.transport);
+      return report;
+    } finally {
+      mutation.current = false;
+      if (mounted.current) {
+        setClaiming(false);
+        // Recover the authoritative list even when a write response was lost.
+        if (reconcile) setRefreshVersion(value => value + 1);
+      }
+    }
+  };
+
+  const claim = async payload => {
+    const report = await claimMany([payload], undefined, false);
+    if (report.failed.length) throw report.failed[0].error;
+    if (!report.succeeded.length) throw new Error('Pengumpulan telah berubah. Pilih kembali dokumen.');
+    return report.succeeded[0].result;
   };
 
   const remove = async file => {
-    if (readOnly || removing) return;
+    if (readOnly || mutation.current) return;
+    mutation.current = true;
     setRemoving(file.fileId);
     setError('');
     try {
@@ -85,11 +118,11 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       setConfirmDelete(null);
       setProcessed(false);
     } catch (err) { if (currentKey.current === key) setError(err.message); }
-    finally { if (currentKey.current === key) setRemoving(null); }
+    finally { mutation.current = false; if (currentKey.current === key) setRemoving(null); }
   };
 
   const isClaimed = (sourceUrl, type) => files.some(file => file.jenisDokumen === type &&
-    (file.sourceFileId === driveFileId(sourceUrl) || file.sourceUrl === sourceUrl));
+    ((driveFileId(sourceUrl) && file.sourceFileId === driveFileId(sourceUrl)) || file.sourceUrl === sourceUrl));
 
   const render = () => (
     <section aria-label="Dokumen Bukti Dukung yang sudah diupload" className="rounded-2xl border border-[#B4D6E3] bg-[#EAF5FA] overflow-hidden">
@@ -110,12 +143,12 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
               <span className="text-xs text-[#084C61] min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
               <div className="flex gap-2 shrink-0">
                 <button type="button" onClick={() => onPreview(file)} className="flex items-center gap-1 text-xs text-[#084C61] bg-[#D5EAF3] rounded px-2 py-1"><Eye size={14}/>Lihat</button>
-                {!readOnly && <button type="button" disabled={!!removing} onClick={() => setConfirmDelete(file)} className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1 disabled:opacity-50"><Trash2 size={14}/>{removing === file.fileId ? 'Menghapus...' : 'Hapus'}</button>}
+                {!readOnly && <button type="button" disabled={claiming || !!removing} onClick={() => setConfirmDelete(file)} className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1 disabled:opacity-50"><Trash2 size={14}/>{removing === file.fileId ? 'Menghapus...' : 'Hapus'}</button>}
               </div>
             </div>)}
           </div>;
         })}
-        <button type="button" disabled={loading || !!removing} onClick={() => setRefreshVersion(v => v + 1)} className="text-xs text-[#084C61] underline">Muat ulang daftar</button>
+        <button type="button" disabled={loading || claiming || !!removing} onClick={() => setRefreshVersion(v => v + 1)} className="text-xs text-[#084C61] underline">Muat ulang daftar</button>
       </div>}
       {confirmDelete && !readOnly && <div role="dialog" aria-modal="true" aria-label="Hapus salinan pengumpulan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-6 max-w-md space-y-4 text-gray-800 shadow-xl">
@@ -125,7 +158,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
           {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
           <div className="flex justify-end gap-3">
             <button disabled={!!removing} onClick={() => setConfirmDelete(null)} className="px-4 py-2 rounded-lg bg-gray-100">Batal</button>
-            <button disabled={!!removing} onClick={() => remove(confirmDelete)} className="px-4 py-2 rounded-lg bg-red-600 text-white">{removing ? 'Menghapus...' : 'Hapus salinan'}</button>
+            <button disabled={claiming || !!removing} onClick={() => remove(confirmDelete)} className="px-4 py-2 rounded-lg bg-red-600 text-white">{removing ? 'Menghapus...' : 'Hapus salinan'}</button>
           </div>
         </div>
       </div>}
@@ -137,5 +170,5 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
     setLoading(false);
     setProcessed(value);
   };
-  return { files, ready, loading, error, loaded: loadedRequest.current === JSON.stringify([endpoint, key, revision, refreshVersion]), processed, savedResult, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, isClaimed, render };
+  return { files, ready, loading, error, loaded: loadedRequest.current === JSON.stringify([endpoint, key, revision, refreshVersion]), processed, savedResult, markProcessed, refreshVersion, busy: claiming || !!removing, acceptResult, claim, claimMany, isClaimed, render };
 }

@@ -31,5 +31,19 @@ test('closed preview disables editing and saved recap has no save/upload/editor 
       const editable = renderToStaticMarkup(React.createElement(FinalRecap, { context, cachedPreview: preview }));
       assert.match(editable, /Lanjutkan Perhitungan/);
       assert.doesNotMatch(editable, /<fieldset disabled=""/);
+      const directorPreview = {...preview, directorExempt:modul==='tukin', presenceByStatus:true, adjustments:{},
+        rows:[{...preview.rows[0],datang:'-',pulang:'-'}]};
+      const directorHtml=renderToStaticMarkup(React.createElement(FinalRecap,{context,cachedPreview:directorPreview}));
+      assert.match(directorHtml,/text-teal-700">1 Hari/);
+      if(modul==='tukin') {
+        assert.match(directorHtml,/Pengecualian Direktur/);
+        assert.doesNotMatch(directorHtml,/aria-label="Koreksi|Adjustment maksimal/);
+        const directorSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:{...result,calculation:{...result.calculation,directorExempt:true,presenceByStatus:true}},moduleLabel:modul}));
+        assert.match(directorSaved,/besaran Tukin penuh/);
+        assert.doesNotMatch(directorSaved,/Bobot SKP 70%|Catatan Perbaikan Diri|tetap dikenai potongan/);
+      } else {
+        assert.match(directorHtml,/Dinas dicatat terpisah dan tidak dibayar uang makan/);
+        assert.match(directorHtml,/aria-label="Koreksi/);
+      }
     }
 });

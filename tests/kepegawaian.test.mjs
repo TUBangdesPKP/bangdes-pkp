@@ -15,8 +15,8 @@ test('Kepegawaian opens the organization by default for all roles and preserves 
     globalThis.window={location:{hash:'#/kepegawaian'}};
     for(const role of [null,'pegawai','Admin']) {
       globalThis.window.location.hash='#/kepegawaian';
-      const user=role?{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:role}:null;
-      globalThis.localStorage={getItem:()=>user?JSON.stringify({user,timestamp:Date.now()}):null};
+      const user=role?{NIP:'TEST',Nama:'Pegawai Uji',Akun_Role:role,sessionToken:'test-session'}:null;
+      globalThis.localStorage={getItem:()=>user?JSON.stringify({user,timestamp:Date.now()}):null,removeItem:()=>{}};
       const header=renderToStaticMarkup(React.createElement(Header,{navigate:()=>{},loggedInUser:user,currentView:'kepegawaian'}));
       assert.match(header,/Beranda<\/button><a href="#\/monitoring-kinerja"/);
       assert.match(header,/<a href="#\/kepegawaian" aria-current="page"/);

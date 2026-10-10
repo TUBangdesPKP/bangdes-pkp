@@ -96,7 +96,12 @@ export async function sendClaimRequest(endpoint, payload, fetchRequest = fetch, 
     let data;
     try { data = await response.json(); }
     catch { throw Object.assign(new Error('Respons Apps Script bukan JSON yang valid. Periksa URL /exec dan akses deployment.'), { transport: true }); }
-    if (data?.status !== 'success') throw new Error(data?.message || 'Server belum mengonfirmasi permintaan.');
+    if (data?.status !== 'success') {
+      if (data?.code === 'SESSION_EXPIRED' && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('pkp-session-expired', { detail: { sessionToken: payload.sessionToken, adminSessionToken: payload.adminSessionToken } }));
+      }
+      throw Object.assign(new Error(data?.message || 'Server belum mengonfirmasi permintaan.'), { code: data?.code });
+    }
     return data;
   } catch (error) {
     if (controller.signal.aborted) throw Object.assign(new Error('Waktu tunggu respons Apps Script habis. Proses di server mungkin masih berjalan.'), { transport: true });

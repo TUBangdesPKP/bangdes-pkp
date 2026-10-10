@@ -30,7 +30,9 @@ export function attendancePdfRows(pages) {
       if (/^[-–—]+$/.test(text)) return '-';
       // Preserve the document's local clock. Travel punches may use WITA/WIT;
       // accepting their suffix is not authorization to convert payroll time zones.
-      const match = /^(\d{1,2})[:.](\d{2})(?::\d{2})?(?:\s*(?:WIB|WITA|WIT))?$/i.exec(text);
+      // Some myPKP exports use numeric Indonesian UTC offsets (+07/+08/+09)
+      // instead of WIB/WITA/WIT. Keep the displayed local time, never shift it.
+      const match = /^(\d{1,2})[:.](\d{2})(?::[0-5]\d)?(?:\s*(?:WIB|WITA|WIT|\+0[789](?::?00)?))?$/i.exec(text);
       if (!match || +match[1]>23 || +match[2]>59) return fail(`${current.tanggal}, kolom ${label}`);
       return `${match[1].padStart(2,'0')}:${match[2]}`;
     };
@@ -97,10 +99,10 @@ export function attendanceExcelClocks(cells) {
 }
 
 export function extractCutiPeriod(text) {
-  const normalized = String(text).replace(/[|_\[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalized = String(text).replace(/[|_[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
   const heading = /LAMANYA\s*CUT[Il1!]?\b/i.exec(normalized);
   const start = heading ? heading.index + heading[0].length : normalized.search(/Selama\s*:?\s*\d+.{0,100}?(?:Mulai\s*)?Tanggal/i);
-  const fail = () => { throw new Error('Jumlah hari/tanggal pada Bab IV LAMANYA CUTI belum terbaca lengkap. Gunakan Upload Manual Cuti; tanggal kepala surat tidak digunakan sebagai tanggal cuti.'); };
+  const fail = () => { throw new Error('Tanggal pada Bab IV LAMANYA CUTI belum terbaca lengkap. Gunakan Upload Manual Cuti; tanggal kepala surat tidak digunakan sebagai tanggal cuti.'); };
   if (start < 0) return fail();
   const section = normalized.slice(start).split(/CATATAN\s*CUT|\bVI\s*\.|ALAMAT\s*SELAMA/i)[0].slice(0,400);
   // Table borders can become 'J', and OCR may omit Selama entirely.
@@ -111,16 +113,17 @@ export function extractCutiPeriod(text) {
   const datePart = dateLabel ? section.slice(dateLabel.index + dateLabel[0].length) : section;
   const datePattern = new RegExp(`(\\d{1,2})\\s*(${MONTHS.join('|')})\\s*(\\d{4})`, 'gi');
   let dates = [...datePart.matchAll(datePattern)].map(m => [+m[1], MONTHS.findIndex(month => month.toLowerCase() === m[2].toLowerCase()), +m[3]]);
+  let incompleteEnd = false;
   if (dates.length === 1) {
     const sep = '(?:[-–—]|s\\s*[./]?\\s*d\\.?|sampai(?:\\s+dengan)?)';
     const short = new RegExp(`(\\d{1,2})\\s*(?:(${MONTHS.join('|')})\\s*)?${sep}\\s*(\\d{1,2})\\s*(${MONTHS.join('|')})\\s*(\\d{4})`, 'i').exec(datePart);
     if (short) dates = [[+short[1], short[2] ? MONTHS.findIndex(m=>m.toLowerCase()===short[2].toLowerCase()) : dates[0][1], +short[5]], [+short[3], dates[0][1], +short[5]]];
-    else if (duration === 1 || duration === null) dates.push([...dates[0]]);
+    else if (duration === 1 || duration === null) { incompleteEnd = duration === null; dates.push([...dates[0]]); }
   }
   const stamp = d => Date.UTC(d[2], d[1], d[0]);
-  if (dates.length !== 2 || dates.some(d => new Date(stamp(d)).getUTCDate() !== d[0]) || stamp(dates[0]) > stamp(dates[1]) || (duration !== null && duration > (stamp(dates[1]) - stamp(dates[0])) / 86400000 + 1)) return fail();
+  if (dates.length !== 2 || dates.some(d => new Date(stamp(d)).getUTCDate() !== d[0]) || stamp(dates[0]) > stamp(dates[1]) || (stamp(dates[1])-stamp(dates[0]))/86400000 > 730) return fail();
   const format = d => `${d[0]} ${MONTHS[d[1]]} ${d[2]}`;
   const result = { berangkat: format(dates[0]), pulang: format(dates[1]), duration };
-  if (duration === null) result.warning = 'Jumlah hari belum terbaca. Periksa kedua tanggal dan isi Hari cuti melalui Ubah Data sebelum memilih pegawai.';
+  if (incompleteEnd) result.warning = 'Tanggal akhir belum terkonfirmasi. Periksa tanggal mulai dan selesai melalui Ubah Data; jumlah hari dihitung otomatis dari kalender kerja.';
   return result;
 }

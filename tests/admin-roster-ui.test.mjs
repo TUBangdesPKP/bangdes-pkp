@@ -22,7 +22,10 @@ test('roster has six columns, separated ASN groups, alphabetical row order and a
   assert.equal((html.match(/<button /g)||[]).length,3);
   const initial = renderToStaticMarkup(React.createElement(SubmissionSummary,{endpoint:'test',context:{modul:'uang-makan',periode:'test'},user:{sessionToken:'test'},adminKey:'nonempty-but-not-verified',onAdminKeyChange:()=>{}}));
   assert.match(initial,/<button disabled=""[^>]*>[\s\S]*Buat Rekapan PNS/);
-  assert.doesNotMatch(initial,/Kunci hanya untuk|Pegawai sudah terhitung|<table/);
+  assert.doesNotMatch(initial,/Kunci hanya untuk|Pegawai sudah terhitung|<table|type="password"|Verifikasi kunci/);
+  assert.match(initial,/Download Bukti Dukung Uang Makan/);
+  const tukin = renderToStaticMarkup(React.createElement(SubmissionSummary,{endpoint:'test',context:{modul:'tukin',periode:'test'},user:{adminSessionToken:'test'}}));
+  assert.match(tukin,/Download Bukti Dukung Tukin/);
 });
 test('year is a centered labeled select, and presensi accepts file drop and keyboard picker', async () => {
   const { YearSelect } = await component('src/year-select.jsx');
