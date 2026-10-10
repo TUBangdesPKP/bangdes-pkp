@@ -49,13 +49,31 @@ test('closed preview disables editing and saved recap has no save/upload/editor 
         assert.match(directorSaved,/besaran Tukin diterima penuh/);
         assert.match(directorSaved,/Bobot SKP 70%/);
         assert.match(directorSaved,/Nominal potongan Tukin Rp0/);
-        assert.doesNotMatch(directorSaved,/Catatan Perbaikan Diri|Kekurangan Jam Kerja|Rincian per tanggal dan sumber tarif/);
-        const zeroSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:{...result,calculation:{...result.calculation,directorExempt:true,amount:{tarif:6349000,skp:70,persenPotongan:0,potonganSkp:0,potongan:0,netto:6349000}}},moduleLabel:modul}));
-        assert.match(zeroSaved,/total potongan 0%/);assert.match(zeroSaved,/Potongan \(0,00%\)/);
-        assert.doesNotMatch(zeroSaved,/Bobot SKP 70%/);
-        assert.match(zeroSaved,/Catatan perbaikan diri: 0/);
-        assert.match(zeroSaved,/Kekurangan jam kerja: 0 menit/);
-        assert.doesNotMatch(zeroSaved,/Catatan Perbaikan Diri|Kekurangan Jam Kerja/);
+        assert.match(directorSaved,/Catatan Perbaikan Diri/);
+        assert.match(directorSaved,/Kekurangan Jam Kerja/);
+        assert.doesNotMatch(directorSaved,/Rincian per tanggal dan sumber tarif/);
+        const zeroResult={...result,calculation:{...result.calculation,directorExempt:true,
+          totals:{masuk:13,dinas:8,cuti:0,hariKerja:21,flexi:0,terlambat:0,psw:0,adjustmentReported:0,unadjusted:0,adjustmentDocuments:0,adjusted:0,adjustmentDocumentsUnclaimed:0,adjustmentMonths:{},menitTelat:0,menitPsw:0,menitTanpaPresensi:0,totalMenit:0,potonganAbsensi:0},
+          amount:{tarif:6349000,skp:100,persenPotongan:0,potonganSkp:0,potongan:0,netto:6349000}}};
+        for(const readOnly of [true,false]) {
+          const zeroSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:zeroResult,readOnly,moduleLabel:modul}));
+          assert.match(zeroSaved,/Total potongan: 0,00%/);assert.match(zeroSaved,/Potongan \(0,00%\)/);
+          assert.match(zeroSaved,/Potongan Absensi<\/span><span>0,00%/);
+          assert.match(zeroSaved,/Persentase SKP<\/span><strong>100,00%/);
+          assert.match(zeroSaved,/Bobot SKP 70%/);
+          assert.match(zeroSaved,/\(70% × 0,00%\) \+ \(30% × 0,00%\)/);
+          assert.match(zeroSaved,/Catatan Perbaikan Diri/);
+          assert.match(zeroSaved,/Kekurangan Jam Kerja/);
+          for(const label of ['Datang Flexi (hari)','Terlambat (hari)','Pulang Sebelum Waktunya (hari)','Terlambat (menit)','Pulang Awal (menit)','Tidak Presensi (menit)','Total (menit)']) {
+            assert.ok(zeroSaved.includes('>0</div><div class="text-xs text-slate-600 mt-2">'+label),label+' must remain visible as zero');
+          }
+          assert.match(zeroSaved,/>0<\/strong><p>Lupa Absen dengan Adjustment/);
+          assert.match(zeroSaved,/>0 Tidak Absen \(kejadian\)/);
+          assert.match(zeroSaved,/>0 surat diunggah · 0 koreksi jam<br\/>0 surat tanpa koreksi jam/);
+          assert.match(zeroSaved,/>13\/21<\/div>/);
+          assert.doesNotMatch(zeroSaved,/Pengecualian Direktur: potongan absensi 0%/);
+          if(readOnly) assert.doesNotMatch(zeroSaved,/Selesai &amp; Submit|Terapkan 0% &amp; Submit/);
+        }
       } else {
         assert.match(directorHtml,/Dinas dicatat terpisah dan tidak dibayar uang makan/);
         assert.match(directorHtml,/aria-label="Koreksi/);
