@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Calendar, RefreshCw } from 'lucide-react';
 import { sendClaimRequest } from './archive-claims.js';
 import { MONTH_NAMES, submissionPeriodCard, validateEmployeeRecaps } from './submission-period-model.js';
+import { YearSelect } from './year-select.jsx';
 
 export function EmployeeRecapCards({ modul, year, months, loading, error, onSelect }) {
   return <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 lg:gap-8">
@@ -23,7 +24,6 @@ export function EmployeeRecapCards({ modul, year, months, loading, error, onSele
 
 export function EmployeeRecapPeriods({ endpoint, modul, user, initialPeriod, onSelect }) {
   const [year, setYear] = useState(initialPeriod?.year || new Date().getFullYear());
-  const [draftYear, setDraftYear] = useState(String(year));
   const [reload, setReload] = useState(0);
   const [result, setResult] = useState(null);
   const nip = String(user?.NIP || '').replace(/^'/, '').trim();
@@ -42,11 +42,10 @@ export function EmployeeRecapPeriods({ endpoint, modul, user, initialPeriod, onS
   return <section className="space-y-7 max-w-7xl mx-auto py-3" aria-label="Rekap pembayaran pegawai">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h2 className="text-xl lg:text-2xl font-extrabold text-slate-950">Rekap Pembayaran {modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} Pegawai</h2>
-      <form className="flex items-center gap-2" onSubmit={event => { event.preventDefault(); const value = Number(draftYear); if (Number.isInteger(value) && value >= 2000 && value <= 9999) setYear(value); }}>
-        <input aria-label="Tahun rekap" className="w-24 rounded-xl border bg-white p-2 text-sm" type="number" min="2000" max="9999" required value={draftYear} onChange={event => setDraftYear(event.target.value)}/>
-        <button className="rounded-xl bg-[#084C61] text-white px-3 py-2 text-sm">Tampilkan</button>
+      <div className="flex items-center gap-2">
+        <YearSelect value={year} onChange={setYear}/>
         <button type="button" aria-label="Muat ulang nominal" title="Muat ulang nominal" onClick={() => setReload(value => value + 1)} className="rounded-xl border bg-white p-2"><RefreshCw size={17}/></button>
-      </form>
+      </div>
     </div>
     {ready && result.error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{result.error} Anda tetap dapat membuka setiap bulan untuk melihat rekap.</p>}
     <EmployeeRecapCards modul={modul} year={year} months={ready ? result.months : null} loading={!ready} error={ready && result.error} onSelect={onSelect}/>

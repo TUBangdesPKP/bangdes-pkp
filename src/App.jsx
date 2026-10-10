@@ -25,9 +25,11 @@ import { LeaveRecapPage } from './leave-recap.jsx';
 import { demographyFields } from './demography-model.js';
 import { MonitoringKinerjaPage } from './monitoring-kinerja.jsx';
 import { ArchiveFileDropzone } from './archive-file-dropzone.jsx';
+import { AttendanceFileDropzone } from './attendance-file-dropzone.jsx';
 import { manualArchiveFileSelection } from './manual-archive-file.js';
 import { ExtraDocumentsUpload } from './extra-documents.jsx';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from './document-parsers.js';
+import { validateAttendancePeriod, assertAttendanceEmployee } from './attendance-period.js';
 import { recognizeCutiImage } from './cuti-ocr.js';
 import { useCutiCalendar } from './use-cuti-calendar.js';
 import { getClaimIdentity, filterArchiveForClaim, createClaimPayload, submissionContext, eventUploadPayload, processSubmissionEvidence, checkExistingSubmission, sendClaimRequest } from './archive-claims.js';
@@ -1072,7 +1074,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   }
 
   const rows = [];
-  const seenDates = new Set();
   if (pdfRows) lines = pdfRows.map(row => `${row.tanggal} ${row.status}`);
   
   for (let i = 0; i < lines.length; i++) {
@@ -1093,14 +1094,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
       hari = days[dateObj.getDay()];
     }
     
-    if (expectedStartObj && expectedEndObj) {
-      const minValidDate = new Date(expectedStartObj.getTime() - (5 * 24 * 60 * 60 * 1000));
-      const maxValidDate = new Date(expectedEndObj.getTime() + (5 * 24 * 60 * 60 * 1000));
-      if (dateObj < minValidDate || dateObj > maxValidDate) continue; 
-    }
-    
-    if (seenDates.has(dateKey)) continue;
-    seenDates.add(dateKey);
     
     const times = [...line.matchAll(/\b(\d{2}:\d{2})(?:\s*WIB)?\b/gi)];
     let datang = times.length > 0 ? times[0][1] : '-';
@@ -1170,7 +1163,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
   rows.sort((a, b) => b._dateObj - a._dateObj);
   const totalHariMasuk = rows.filter(r => ['WFO','WFA','WFH'].includes(r.keterangan) && [r.datang,r.pulang].some(time => time && time !== '-')).length;
 
-  let isDateValid = true;
+  const coverage = validateAttendancePeriod(rows, selectedPeriod);
+  const isDateValid = coverage.valid;
   let extractedStartStr = '-';
   let extractedEndStr = '-';
 
@@ -1184,17 +1178,6 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     
     periode = `${extractedStartStr} s/d ${extractedEndStr}`;
 
-    if (expectedStartObj && expectedEndObj) {
-      if (lastDate < expectedStartObj || firstDate > expectedEndObj) {
-        isDateValid = false;
-      } else {
-        const startDiffDays = Math.abs((firstDate - expectedStartObj) / (1000 * 60 * 60 * 24));
-        const endDiffDays = Math.abs((lastDate - expectedEndObj) / (1000 * 60 * 60 * 24));
-        if (startDiffDays > 10 || endDiffDays > 10) isDateValid = false;
-      }
-    }
-  } else {
-    isDateValid = false; 
   }
 
   return {
@@ -1208,7 +1191,8 @@ const parseDocumentPresensi = async (file, selectedPeriod = null, activeTab = nu
     rows,
     totalHariMasuk,
     isValid: rows.length > 0 && isDateValid,
-    isDateMismatch: !isDateValid
+    isDateMismatch: !isDateValid,
+    errorMessage: coverage.message
   };
 };
 
@@ -2311,7 +2295,7 @@ const useArsipUploadPanel = ({ documentModule, isPeriodSpt, selectedPeriod, logg
                 <div className="pt-4">
                   {cutiCalendar.loading && <p role="status" className="mb-3 text-sm text-[#084C61]">Memuat kalender hari libur…</p>}
                   {cutiCalendar.error && <div role="alert" className="mb-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{cutiCalendar.error}<button type="button" onClick={cutiCalendar.reload} className="ml-2 underline font-semibold">Muat ulang kalender</button></div>}
-                  {isPeriodSpt && !submissionReady && <p className="mb-3 text-xs text-amber-700">Simpan tab 2 dan muat daftar dokumen terlebih dahulu sebelum mengunggah ke folder pengumpulan.</p>}
+                  {isPeriodSpt && !submissionReady && <p className="mb-3 text-xs text-amber-700">Simpan presensi dan muat daftar dokumen terlebih dahulu sebelum mengunggah ke folder pengumpulan.</p>}
                   {arsipSubmitResult && (
                     <div role="status" className={`mb-4 p-4 rounded-xl text-xs font-semibold border ${arsipSubmitResult.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
                       {arsipSubmitResult.message}
@@ -2991,7 +2975,11 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
   return { render, reset };
 };
 
-export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate, currentView, activeStep }) => {
+export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate: navigateRoute, currentView, activeStep: routeStep }) => {
+  // Keep the shared five-stage workflow intact for personal recaps. Admin inserts a roster before presensi.
+  const calculationView = currentView === 'penghitungan';
+  const activeStep = calculationView ? (routeStep === 2 ? 0 : routeStep > 2 ? routeStep - 1 : routeStep) : routeStep;
+  const navigate = React.useCallback((view, step = 1) => navigateRoute(view, view === 'penghitungan' && step >= 2 ? step + 1 : step), [navigateRoute]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [calculationModule, setCalculationModule] = useState('uang-makan');
   const [submissionAdminKey, setSubmissionAdminKey] = useState('');
@@ -3002,6 +2990,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const [isParsing, setIsParsing] = useState(false);
   const [parseStatus, setParseStatus] = useState('Mengekstrak dan memverifikasi data...');
   const [parsedData, setParsedData] = useState(null);
+  const [storedAttendance, setStoredAttendance] = useState(null);
+  const [loadingAttendance, setLoadingAttendance] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
+  const [replacingAttendance, setReplacingAttendance] = useState(false);
+  const [attendanceReload, setAttendanceReload] = useState(0);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -3047,13 +3040,38 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
   const isSubmissionAdmin = canManageSubmission(currentView, loggedInUser.Akun_Role || loggedInUser.Role);
   const viewingEmployee = selectedSubmissionEmployee(selectedRecap, activeTab, selectedPeriod, isSubmissionAdmin);
-  const readOnlyPeriod = isPeriodSpt && submissionViewerIsReadOnly(selectedPeriod, isSubmissionAdmin, viewingEmployee);
+  const readOnlyPeriod = isPeriodSpt && submissionViewerIsReadOnly(selectedPeriod, isSubmissionAdmin, null);
 
   useEffect(() => {
-    if (activeTab !== 'spt' && activeTab !== 'cuti' && activeStep > 1 && !selectedPeriod) {
+    if (activeTab !== 'spt' && activeTab !== 'cuti' && routeStep > 1 && !selectedPeriod) {
       navigate(currentView, 1);
+    } else if (isSubmissionAdmin && routeStep > 2 && !viewingEmployee) {
+      navigateRoute(currentView, 2);
     }
-  }, [activeStep, currentView, navigate, selectedPeriod, activeTab]);
+  }, [routeStep, currentView, navigate, navigateRoute, selectedPeriod, activeTab, isSubmissionAdmin, viewingEmployee]);
+
+  useEffect(() => {
+    if (!isSubmissionAdmin || !viewingEmployee || !selectedPeriod) return;
+    const requestId = ++referenceRequest.current;
+    let cancelled = false;
+    setLoadingAttendance(true); setAttendanceError(''); setStoredAttendance(null); setParsedData(null); setReplacingAttendance(false); setIsAlreadyUploaded(false);
+    sendClaimRequest(APPS_SCRIPT_URL, { action: 'presensi_tersimpan', modul: activeTab, periode: selectedPeriod.periodeEvent,
+      nip: viewingEmployee.nip, sessionToken: loggedInUser.sessionToken, adminSessionToken: loggedInUser.adminSessionToken })
+      .then(result => {
+        if (cancelled || requestId !== referenceRequest.current) return;
+        if (result.attendanceVersion !== 1 || result.modul !== activeTab || result.periode !== selectedPeriod.periodeEvent || result.nip !== viewingEmployee.nip || typeof result.exists !== 'boolean') throw new Error('Perbarui deployment Code.gs untuk memuat presensi tersimpan.');
+        if (!result.exists) return;
+        if (!Array.isArray(result.rows)) throw new Error('Data presensi tersimpan tidak valid.');
+        const coverage = validateAttendancePeriod(result.rows, selectedPeriod);
+        const data = { ...result, nama: viewingEmployee.nama, rows: result.rows, fromSaved: true,
+          totalRows: result.rows.length, expectedDays: coverage.expectedDays, periodeFolder: selectedPeriod.periodeFolder,
+          totalHariMasuk: result.rows.filter(row => ['WFO', 'WFA', 'WFH'].includes(row.keterangan) && [row.datang, row.pulang].some(time => time && time !== '-')).length,
+          isValid: coverage.valid, isDateMismatch: !coverage.valid, errorMessage: coverage.message };
+        setStoredAttendance(data); setParsedData(data); setIsAlreadyUploaded(true);
+      }).catch(error => { if (!cancelled && requestId === referenceRequest.current) setAttendanceError(error.message); })
+      .finally(() => { if (!cancelled && requestId === referenceRequest.current) setLoadingAttendance(false); });
+    return () => { cancelled = true; };
+  }, [isSubmissionAdmin, viewingEmployee, selectedPeriod, activeTab, loggedInUser.sessionToken, loggedInUser.adminSessionToken, attendanceReload]);
 
   const handleTabClick = (targetView) => {
     if ((selectedFile || sptUpload.hasDraft || cutiUpload.hasDraft) && !submitResult) {
@@ -3086,6 +3104,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     cutiUpload.reset();
     setSelectedFile(null);
     setParsedData(null);
+    setStoredAttendance(null); setAttendanceError(''); setLoadingAttendance(false); setReplacingAttendance(false);
     setSubmitResult(null);
     setIsParsing(false);
     setParseStatus('Mengekstrak dan memverifikasi data...');
@@ -3098,8 +3117,10 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const handleClearFile = () => {
     const fileInput = document.getElementById('pdf-upload-input');
     if (fileInput) fileInput.value = '';
-    resetUploadState();
-    setFinalRecap(null);
+    referenceRequest.current++;
+    setSelectedFile(null); setParsedData(storedAttendance); setSubmitResult(null); setIsParsing(false);
+    setExistingCheckError(''); setIsCheckingExisting(false); setIsAlreadyUploaded(!!storedAttendance); setReplacingAttendance(false);
+    setFinalRecap(documents.savedResult || null);
     previewSession.current = { key: '', data: null, review: null };
   };
 
@@ -3107,6 +3128,11 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     if (e.target.files && e.target.files.length > 0) {
 
       const file = e.target.files[0];
+      if (isParsing || isSubmitting || loadingAttendance || readOnlyPeriod) return;
+      if (e.target.files.length !== 1 || !/\.(pdf|xlsx|xls)$/i.test(file.name) || !file.size) {
+        setAttendanceError('Pilih satu file presensi PDF atau Excel (.xlsx, .xls) yang tidak kosong.'); return;
+      }
+      setAttendanceError('');
       const requestId = ++referenceRequest.current;
       setExistingCheckError(''); setIsCheckingExisting(false);
       setSelectedFile(file);
@@ -3120,6 +3146,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       try {
         const result = await parseDocumentPresensi(file, selectedPeriod, activeTab, value => { if (referenceRequest.current === requestId) setParseStatus(value); });
         if (referenceRequest.current !== requestId) return;
+        assertAttendanceEmployee(result, viewingEmployee);
         setParsedData(result);
         
         if (result && result.isValid) {
@@ -3169,7 +3196,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const claimIdentity = viewingEmployee || getClaimIdentity(readOnlyPeriod ? null : parsedData, loggedInUser);
   const submission = submissionContext(activeTab, claimIdentity, selectedPeriod);
   if (isPeriodSpt) Object.assign(submission, { sessionToken: loggedInUser.sessionToken, adminKey: isSubmissionAdmin ? submissionAdminKey : undefined, employeeReadOnly: !isSubmissionAdmin });
-  if (viewingEmployee) Object.assign(submission, { adminReadOnly: true, sessionToken: loggedInUser.sessionToken, adminSessionToken: loggedInUser.adminSessionToken });
+  if (isSubmissionAdmin) Object.assign(submission, { adminSessionToken: loggedInUser.adminSessionToken, sixStep: true });
   useEffect(() => { setFinalRecap(null); }, [JSON.stringify(submission), archiveRevision]);
   const submissionKey = JSON.stringify(submission);
   if (previewSession.current.key !== submissionKey) previewSession.current = { key: submissionKey, data: null, review: null };
@@ -3177,7 +3204,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   currentSubmission.current = submissionKey;
   useEffect(() => { setProcessError(''); }, [submissionKey]);
   const documents = useSubmissionDocuments({
-    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && !readOnlyPeriod && activeStep >= 3,
+    endpoint: APPS_SCRIPT_URL, context: submission, enabled: isPeriodSpt && !readOnlyPeriod && !!viewingEmployee && activeStep >= 2,
     readOnly: readOnlyPeriod,
     revision: archiveRevision,
     onPreview: file => {
@@ -3196,7 +3223,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const sptUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'spt' });
   const cutiUpload = useArsipUploadPanel({ ...uploadOptions, documentModule: 'cuti' });
   const evidenceBusy = documents.busy || sptUpload.busy || cutiUpload.busy || extraUploadBusy;
-  const canOpenFinal = documents.ready && documents.processed && !documents.loading && !evidenceBusy && !isProcessingEvidence && !isParsing && !isSubmitting;
+  const finalDataReady = !!parsedData?.isValid && isAlreadyUploaded && !selectedFile && documents.ready && documents.processed && !documents.loading;
+  const canOpenFinal = finalDataReady && !evidenceBusy && !isProcessingEvidence && !isParsing && !isSubmitting;
   useEffect(() => {
     if (documents.savedResult && documents.processed) {
       setFinalRecap(documents.savedResult);
@@ -3243,12 +3271,24 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
     });
   };
 
+  const submitFinalRecap = async () => {
+    if (!isSubmissionAdmin || !finalRecap || isSubmitting) throw new Error('Rekap belum siap disubmit.');
+    setIsSubmitting(true);
+    try {
+      const result = await sendClaimRequest(APPS_SCRIPT_URL, { ...submission, action: 'submit_rekap_final', revision: finalRecap.revision, confirmed: true });
+      if (result.submitted !== true || result.nip !== submission.nip || result.periode !== submission.periode || result.modul !== submission.modul) throw new Error('Server belum mengonfirmasi submit rekap. Perbarui deployment Code.gs.');
+    } finally { setIsSubmitting(false); }
+  };
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
     if (readOnlyPeriod || !selectedFile || !parsedData || !parsedData.isValid || isParsing || isCheckingExisting || existingCheckError) return;
 
     setIsSubmitting(true);
     try {
+      assertAttendanceEmployee(parsedData, viewingEmployee);
+      const coverage = validateAttendancePeriod(parsedData.rows, selectedPeriod);
+      if (!coverage.valid) throw new Error(coverage.message);
       let sheetData = [];
       if (parsedData.rows && parsedData.rows.length > 0) {
         sheetData = parsedData.rows.map((row, index) => {
@@ -3276,7 +3316,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
         sessionToken: loggedInUser.sessionToken,
         adminKey: submissionAdminKey,
         nip: nipForPayload,
-        nama: parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama,
+        nama: viewingEmployee?.nama || (parsedData.nama && parsedData.nama !== 'Pegawai' ? parsedData.nama : loggedInUser.Nama),
         periode: selectedPeriod?.periodeEvent || parsedData.periode || '',
         bulanTahun: bulanTahunForPayload, 
         sheetData: sheetData,
@@ -3309,6 +3349,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
       }
 
       if (json.status === 'success') {
+        const stored = { ...parsedData, fromSaved: true };
+        setStoredAttendance(stored); setParsedData(stored); setSelectedFile(null); setReplacingAttendance(false);
         setSubmitResult({ 
           type: 'success', 
           message: 'Spreadsheet rekap berhasil disimpan. File referensi tidak diunggah ke Google Drive.',
@@ -3531,23 +3573,21 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
               </div>
 
               <div className="flex items-center justify-center gap-3">
-                {[1, 2, 3, 4, 5].map((num) => {
-                  const isActive = activeStep === num;
-                    const isDisabled = isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) || (readOnlyPeriod ? !(readOnlySubmissionStep(num) || (isSubmissionAdmin && num === 2)) : (num === 4 && !canOpenFinal));
+                {(isSubmissionAdmin ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map((num) => {
+                  const isActive = routeStep === num;
+                  const internalStep = isSubmissionAdmin ? (num === 2 ? 0 : num > 2 ? num - 1 : num) : num;
+                    const isDisabled = isParsing || isSubmitting || isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) ||
+                      (isSubmissionAdmin && num > 2 && !viewingEmployee) ||
+                      (!readOnlyPeriod && ((internalStep === 3 && (!parsedData?.isValid || !!selectedFile || !isAlreadyUploaded)) || (internalStep >= 4 && !canOpenFinal)));
                     return (
                       <button
                         key={num}
                         type="button"
                         disabled={isDisabled}
                         onClick={() => {
-                          if (num <= 2) setSelectedRecap(null);
-                          if (num === 1) {
-                            navigate(currentView, 1);
-                          } else {
-                            navigate(currentView, num);
-                          }
+                          navigateRoute(currentView, num);
                         }}
-                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : readOnlyPeriod ? 'Periode ditutup; unggah tidak tersedia' : num >= 4 ? 'Klik Lanjut Proses di tab 3 untuk membuka preview' : 'Tunggu proses selesai') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : !viewingEmployee && isSubmissionAdmin ? 'Pilih pegawai di tab 2' : 'Selesaikan tahap sebelumnya terlebih dahulu') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
                         className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
                           isActive
                             ? 'text-white ring-4 shadow-sm scale-105'
@@ -3574,13 +3614,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   setSelectedRecap(null);
                   setSelectedPeriod(period);
                   if (selectedPeriod?.id !== period.id || submissionIsReadOnly(period) || !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) resetUploadState();
-                  navigate(currentView, submissionEntryStep(period, isSubmissionAdmin));
+                  navigateRoute(currentView, submissionEntryStep(period, isSubmissionAdmin));
+                }}/>
+              ) : activeStep === 0 && isSubmissionAdmin && selectedPeriod ? (
+                <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelectEmployee={employee => {
+                  resetUploadState(); setSelectedRecap({ modul: activeTab, periode: selectedPeriod.periodeEvent, employee }); navigate(currentView, 2);
                 }}/>
               ) : readOnlyPeriod && !(isSubmissionAdmin && activeStep === 2) ? (
                 <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} viewingEmployee={viewingEmployee} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => { if (step <= 2) setSelectedRecap(null); navigate(currentView, step); }} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="space-y-5">
-                {isSubmissionAdmin && <SubmissionSummary key={activeTab + selectedPeriod.periodeEvent} endpoint={APPS_SCRIPT_URL} context={submission} user={loggedInUser} adminKey={submissionAdminKey} onAdminKeyChange={setSubmissionAdminKey} onSelectEmployee={employee => { setSelectedRecap({ modul: activeTab, periode: selectedPeriod.periodeEvent, employee }); navigate(currentView, 5); }}/>}
+                {viewingEmployee && <div className="flex flex-wrap justify-between gap-3 text-sm"><p className="font-bold text-[#084C61]">{viewingEmployee.nama} <span className="font-normal text-xs text-slate-500">NIP {viewingEmployee.nip}</span></p><button disabled={isParsing || isSubmitting} onClick={() => navigateRoute(currentView, 2)} className="underline text-[#084C61] disabled:opacity-40">Pilih pegawai lain</button></div>}
                 {submissionIsReadOnly(selectedPeriod) ? <p className="p-4 rounded-xl bg-amber-50 text-amber-900 text-sm">Periode ditutup. Pilih nama pegawai di atas untuk melihat rekap tersimpan.</p> : <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start ml-0 lg:-ml-4">
                   <div className="lg:col-span-4 bg-white rounded-3xl border border-gray-200 shadow-xs p-6 sm:p-7 space-y-6 lg:sticky top-[20px]">
                       <>
@@ -3599,31 +3643,14 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
 
                         <div>
                           <label className="block text-xs font-bold text-gray-700 mb-2">File Presensi</label>
-                          <div className="border border-gray-200 rounded-2xl p-2 bg-white flex items-center justify-between hover:border-teal-700 transition-colors">
-                            <label className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-xs font-bold text-gray-700 border border-gray-200 transition-colors cursor-pointer whitespace-nowrap">
-                              Choose File
-                              <input 
-                                id="pdf-upload-input"
-                                type="file" 
-                                accept=".pdf, .xlsx, .xls"
-                                onChange={handleFileChange}
-                                className="hidden"
-                              />
-                            </label>
-                            <span className="text-xs text-gray-500 truncate px-2 font-medium flex-1">
-                              {selectedFile ? selectedFile.name : 'Pilih berkas...'}
-                            </span>
-                            {selectedFile && !isParsing && (
-                              <button 
-                                type="button"
-                                onClick={() => handleClearFile(null)}
-                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                                title="Hapus berkas"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            )}
-                          </div>
+                          {loadingAttendance && <p role="status" className="text-xs text-slate-500 py-3">Memuat preview presensi tersimpan...</p>}
+                          {storedAttendance && <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 mb-3 flex flex-wrap items-center gap-3 text-xs">
+                            <span className="font-bold text-teal-800">Sudah ada file presensi</span>
+                            <button type="button" disabled={isParsing || isSubmitting} onClick={() => setReplacingAttendance(true)} className="text-[#084C61] underline disabled:opacity-40">Ubah file presensi</button>
+                          </div>}
+                          {(!storedAttendance || replacingAttendance) && <AttendanceFileDropzone disabled={isParsing || isSubmitting || loadingAttendance || !viewingEmployee} fileName={selectedFile?.name} onFiles={files => handleFileChange({ target: { files } })}/>}
+                          {(selectedFile || replacingAttendance) && !isParsing && <button type="button" disabled={isSubmitting} onClick={handleClearFile} className="mt-2 text-xs text-slate-500 underline">{storedAttendance ? 'Batal mengganti file' : 'Batalkan pilihan file'}</button>}
+                          {attendanceError && <div role="alert" className="text-xs text-red-700 mt-3 space-y-2"><p>{attendanceError}</p><button type="button" disabled={isParsing || isSubmitting} onClick={() => setAttendanceReload(value => value + 1)} className="underline">Muat ulang presensi tersimpan</button></div>}
                         </div>
 
                         {isParsing && (
@@ -3656,7 +3683,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                           </div>
                         )}
 
-                        {!isParsing && parsedData?.isValid && <div className="text-xs space-y-2">
+                        {!isParsing && selectedFile && parsedData?.isValid && <div className="text-xs space-y-2">
                           {existingCheckError && <p role="alert" className="p-3 rounded-xl border border-red-200 bg-red-50 text-red-700">{existingCheckError}</p>}
                           <button type="button" disabled={isCheckingExisting || isSubmitting} onClick={() => refreshExistingStatus()} className="text-teal-700 underline disabled:opacity-40">{isCheckingExisting ? 'Memeriksa data terbaru...' : 'Periksa ulang status rekap'}</button>
                         </div>}
@@ -3665,9 +3692,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                           <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
                             <AlertCircle size={18} className="shrink-0 text-red-600 mt-0.5" />
                             <span className="leading-relaxed">
-                              {parsedData.isDateMismatch 
-                                ? `Periode file (${parsedData.periode}) tidak sesuai dengan periode event yang dibuka (${selectedPeriod?.periodeEvent}).`
-                                : (parsedData.errorMessage || 'Data presensi tidak terbaca dengan benar atau format PDF tidak sesuai.')}
+                              {parsedData.errorMessage || `Periode file (${parsedData.periode}) tidak sesuai dengan periode yang dipilih (${selectedPeriod?.periodeEvent}).`}
                             </span>
                           </div>
                         )}
@@ -3686,7 +3711,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                           </div>
                         )}
 
-                        {!isParsing && (
+                        {!isParsing && !parsedData?.fromSaved && (
                           <button 
                             onClick={handleUploadSubmit}
                             disabled={!parsedData || !parsedData.isValid || isSubmitting || isCheckingExisting || !!existingCheckError || (!selectedFile && !submitResult)}
@@ -3702,7 +3727,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                           </button>
                         )}
 
-                        {!isParsing && !isCheckingExisting && !existingCheckError && parsedData && parsedData.isValid && (isAlreadyUploaded || (submitResult && submitResult.type === 'success')) && (
+                        {!isParsing && !selectedFile && !isCheckingExisting && !existingCheckError && parsedData?.isValid && isAlreadyUploaded && (
                           <button 
                             onClick={() => navigate(currentView, 3)}
                             className="w-full py-3.5 mt-2 rounded-2xl bg-teal-50 border border-teal-200 text-teal-800 font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 hover:bg-teal-100 cursor-pointer"
@@ -3766,7 +3791,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                             {parsedData && parsedData.rows && parsedData.rows.length > 0 ? (
                               parsedData.rows.map((row, idx) => {
                                 const isLiburData = row.hari === 'Sabtu' || row.hari === 'Minggu' || row.keterangan === 'Libur';
-                                const isLocked = false; 
+                                const isLocked = !!parsedData.fromSaved;
                                 
                                 const getRowBgClass = () => {
                                   if (isLocked) return 'bg-gray-50 text-gray-400 opacity-80 grayscale';
@@ -3837,7 +3862,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                       <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-xs">
                         {activeTab !== 'spt' && (
                            <>
-                             <span className="text-gray-500">Total Hari: <strong className="text-gray-900">{parsedData ? parsedData.expectedDays : 0} Hari</strong></span>
+                             <span className="text-gray-500">Total Hari Terbaca: <strong className="text-gray-900">{parsedData?.rows?.length || 0} / {selectedPeriod.expectedDays} Hari</strong></span>
                              <span className="text-gray-500">Hari Masuk (WFO/WFA/WFH): <strong className="text-emerald-700">{parsedData ? parsedData.totalHariMasuk : 0} Hari</strong></span>
                            </>
                         )}
@@ -3854,7 +3879,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                     <div>
                       <h3 className="text-sm font-extrabold text-gray-900 mb-1">Upload Bukti Dukung dan Dokumen Tambahan</h3>
                       <p className="text-xs text-gray-600 leading-relaxed">
-                        Klaim arsip SPT/Cuti atau lampirkan bukti tambahan di bawah. Bagian upload SPT dan Cuti dapat dibuka saat diperlukan. Surat lupa absen dipilih sebagai bukti koreksi datang/pulang pada tab 4.
+                        Klaim arsip SPT/Cuti atau lampirkan bukti tambahan di bawah. Bagian upload dapat dibuka saat diperlukan. Surat lupa absen dipilih sebagai bukti koreksi datang/pulang pada tab {isSubmissionAdmin ? 5 : 4}.
                       </p>
                     </div>
                   </div>
@@ -3867,17 +3892,17 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                     <button disabled={isProcessingEvidence || evidenceBusy} onClick={() => navigate(currentView, 2)} className="px-6 py-2.5 rounded-xl text-gray-700 bg-gray-100 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:bg-gray-200 transition-colors disabled:opacity-40">
                       <ArrowLeft size={16} /> Kembali
                     </button>
-                    <button title={documents.processed ? 'Tidak ada perubahan. Buka preview melalui tab 4.' : 'Terapkan bukti ke rekap'} disabled={!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
+                    <button title={documents.processed ? 'Tidak ada perubahan. Buka tab preview.' : 'Terapkan bukti ke rekap'} disabled={!documents.ready || documents.processed || documents.loading || evidenceBusy || isProcessingEvidence} onClick={processEvidence} className="px-6 py-2.5 rounded-xl text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:opacity-90 transition-opacity disabled:opacity-40" style={{ backgroundColor: PALETTE_PKP.midnightGreen }}>
                       {isProcessingEvidence ? processStatus : 'Lanjut Proses'} <ChevronRight size={16} />
                     </button>
                   </div>
-                  {documents.processed && <p className="text-center text-xs text-teal-700">Tidak ada perubahan bukti. Klik tab 4 untuk membuka preview terakhir.</p>}
-                  <ExtraDocumentsUpload key={submissionKey} context={submission} documents={documents} onBusy={setExtraUploadBusy}/>
+                  {documents.processed && <p className="text-center text-xs text-teal-700">Tidak ada perubahan bukti. Klik tab {isSubmissionAdmin ? 5 : 4} untuk membuka preview terakhir.</p>}
+                  <details className="rounded-2xl border bg-white p-5"><summary className="cursor-pointer font-bold text-sm text-[#084C61]">Dokumen Pendukung Lainnya — buka/tutup</summary><div className="mt-5"><ExtraDocumentsUpload key={submissionKey} context={submission} documents={documents} onBusy={setExtraUploadBusy}/></div></details>
                   <details className="rounded-2xl border bg-white p-5"><summary className="cursor-pointer font-bold text-sm text-[#084C61]">Upload SPT — buka/tutup</summary><div className="mt-5">{sptUpload.render()}</div></details>
                   <details className="rounded-2xl border bg-white p-5"><summary className="cursor-pointer font-bold text-sm text-[#084C61]">Upload Cuti — buka/tutup</summary><div className="mt-5">{cutiUpload.render()}</div></details>
                 </fieldset>
               ) : activeStep === 4 && selectedPeriod ? (
-                !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses di tab 3 untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab 3</button></div> :
+                !canOpenFinal ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>{documents.loading ? 'Memeriksa status proses...' : 'Klik Lanjut Proses pada tahap bukti dukung untuk memperbarui rekap dan membuka preview.'}</p><button onClick={() => navigate(currentView, 3)} className="text-[#084C61] underline">Kembali ke tab {isSubmissionAdmin ? 4 : 3}</button></div> :
                 <FinalRecap key={JSON.stringify(submission) + ':' + archiveRevision} endpoint={APPS_SCRIPT_URL} context={submission}
                   cachedPreview={previewSession.current.data} cachedReview={previewSession.current.review}
                   savedResult={finalRecap}
@@ -3890,7 +3915,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   onBack={() => navigate(currentView, 3)}
                   onSaved={result => { previewSession.current = { key: submissionKey, data: result.revision ? result : null, review: null }; setFinalRecap(result); navigate(currentView, 5); }} />
               ) : activeStep === 5 && selectedPeriod ? (
-                documents.error ? <p role="alert" className="bg-red-50 text-red-700 p-5 rounded-xl">{documents.error}</p> : documents.loading || !documents.loaded ? <p role="status">Memuat rekap tersimpan...</p> : !finalRecap ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>Belum ada rekap tersimpan untuk periode ini.</p><button onClick={() => navigate(currentView, 2)} className="text-[#084C61] underline">Upload presensi di tab 2</button><button onClick={() => navigate(currentView, 3)} className="block text-[#084C61] underline">Lihat dokumen tab 3</button></div> : <FinalRecapSaved result={canOpenFinal ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} onUploadAnother={() => { handleClearFile(); navigate(currentView, 2); }} />
+                documents.error ? <p role="alert" className="bg-red-50 text-red-700 p-5 rounded-xl">{documents.error}</p> : documents.loading || !documents.loaded ? <p role="status">Memuat rekap tersimpan...</p> : !finalRecap ? <div className="bg-white rounded-2xl p-6 space-y-4"><p>Belum ada rekap tersimpan untuk periode ini.</p><button onClick={() => navigate(currentView, 2)} className="text-[#084C61] underline">Upload presensi di tab {isSubmissionAdmin ? 3 : 2}</button><button onClick={() => navigate(currentView, 3)} className="block text-[#084C61] underline">Lihat dokumen tab {isSubmissionAdmin ? 4 : 3}</button></div> : <FinalRecapSaved key={submissionKey} result={finalDataReady ? finalRecap : null} moduleLabel={activeTab === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'} onDone={submitFinalRecap} onBack={() => navigate(currentView, canOpenFinal ? 4 : 3)} onUploadAnother={() => { resetUploadState(); navigateRoute(currentView, 2); }} />
               ) : (
                 <div className="flex flex-col items-center justify-center min-h-[40vh] text-center px-4 bg-white rounded-3xl border border-gray-100 p-10 max-w-2xl mx-auto shadow-sm mt-8">
                   <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mb-6 shadow-sm border border-teal-100"><FileBarChart size={32} /></div>

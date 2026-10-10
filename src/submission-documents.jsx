@@ -63,7 +63,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
 
   const claim = async payload => {
     if (readOnly) throw new Error('Periode ditutup. Dokumen hanya dapat dilihat.');
-    if (!ready) throw new Error('Simpan tab 2 dan muat daftar dokumen terlebih dahulu.');
+    if (!ready) throw new Error('Simpan presensi dan muat daftar dokumen terlebih dahulu.');
     setClaiming(true);
     try {
       const result = await sendClaimRequest(endpoint, { ...payload, ...context });
@@ -100,7 +100,7 @@ export function useSubmissionDocuments({ endpoint, context, enabled, revision, o
       {expanded && <div className="px-5 pb-5 space-y-4">
         {error && <div role="alert" className="text-xs text-red-700 bg-red-50 rounded-lg p-3">{error}</div>}
         {loading && <p className="text-xs text-gray-500">Memuat dokumen dari folder pengumpulan...</p>}
-        {!loading && !ready && !error && <p className="text-xs text-gray-600">{readOnly ? 'Belum ada data presensi tersimpan untuk periode ini.' : 'Simpan file presensi dan rekap pada tab 2 terlebih dahulu.'}</p>}
+        {!loading && !ready && !error && <p className="text-xs text-gray-600">{readOnly ? 'Belum ada data presensi tersimpan untuk periode ini.' : 'Simpan file presensi dan rekap terlebih dahulu.'}</p>}
         {!loading && ready && files.length === 0 && <p className="text-xs text-gray-500">Belum ada dokumen pendukung pada pengumpulan ini.</p>}
         {['spt', 'cuti', ...Object.keys(EXTRA_TYPES)].map(type => {
           const group = files.filter(file => file.jenisDokumen === type);

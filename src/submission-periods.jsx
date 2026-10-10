@@ -3,6 +3,7 @@ import { Calendar, UploadCloud } from 'lucide-react';
 import { isRecapAdmin } from './monthly-recap-model.js';
 import { MONTH_NAMES, submissionPeriodCard } from './submission-period-model.js';
 import { EmployeeRecapPeriods } from './employee-recap-periods.jsx';
+import { YearSelect } from './year-select.jsx';
 
 export function SubmissionPeriods(props) {
   return props.adminMode && isRecapAdmin(props.user?.Akun_Role || props.user?.Role)
@@ -24,15 +25,13 @@ export function AdminPeriodCards({ modul, year, onSelect }) {
 
 function AdminSubmissionPeriods({ modul, onSelect, initialPeriod, onModuleChange }) {
   const [year, setYear] = useState(initialPeriod?.year || new Date().getFullYear());
-  const [draftYear, setDraftYear] = useState(String(year));
   return <section className="space-y-7 max-w-7xl mx-auto py-3" aria-label="Pilihan periode admin">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h2 className="text-xl lg:text-2xl font-extrabold text-slate-950">Penghitungan {modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan'}</h2>
-      <form className="flex flex-wrap items-center gap-2" onSubmit={event => { event.preventDefault(); const value = Number(draftYear); if (Number.isInteger(value) && value >= 2000 && value <= 9999) setYear(value); }}>
+      <div className="flex flex-wrap items-center gap-4">
         <select aria-label="Jenis penghitungan" value={modul} onChange={event => onModuleChange(event.target.value)} className="rounded-xl border bg-white p-2 text-sm"><option value="uang-makan">Uang Makan</option><option value="tukin">Tunjangan Kinerja</option></select>
-        <input aria-label="Tahun submisi" className="w-24 rounded-xl border bg-white p-2 text-sm" type="number" min="2000" max="9999" required value={draftYear} onChange={event => setDraftYear(event.target.value)}/>
-        <button className="rounded-xl bg-[#084C61] text-white px-3 py-2 text-sm">Tampilkan</button>
-      </form>
+        <YearSelect value={year} onChange={setYear} label="Tahun submisi"/>
+      </div>
     </div>
     <AdminPeriodCards modul={modul} year={year} onSelect={onSelect}/>
   </section>;

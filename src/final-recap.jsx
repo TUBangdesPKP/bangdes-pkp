@@ -24,7 +24,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     callbacks.current.onPreviewLoaded?.(null);
     setLoading(true); setError(''); setPreview(null); setChecked(false); setResolutions({}); setSchedules({}); setAdjustments({});
     sendClaimRequest(endpoint, { ...context, action: 'preview_rekap_final' }).then(result => {
-      if (!Array.isArray(result.rows) || !result.revision || !result.spreadsheetId) throw new Error('Perbarui backend Code.gs untuk mengaktifkan preview tab 4.');
+      if (!Array.isArray(result.rows) || !result.revision || !result.spreadsheetId) throw new Error('Perbarui backend Code.gs untuk mengaktifkan preview rekap.');
       if (!cancelled) {
         setPreview(result);
         callbacks.current.onPreviewLoaded?.(result);
@@ -90,7 +90,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
       <h2 className="text-lg font-extrabold text-[#084C61]">Preview Bukti {moduleLabel}</h2>
       <p className="text-sm text-gray-600">{readOnly ? 'Menampilkan presensi dan penyesuaian yang sudah tersimpan. Seluruh isian hanya dapat dilihat.' : 'Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.'}</p>
       <p className="text-xs text-teal-800">Adjustment maksimal 4 kejadian per bulan kalender, dihitung bersama Uang Makan dan Tukin. Jika datang dan pulang sama-sama kosong, hanya satu yang boleh dikoreksi. Jam koreksi digunakan untuk menghitung TL/PSW; absen yang masih kosong tetap dikenai potongan.</p>
-      {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap tab 2. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>}
+      {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap presensi. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan. File referensi tidak diunggah.</p>}
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
     {loading && <p role="status" className="p-5 text-sm">{readOnly ? 'Memuat preview tersimpan...' : 'memproses data terbaru'}</p>}
@@ -135,11 +135,21 @@ function SummaryStat({ value, label, danger = false }) {
 export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadAnother, readOnly = false }) {
   const [done, setDone] = useState(false);
   const [showNext, setShowNext] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const finish = async () => {
+    if (readOnly) { onDone?.(); return; }
+    if (submitting) return;
+    setSubmitting(true); setSubmitError('');
+    try { await onDone?.(); setDone(true); setShowNext(true); }
+    catch (error) { setSubmitError(error.message); }
+    finally { setSubmitting(false); }
+  };
   const top = useRef(null);
   useEffect(() => { top.current?.scrollIntoView({ block: 'start' }); }, [result]);
-  if (!result) return <div className="bg-white rounded-2xl p-6 space-y-4"><p>{readOnly ? 'Belum ada rekap tersimpan untuk periode ini.' : 'Periksa dan konfirmasi preview tab 4 sebelum melanjutkan.'}</p><button onClick={onBack} className="text-[#084C61] underline">Kembali ke tab 4</button></div>;
+  if (!result) return <div className="bg-white rounded-2xl p-6 space-y-4"><p>{readOnly ? 'Belum ada rekap tersimpan untuk periode ini.' : 'Periksa dan konfirmasi preview sebelum melanjutkan.'}</p><button onClick={onBack} className="text-[#084C61] underline">Kembali ke preview</button></div>;
   const calc = result.calculation;
-  if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">{readOnly ? 'Rincian perhitungan tersimpan belum tersedia untuk periode ini.' : 'Perbarui backend lalu lakukan perhitungan kembali di tab 4.'}<button onClick={onBack} className="block mt-3 underline">Kembali ke tab 4</button></div>;
+  if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">{readOnly ? 'Rincian perhitungan tersimpan belum tersedia untuk periode ini.' : 'Perbarui backend lalu lakukan perhitungan kembali melalui preview.'}<button onClick={onBack} className="block mt-3 underline">Kembali ke preview</button></div>;
   const { totals: t, amount: a } = calc, tukin = calc.modul === 'tukin';
   const reportedAdjustments = t.adjustmentReported ?? t.adjusted ?? 0;
   return <section ref={top} aria-label={'Hasil perhitungan ' + moduleLabel} className="space-y-4 max-w-6xl mx-auto">
@@ -171,7 +181,8 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadA
     <details className="rounded-xl border bg-white p-4 text-sm"><summary className="cursor-pointer font-bold">Rincian per tanggal dan sumber tarif</summary><div className="overflow-auto mt-3"><table className="w-full min-w-[720px] text-xs text-left"><thead><tr>{['Tanggal','Keterangan','Jam kerja','Wajib pulang','TL','PSW','Potongan absensi'].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{calc.days.map(day => <tr key={day.tanggal}><td className="p-2 border-b">{day.tanggal}</td><td className="p-2 border-b">{day.status}</td><td className="p-2 border-b">{day.jamKerja === 'ramadan' ? 'Ramadan' : 'Biasa'}</td><td className="p-2 border-b">{['WFO','WFA','WFH'].includes(day.status) ? day.wajibPulang : '—'}</td><td className="p-2 border-b">{day.tl ? 'TL ' + day.tl : '—'}</td><td className="p-2 border-b">{day.psw ? 'PSW ' + day.psw : '—'}</td><td className="p-2 border-b">{percent(day.potongan)}</td></tr>)}</tbody></table></div><p className="text-xs text-slate-500 mt-3">{Object.values(calc.sources || {}).join(' · ')}</p></details>
     {!readOnly && <div className="flex flex-wrap gap-5 text-sm text-[#084C61] underline"><a href={result.spreadsheetUrl} target="_blank" rel="noreferrer">Buka spreadsheet rekap</a>{result.note?.url && <a href={result.note.url} target="_blank" rel="noreferrer">Buka catatan perhitungan</a>}</div>}
     {done && <p role="status" className="bg-teal-50 text-teal-800 p-4 rounded-xl flex gap-2 items-center"><CheckCircle2 size={18}/>Selesai. Rekap dan catatan perhitungan sudah tersimpan.</p>}
-    <div className="grid grid-cols-2 gap-4"><button onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={!readOnly && !calc.complete} onClick={() => { if (readOnly) { onDone?.(); return; } setDone(true); setShowNext(true); onDone?.(); }} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">{readOnly ? 'Kembali ke Daftar Bulan' : 'Selesai'}</button></div>
+    {submitError && <p role="alert" className="text-sm text-red-700 bg-red-50 p-3 rounded-xl">{submitError}</p>}
+    <div className="grid grid-cols-2 gap-4"><button disabled={submitting} onClick={onBack} className="rounded-xl px-5 py-3 text-sm flex gap-2 items-center justify-center"><ArrowLeft size={16}/>Kembali</button><button disabled={submitting || (!readOnly && !calc.complete)} onClick={finish} className="rounded-xl bg-[#0E5B73] text-white font-bold px-5 py-3 text-sm disabled:opacity-40">{readOnly ? 'Kembali ke Daftar Bulan' : submitting ? 'Menyubmit...' : 'Selesai & Submit'}</button></div>
     {showNext && !readOnly && <div role="dialog" aria-modal="true" aria-label="Rekap sudah disimpan" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl max-w-md p-6 space-y-4 shadow-xl"><h3 className="font-bold text-[#084C61]">Rekap sudah disimpan</h3><p className="text-sm">Ingin mengunggah data pegawai lain?</p><div className="flex flex-wrap gap-3"><button autoFocus onClick={() => setShowNext(false)} className="border rounded-xl px-4 py-2 text-sm">Tetap di sini</button>{onUploadAnother && <button onClick={() => { setShowNext(false); onUploadAnother(); }} className="bg-[#084C61] text-white rounded-xl px-4 py-2 text-sm">Upload data lain</button>}</div></div></div>}
   </section>;
 }

@@ -4,14 +4,24 @@
 
 1. Perbarui `Code.gs` pada project Apps Script spreadsheet kepegawaian asli, lalu perbarui versi deployment Web App yang digunakan frontend.
 2. Deploy frontend terbaru. Tidak perlu menghapus spreadsheet maupun file presensi lama.
-3. Buka submisi, masuk tab 2. Daftar **Pegawai sudah terhitung** menampilkan hasil berstatus `Lengkap`, sesuai periode persis dan baris terakhir tiap NIP. Filter SubUnit hanya menyaring daftar, bukan isi ekspor.
-4. Klik **Buat Rekapan PNS & PPPK**. Buka tautan masing-masing hasil setelah sukses. Rekap untuk periode yang sama diperbarui dalam file yang sama, sehingga ID/link tetap.
+3. Pilih bulan di tab 1. Tab 2 menampilkan seluruh pegawai master, dipisah PNS/PPPK, abjad kiri-ke-kanan dalam enam kolom desktop. Klik nama untuk membuka tab 3. Jumlah centang hijau PNS, PPPK, dan total ada di kanan.
+4. Masukkan kunci dan verifikasi di server sebelum **Buat Rekapan PNS & PPPK** aktif. Hanya hasil lengkap yang sudah disubmit ikut diekspor. Rekap periode yang sama diperbarui dalam file yang sama, sehingga ID/link tetap.
 
 Admin berdasarkan Role pada Data_Pegawai memakai sesi login server. Akun Super Admin sintetis/lama yang belum mempunyai sesi memakai `WRAP_ADMIN_KEY` yang sama dengan publikasi wrap, bukan PIN login. Kunci tidak disimpan ke localStorage. Sesi yang kedaluwarsa memerlukan login ulang.
 
 ## Pilihan bulan/tahun dan akses submisi
 
 Admin memakai halaman **Penghitungan Uang Makan dan Tunjangan Kinerja**, dengan filter jenis dan tahun. Dua belas kartu langsung tersedia tanpa fetch status periode. **Pilih & Lanjut** membuka tab 2. Admin terverifikasi dapat mengelola semua bulan, terlepas dari flag status lama di Script Properties; API status lama dipertahankan untuk kompatibilitas tetapi tidak lagi membatasi penghitungan.
+
+Alur admin memiliki enam tab: **Bulan → Pegawai → Presensi → Bukti Dukung → Preview/penyesuaian → Hasil & Submit**. Rekap pribadi tetap lima tab baca-saja. Pemilih tahun menggunakan dropdown berlabel **Pilih Tahun**; mengganti tahun langsung mengganti kartu tanpa tombol Tampilkan.
+
+Pada tab 3, `presensi_tersimpan` memuat baseline hasil bacaan untuk NIP, modul, dan periode yang dipilih. Ini bukan mengunggah ulang PDF asli. **Ubah file presensi** membuka picker/drag-and-drop satu PDF/XLSX/XLS. **Batal mengganti file** mengembalikan preview tersimpan. NIP file harus sama dengan kartu pegawai.
+
+Pemeriksaan tanggal tidak lagi memangkas baris di luar periode atau menerima toleransi 10 hari. Setiap tanggal kalender dalam periode harus hadir tepat sekali, termasuk Sabtu/Minggu/libur. Jumlah terbaca ditampilkan terpisah dari jumlah yang diharapkan. Frontend dan backend menolak data hilang, ganda, atau di luar periode sebelum penyimpanan. Presensi lama yang tidak lengkap perlu diunggah ulang sebelum disubmit kembali. Upload pendukung lainnya, SPT, dan Cuti pada tab 4 mulai dalam keadaan tertutup.
+
+`list_pegawai_submisi`, `presensi_tersimpan`, dan `validasi_kunci_rekap` memerlukan sesi Admin yang diverifikasi server. Kunci rekap selalu diperiksa lagi saat membuat ekspor. Proses ini tidak menyimpan password di localStorage.
+
+Alur enam tab menulis `Submit_Status = Menunggu submit` ketika hasil perhitungan disimpan. **Selesai & Submit** di tab 6 memanggil `submit_rekap_final`, memeriksa revision dan kelengkapan hasil, lalu menyimpan `Disubmit`. Sebelum tahap ini, kartu tetap silang dan hasil tidak ikut ekspor/nominal kartu pribadi. Hasil lama tanpa kolom/status ini tetap diakui berdasarkan `Hitung_Status = Lengkap`; tidak memerlukan submit ulang massal. Perubahan presensi/bukti membatalkan kelengkapan sampai diperiksa dan disubmit kembali.
 
 Rekap pribadi terpisah untuk semua pegawai, termasuk yang memiliki Role Admin: kartu nominal membuka tab 5 dan tab 2–5 selalu baca-saja. Bulan kosong bertuliskan **Belum ada data**. Lihat [kartu rekap pegawai](README-KARTU-REKAP-PEGAWAI.md) dan [upload pendukung](README-UPLOAD-PENDUKUNG.md).
 
@@ -40,13 +50,13 @@ Identitas periode pada hasil ekspor:
 - Pencocokan NIP bersifat tepat dan berupa teks. Nama hanya fallback saat NIP template kosong dan nama unik. NIP/nama yang belum dihitung tidak diberi angka nol palsu. Pegawai terhitung yang belum ada di template dilaporkan agar barisnya ditambahkan, bukan dihilangkan diam-diam.
 - Penulisan menggunakan blok sel untuk mengurangi panggilan Apps Script. Bila penulisan gagal, data/formula/format sel lama dipulihkan dan file baru yang gagal dipindah ke Trash. Tidak ada perubahan pada template sumber.
 
-## Tab 4–5 dan arsip
+## Preview, hasil akhir, dan arsip
 
 Jam ditampilkan dan disimpan sebagai teks `HH:mm`, dengan `-` tetap berarti tidak ada presensi. Jam lama tanpa nol awal tetap dikenali sebagai waktu yang sama.
 
 Hasil tab 5 baru disimpan dalam sheet tersembunyi `_HASIL_PERHITUNGAN` pada file presensi pegawai dan diikat ke revision presensi/bukti. Hasil lama bisa dibuka dari ringkasan master tersimpan tanpa menghitung ulang nominal menggunakan tarif terbaru. Rincian tanggal hasil lama tetap tersedia di catatan perhitungan.
 
-Membuka hasil yang tidak berubah tidak menulis ulang. Perubahan bukti, jadwal, penyesuaian atau data presensi tetap membutuhkan pemeriksaan/simpan kembali. Tombol Selesai membuka pilihan Upload data lain atau Tetap di sini.
+Membuka hasil yang tidak berubah tidak menulis ulang. Perubahan bukti, jadwal, penyesuaian atau data presensi tetap membutuhkan pemeriksaan/simpan kembali. Tombol Selesai & Submit membuka pilihan Upload data lain (kembali ke daftar pegawai tab 2) atau Tetap di sini setelah server mengonfirmasi submit.
 
 Arsip akun pegawai non-Admin dibaca melalui `arsip_saya`, dengan NIP dari sesi server. Nama sama dengan NIP berbeda tidak ikut ditampilkan. Endpoint tidak mempercayai role atau NIP buatan browser. Ini membatasi fitur arsip aplikasi; pengaturan publikasi CSV/berbagi Drive yang sudah ada tidak diubah oleh pembaruan ini.
 

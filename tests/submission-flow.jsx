@@ -6,6 +6,7 @@ import '../src/index.css';
 let processed = false;
 let saved = null;
 const counts = {};
+const submittedEmployees = new Set(['199001012025010000']);
 const periodStatuses = new Map();
 const closedTest = new URLSearchParams(window.location.search).has('closedSaved');
 const storedFixture = p => ({status:'success',nip:p.nip,nama:p.nama,periode:p.periode,spreadsheetId:'mock-closed',spreadsheetUrl:'#mock-sheet',revision:'closed-revision',
@@ -21,6 +22,17 @@ window.fetch = async (_url, options) => {
   window.dispatchEvent(new Event('mock-request'));
   if (!options?.body) return new Response('Timestamp,NIP,Nama\n');
   const p = JSON.parse(options.body);
+  if(p.action==='list_pegawai_submisi') return Response.json({status:'success',rosterVersion:1,modul:p.modul,periode:p.periode,
+    employees:Array.from({length:48},(_,i)=>({nip:`19900101202501${String(i).padStart(4,'0')}`,nama:`Pegawai Simulasi ${String(i+1).padStart(2,'0')}`,jenisAsn:i<36?'PNS':'PPPK',submitted:submittedEmployees.has(`19900101202501${String(i).padStart(4,'0')}`)}))});
+  if(p.action==='validasi_kunci_rekap') return Response.json(p.adminKey==='kunci-simulasi'?{status:'success',verified:true}:{status:'error',message:'Kunci publikasi admin tidak valid.'});
+  if(p.action==='presensi_tersimpan') {
+    const parse=value=>{const [d,m,y]=value.split('-');return Date.UTC(+y,+m-1,+d);};
+    const [start,end]=p.periode.split(' s/d ').map(parse);
+    const rows=Array.from({length:(end-start)/86400000+1},(_,i)=>({tanggal:new Date(start+i*86400000).toISOString().slice(0,10),hari:'Hari uji',datang:'07:30',pulang:'17:00',keterangan:'WFO'}));
+    processed=true; saved=storedFixture({...p,nama:'Pegawai Simulasi 01'});
+    return Response.json({status:'success',attendanceVersion:1,modul:p.modul,periode:p.periode,nip:p.nip,nama:'Pegawai Simulasi',exists:!p.nip.endsWith('0047'),rows});
+  }
+  if(p.action==='submit_rekap_final') { submittedEmployees.add(p.nip); return Response.json({status:'success',submitted:true,nip:p.nip,modul:p.modul,periode:p.periode,revision:p.revision}); }
   if(p.action==='rekap_pegawai_tahunan') {
     if(p.nip!=='TEST'||p.sessionToken!=='mock-session') throw Error('Wrong annual recap session');
     return Response.json({status:'success',employeeRecapVersion:1,modul:p.modul,year:p.year,nip:p.nip,

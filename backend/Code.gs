@@ -613,7 +613,7 @@ function submissionRecord_(payload) {
   if (!sheet) return null;
   var rows = sheet.getDataRange().getValues();
   var wantedNip = nip_(payload.nip), wantedName = text_(payload.nama).toLowerCase();
-  if (!wantedNip && !wantedName) throw new Error('Identitas pegawai dari tab 2 diperlukan.');
+  if (!wantedNip && !wantedName) throw new Error('Pilih identitas pegawai terlebih dahulu.');
   if (!text_(payload.periode)) throw new Error('Periode pengumpulan diperlukan.');
   for (var i = rows.length - 1; i >= 1; i--) {
     var identityMatch = wantedNip ? nip_(rows[i][1]) === wantedNip : text_(rows[i][2]).toLowerCase() === wantedName;
@@ -625,11 +625,11 @@ function submissionRecord_(payload) {
   return null;
 }
 function recordedFolder_(record) {
-  if (!record || !record.folderId || !record.spreadsheetId) throw new Error('Simpan rekap presensi pada tab 2 terlebih dahulu.');
+  if (!record || !record.folderId || !record.spreadsheetId) throw new Error('Simpan rekap pada tahap presensi terlebih dahulu.');
   var folder = DriveApp.getFolderById(record.folderId);
   if (folder.isTrashed() || !folderUnder_(folder, ROOT_FOLDER_ID)) throw new Error('Folder rekap berada di luar folder pengumpulan.');
   var spreadsheet = DriveApp.getFileById(record.spreadsheetId);
-  if (spreadsheet.isTrashed() || !hasOnlyParent_(spreadsheet, folder.getId())) throw new Error('Lokasi file rekap tab 2 tidak sesuai. Periksa folder rekap.');
+  if (spreadsheet.isTrashed() || !hasOnlyParent_(spreadsheet, folder.getId())) throw new Error('Lokasi file rekap presensi tidak sesuai. Periksa folder rekap.');
   return folder;
 }
 // Read current master rows and the generated recap, never the original reference file.
@@ -956,7 +956,7 @@ function uploadAttachment_(payload) {
   else {
     if (!Array.isArray(payload.sptData) || !payload.sptData.some(function(item) {
       return nip_(item.nip) === record.nip && overlaps_(item.tanggalBerangkat, item.tanggalPulang, record.periode);
-    })) throw new Error('Dokumen harus memuat pegawai dari tab 2 dan tanggal dalam rentang submisi.');
+    })) throw new Error('Dokumen harus memuat pegawai yang dipilih dan tanggal dalam rentang submisi.');
     var result = saveArchive_(Object.assign({}, payload, { modul: type }));
     if (result.status !== 'success') throw new Error(result.message || 'Arsip belum berhasil direkap.');
     source = DriveApp.getFileById(result.fileId);
@@ -1023,7 +1023,7 @@ function doPost(e) {
     if (payload.action === 'tambah_pelatihan_jp') return json_(jpAdd_(payload));
     if (payload.action === 'hapus_pelatihan_jp') return json_(jpDelete_(payload));
     if (payload.action === 'set_periode_submisi') return json_(setSubmissionPeriod_(payload));
-    if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) {
+    if (['uang-makan','tukin'].indexOf(payload.modul)!==-1 && (!payload.action || ['submit_rekap_final','proses_bukti','simpan_rekap_final','klaim_dokumen','klaim_spt','klaim_cuti','upload_pendukung','upload_pendukung_lain','hapus_pendukung','hapus_klaim_spt','hapus_klaim_cuti'].indexOf(payload.action)!==-1)) {
       submissionAdmin_(payload);
       // Verified admins manage any month; employees remain read-only regardless of legacy period flags.
     }
@@ -1034,6 +1034,13 @@ function doPost(e) {
     if (payload.action === 'ubah_foto_profil') return json_(updateProfilePhoto_(payload));
     if (payload.action === 'ubah_pin') return json_(updateProfilePin_(payload));
     if (payload.action === 'list_submisi_terhitung') return json_(submissionCalculatedList_(payload));
+    if (payload.action === 'list_pegawai_submisi') return json_(submissionRoster_(payload));
+    if (payload.action === 'presensi_tersimpan') return json_(storedAttendance_(payload));
+    if (payload.action === 'validasi_kunci_rekap') {
+      requireSubmissionReader_(payload);
+      requireWrapAdmin_(payload);
+      return json_({status:'success',verified:true});
+    }
     if (payload.action === 'buat_rekap_submisi') return json_(createSubmissionRecaps_(payload));
     if (payload.action === 'arsip_saya') return json_(ownArchive_(payload));
     if (payload.action === 'list_arsip') return json_(managedArchiveList_(payload));
@@ -1049,6 +1056,7 @@ function doPost(e) {
     }
     if (payload.action === 'preview_rekap_final') return json_(previewFinal_(payload));
     if (payload.action === 'simpan_rekap_final') return json_(saveFinal_(payload));
+    if (payload.action === 'submit_rekap_final') return json_(submitFinal_(payload));
     if (payload.action === 'list_pendukung') return json_(listAttachments_(payload));
     if (['klaim_dokumen', 'klaim_spt', 'klaim_cuti'].indexOf(payload.action) !== -1) return json_(claimAttachment_(payload));
     if (payload.action === 'upload_pendukung') return json_(uploadAttachment_(payload));
@@ -1551,7 +1559,7 @@ function saveTab2Baseline_(book, workingSheet, data) {
 function savedPresensi_(record) {
   var book = SpreadsheetApp.openById(record.spreadsheetId), baseline = book.getSheetByName(BASELINE_SHEET);
   var working = baseline ? book.getSheets().filter(function(s) { return String(s.getSheetId()) === String(baseline.getRange(2, 1).getValue()); })[0] : book.getSheets()[0];
-  if (!working) throw new Error('Sheet rekap tab 2 tidak ditemukan.');
+  if (!working) throw new Error('Sheet rekap presensi tidak ditemukan.');
   var original = baseline || working;
   var data = original.getRange(6, 1, Math.max(1, original.getLastRow() - 5), 22).getDisplayValues();
   var rows = [], seen = {}, period = dateRangeFromPeriod_(record.periode);
@@ -1559,17 +1567,17 @@ function savedPresensi_(record) {
     if (text_(data[i][0]).toUpperCase() === 'TOTAL') break;
     if (!data[i].some(function(v) { return text_(v); })) break;
     var date = isoDate_(data[i][2]);
-    if (seen[date] || date < period[0] || date > period[1]) throw new Error('Tanggal presensi duplikat/di luar submisi. Simpan ulang tab 2.');
+    if (seen[date] || date < period[0] || date > period[1]) throw new Error('Tanggal presensi duplikat/di luar submisi. Simpan ulang pada tahap presensi.');
     seen[date] = true;
     rows.push({ tanggal: date, hari: text_(data[i][1]), datang: text_(data[i][3]), pulang: text_(data[i][4]), keteranganAwal: text_(data[i][21]) || '-' });
   }
-  if (!rows.length) throw new Error('Rekap tab 2 belum berisi data presensi.');
+  if (!rows.length) throw new Error('Rekap belum berisi data presensi.');
   var current = working.getRange(6, 1, rows.length, 22).getDisplayValues();
   var corrections = baseline ? JSON.parse(text_(baseline.getRange(5,2).getValue()) || '{}') : {};
   rows.forEach(function(row, i) {
     var changes = corrections[row.tanggal] || {};
     var validTime = function(punch,column) { var value=normalizedClock_(current[i][column]); return value===normalizedClock_(row[punch]) || (attendanceMinutes_(row[punch])===null && changes[punch] && value===normalizedClock_(changes[punch].time)); };
-    if (isoDate_(current[i][2]) !== row.tanggal || !validTime('datang',3) || !validTime('pulang',4)) throw new Error('Tanggal/jam rekap telah berubah. Simpan ulang tab 2 sebelum melanjutkan.');
+    if (isoDate_(current[i][2]) !== row.tanggal || !validTime('datang',3) || !validTime('pulang',4)) throw new Error('Tanggal/jam rekap telah berubah. Simpan ulang presensi sebelum melanjutkan.');
   });
   return { book: book, working: working, baseline: baseline, rows: rows, current: current };
 }
@@ -1610,7 +1618,7 @@ function finalState_(payload) {
 }
 function previewFinal_(payload) {
   var state = finalState_(payload);
-  if (!processedState_(state)) throw new Error('Klaim belum diproses atau sudah berubah. Klik Lanjut Proses pada tab 3.');
+  if (!processedState_(state)) throw new Error('Klaim belum diproses atau sudah berubah. Klik Lanjut Proses pada tahap bukti dukung.');
   return previewFromState_(state);
 }
 function previewFromState_(state) {
@@ -1632,7 +1640,8 @@ function previewFromState_(state) {
 function saveFinal_(payload) {
   if (payload.confirmed !== true) throw new Error('Konfirmasi pemeriksaan preview diperlukan.');
   var state = finalState_(payload);
-  if (!processedState_(state)) throw new Error('Klik Lanjut Proses pada tab 3 setelah perubahan klaim.');
+  if(payload.sixStep===true)validateTab2Data_({periode:state.record.periode,sheetData:state.saved.current});
+  if (!processedState_(state)) throw new Error('Klik Lanjut Proses pada tahap bukti dukung setelah perubahan klaim.');
   if (payload.revision !== state.revision) throw new Error('Data presensi atau klaim berubah. Muat ulang preview dan periksa kembali.');
   var decisions = payload.resolutions || {};
   Object.keys(decisions).forEach(function(date) {
@@ -1674,6 +1683,7 @@ function saveFinal_(payload) {
   state.saved.baseline.getRange(1, 3).setValue(new Date().toISOString());
   saveAdjustments_(state, corrections);
   writeCalculationMaster_(state.record, calculation, note);
+  if(payload.sixStep === true) writeSubmissionStatus_(state.record, 'Menunggu submit');
   SpreadsheetApp.flush();
   var revision = markProcessed_(payload, decisions, state);
   var response = { status: 'success', spreadsheetId: state.record.spreadsheetId, revision: revision,
@@ -1688,13 +1698,15 @@ function saveFinal_(payload) {
 
 function validateTab2Data_(payload) {
   var data = payload.sheetData, period = dateRangeFromPeriod_(payload.periode), seen = {};
-  if (!Array.isArray(data) || !data.length || data.length > 366) throw new Error('Data bacaan tab 2 diperlukan (maksimal 366 baris).');
+  if (!Array.isArray(data) || !data.length || data.length > 366) throw new Error('Data bacaan presensi diperlukan (maksimal 366 baris).');
   data.forEach(function(row) {
-    if (!Array.isArray(row) || row.length !== 22) throw new Error('Format rekap tab 2 harus 22 kolom.');
+    if (!Array.isArray(row) || row.length !== 22) throw new Error('Format rekap presensi harus 22 kolom.');
     var date = isoDate_(row[2]);
-    if (seen[date] || date < period[0] || date > period[1]) throw new Error('Tanggal tab 2 duplikat atau di luar periode.');
+    if (seen[date] || date < period[0] || date > period[1]) throw new Error('Tanggal presensi duplikat atau di luar periode.');
     seen[date] = true;
   });
+  var expected = Math.round((parseDate_(period[1]) - parseDate_(period[0])) / 86400000) + 1;
+  if (data.length !== expected) throw new Error('Presensi harus memuat tepat '+expected+' tanggal sesuai periode; terbaca '+data.length+' tanggal. Unggah ulang file lengkap.');
 }
 function invalidateProcessed_(record) {
   var sheet = SpreadsheetApp.openById(record.spreadsheetId).getSheetByName(BASELINE_SHEET);
@@ -2010,8 +2022,9 @@ function employeeAnnualRecaps_(payload) {
     if (period.year !== year) return;
     var status = text_(row[statusIndex]), value = row[amountIndex];
     // Latest submission replaces any older saved amount, including pending recalculations.
-    var saved = status === 'Lengkap' && typeof value === 'number' && isFinite(value) && value >= 0;
-    months[period.month-1] = {month:period.month, state:saved ? 'saved' : status === 'Lengkap' || status === 'Perlu penyesuaian' ? 'incomplete' : 'pending', netto:saved ? value : null};
+    var waiting = text_(row[headers.indexOf('Submit_Status')]) === 'Menunggu submit';
+    var saved = status === 'Lengkap' && !waiting && typeof value === 'number' && isFinite(value) && value >= 0;
+    months[period.month-1] = {month:period.month, state:saved ? 'saved' : waiting ? 'pending' : status === 'Lengkap' || status === 'Perlu penyesuaian' ? 'incomplete' : 'pending', netto:saved ? value : null};
   });
   return {status:'success', employeeRecapVersion:1, modul:payload.modul, year:year, nip:account.nip, months:months};
 }
@@ -2023,7 +2036,7 @@ function calculatedSubmissionRecords_(payload) {
   rows.slice(1).forEach(function(row){if(text_(row[3])===text_(payload.periode)&&nip_(row[1]))latest[nip_(row[1])]=row;});
   var master=book.getSheetByName('Data_Pegawai').getDataRange().getValues(), mh=master[0].map(function(h){return text_(h).toLowerCase().replace(/[^a-z0-9]/g,'');});
   var people={};master.slice(1).forEach(function(row){var id=nip_(row[mh.indexOf('nip')]);if(id){if(people[id])throw new Error('NIP ganda pada Data_Pegawai.');people[id]=row;}});
-  return Object.keys(latest).filter(function(id){return text_(latest[id][headers.indexOf('Hitung_Status')])==='Lengkap';}).map(function(id){
+  return Object.keys(latest).filter(function(id){return text_(latest[id][headers.indexOf('Hitung_Status')])==='Lengkap'&&text_(latest[id][headers.indexOf('Submit_Status')])!=='Menunggu submit';}).map(function(id){
     var row=latest[id], person=people[id];if(!person)throw new Error('Pegawai hasil perhitungan tidak ada di Data_Pegawai: '+id);
     var type=text_(person[mh.indexOf('jenisasn')]).toUpperCase();
     if(type==='PEGAWAI NEGERI SIPIL')type='PNS';if(type==='PEGAWAI PEMERINTAH DENGAN PERJANJIAN KERJA')type='PPPK';
@@ -2037,6 +2050,45 @@ function calculatedSubmissionRecords_(payload) {
 function submissionCalculatedList_(payload) {
   requireSubmissionReader_(payload);
   return {status:'success',employees:calculatedSubmissionRecords_(payload).map(function(row){return {nip:row.nip,nama:row.nama,unit:row.unit,jenisAsn:row.jenisAsn};})};
+}
+// All master employees, including those who have not uploaded or submitted anything.
+function submissionRoster_(payload) {
+  requireSubmissionReader_(payload);
+  submissionPeriod_(payload);
+  var book=SpreadsheetApp.openById(TARGET_SPREADSHEET_ID), master=book.getSheetByName('Data_Pegawai');
+  if(!master)throw new Error('Data_Pegawai belum tersedia.');
+  var data=master.getDataRange().getDisplayValues(), headers=(data[0]||[]).map(function(value){return text_(value).toLowerCase().replace(/[^a-z0-9]/g,'');});
+  var nipCol=headers.indexOf('nip'), nameCol=headers.indexOf('nama'), typeCol=headers.indexOf('jenisasn');
+  if(nipCol<0||nameCol<0||typeCol<0)throw new Error('Kolom NIP, Nama, dan Jenis_ASN diperlukan pada Data_Pegawai.');
+  var sheet=book.getSheetByName(eventSheetName_(payload.modul)), rows=sheet?sheet.getDataRange().getValues():[], rh=rows[0]||[], latest={};
+  rows.slice(1).forEach(function(row){if(text_(row[3])===text_(payload.periode)&&nip_(row[1]))latest[nip_(row[1])]=row;});
+  var seen={}, employees=[];
+  data.slice(1).forEach(function(row){
+    var nip=nip_(row[nipCol]);if(!nip)return;
+    if(seen[nip])throw new Error('NIP ganda pada Data_Pegawai: '+nip);seen[nip]=true;
+    var type=text_(row[typeCol]).toUpperCase();
+    if(type==='PEGAWAI NEGERI SIPIL')type='PNS';
+    if(type==='PEGAWAI PEMERINTAH DENGAN PERJANJIAN KERJA')type='PPPK';
+    var saved=latest[nip], amount=saved&&saved[rh.indexOf('Hitung_Netto')];
+    employees.push({nip:nip,nama:text_(row[nameCol]),jenisAsn:type,
+      submitted:!!saved&&text_(saved[rh.indexOf('Hitung_Status')])==='Lengkap'&&text_(saved[rh.indexOf('Submit_Status')])!=='Menunggu submit'&&typeof amount==='number'&&isFinite(amount)&&amount>=0});
+  });
+  employees.sort(function(a,b){return a.nama.localeCompare(b.nama,'id')||a.nip.localeCompare(b.nip);});
+  return {status:'success',rosterVersion:1,modul:payload.modul,periode:payload.periode,employees:employees};
+}
+function storedAttendance_(payload) {
+  requireSubmissionReader_(payload);
+  submissionPeriod_(payload);
+  if(!nip_(payload.nip))throw new Error('Pilih NIP pegawai terlebih dahulu.');
+  var record=submissionRecord_(payload);
+  var result={status:'success',attendanceVersion:1,modul:payload.modul,periode:payload.periode,nip:nip_(payload.nip),exists:!!record};
+  if(!record)return result;
+  recordedFolder_(record);
+  var saved=savedPresensi_(record);
+  result.nama=record.nama;
+  result.rows=saved.rows.map(function(row){return {tanggal:row.tanggal,hari:row.hari,datang:row.datang,pulang:row.pulang,keterangan:row.keteranganAwal};});
+  // Original PDF is intentionally not stored. Restore the immutable parsed baseline.
+  return result;
 }
 function submissionRecapFolder_(records) {
   var parent=null;
@@ -2390,6 +2442,23 @@ function calculationMasterTarget_(record) {
     if (nip_(values[i][1]) === record.nip && text_(values[i][3]) === record.periode && driveId_(values[i][9]) === record.spreadsheetId) return { sheet: sheet, row: i + 1, headers: values[0], values: values[i] };
   }
   throw new Error('Baris rekap pengumpulan tidak lagi cocok.');
+}
+function writeSubmissionStatus_(record, status) {
+  var target=calculationMasterTarget_(record), column=target.headers.indexOf('Submit_Status');
+  if(column<0){column=Math.max(10,target.headers.length);target.sheet.getRange(1,column+1).setValue('Submit_Status');}
+  if(column<10||target.headers.lastIndexOf('Submit_Status')>column)throw new Error('Kolom Submit_Status bentrok/duplikat.');
+  target.sheet.getRange(target.row,column+1).setValue(status);
+}
+function submitFinal_(payload) {
+  submissionAdmin_(payload);
+  if(payload.confirmed!==true)throw new Error('Konfirmasi submit rekap diperlukan.');
+  var state=finalState_(payload);
+  validateTab2Data_({periode:state.record.periode,sheetData:state.saved.current});
+  if(!processedState_(state)||payload.revision!==state.revision)throw new Error('Data berubah. Periksa kembali preview sebelum submit.');
+  var saved=readSavedFinalResult_(state);
+  if(!saved||!saved.calculation.complete)throw new Error('Selesaikan perhitungan sebelum submit.');
+  writeSubmissionStatus_(state.record,'Disubmit');
+  return {status:'success',submitted:true,nip:state.record.nip,modul:state.record.modul,periode:state.record.periode,revision:state.revision};
 }
 function invalidateCalculation_(record) {
   var target = calculationMasterTarget_(record), groups = [];

@@ -145,6 +145,83 @@ function fixture() {
 }
 
 const wrapKey = 'local-test-key-only-1234567890';
+
+test('admin roster includes unsubmitted master employees, checks server role and reads latest period status', () => {
+  const f=consolidatedFixture();
+  f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+  const people=f.master.getSheetByName('Data_Pegawai'), extra=[...people.rows[1]];
+  extra[0]='222222';extra[1]='Adi PPPK';extra[7]='PPPK';people.rows.push(extra);
+  const request={action:'list_pegawai_submisi',adminSessionToken};
+  const before=JSON.stringify(people.rows), result=f.rawCall(request);
+  assert.equal(result.status,'success',result.message);assert.equal(result.rosterVersion,1);
+  assert.equal(result.employees.length,2);assert.equal(result.employees[0].nama,'Adi PPPK');assert.equal(result.employees[0].submitted,false);
+  assert.equal(result.employees[1].submitted,true);assert.equal(JSON.stringify(people.rows),before);
+  assert.equal(f.rawCall({...request,adminSessionToken:undefined,role:'admin',adminKey:wrapKey}).status,'error');
+  const sheet=f.master.getSheetByName('REKAP_UANG_MAKAN'), latest=[...sheet.rows[1]];
+  latest[sheet.rows[0].indexOf('Hitung_Status')]='Menunggu perhitungan ulang';sheet.rows.push(latest);
+  assert.equal(f.rawCall(request).employees.find(row=>row.nip===f.scope.nip).submitted,false);
+  assert.equal(f.rawCall({...request,periode:'01-08-2026 s/d 31-08-2026'}).employees.filter(row=>row.submitted).length,0);
+  people.rows.push([...extra]);assert.match(f.rawCall(request).message,/NIP ganda/);
+});
+
+test('presensi restoration is read-only, exact-scope, restores baseline and requires an admin session', () => {
+  const f=consolidatedFixture();f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+  const request={action:'presensi_tersimpan',adminSessionToken};
+  const before=JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])]));
+  const result=f.rawCall(request);assert.equal(result.status,'success',result.message);assert.equal(result.attendanceVersion,1);assert.equal(result.exists,true);
+  assert.equal(result.rows.length,6);assert.equal(result.rows[0].tanggal,'2026-07-04');assert.equal(result.rows[0].datang,'08:10');
+  assert.equal(f.rawCall({...request,nip:'999999'}).exists,false);
+  assert.equal(f.rawCall({...request,periode:'01-08-2026 s/d 31-08-2026'}).exists,false);
+  assert.equal(f.rawCall({...request,adminSessionToken:undefined,adminKey:wrapKey}).status,'error');
+  assert.equal(JSON.stringify([...f.books].map(([id,book])=>[id,[...book.sheets].map(([name,sheet])=>[name,sheet.rows])])),before);
+  const employee=profileFixture(), sessionToken=employee.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  for(const action of ['presensi_tersimpan','list_pegawai_submisi','validasi_kunci_rekap']) assert.equal(employee.rawCall({action,sessionToken,role:'admin',adminKey:wrapKey}).status,'error');
+});
+
+test('recap key is verified on the server; tab 6 submit is revision-bound and later edits revoke the check', () => {
+  const f=consolidatedFixture();f.properties.set('LEGACY_ADMIN_PIN','062419');
+  const adminSessionToken=f.rawCall({action:'login_admin',pin:'062419'}).adminSessionToken;
+  const auth={adminSessionToken,adminKey:wrapKey};
+  assert.equal(f.rawCall({...auth,action:'validasi_kunci_rekap'}).verified,true);
+  assert.equal(f.rawCall({...auth,action:'validasi_kunci_rekap',adminKey:'wrong'}).status,'error');
+  assert.match(f.rawCall({...auth,action:'simpan_rekap_final',sixStep:true,revision:f.context.finalState_(f.scope).revision,confirmed:true}).message,/tepat 31 tanggal/);
+  assert.equal(f.rawCall({...auth,sheetData:fullJulyAttendance(f.working.rows.slice(5,-1)),ringkasan:{}}).status,'success');
+  assert.equal(f.rawCall({...auth,action:'proses_bukti'}).status,'success');
+  const saved=f.rawCall({...auth,action:'simpan_rekap_final',sixStep:true,revision:f.context.finalState_(f.scope).revision,confirmed:true});
+  assert.equal(saved.status,'success',saved.message);
+  const roster=()=>f.rawCall({...auth,action:'list_pegawai_submisi'}).employees[0];
+  assert.equal(roster().submitted,false);assert.equal(f.rawCall({...auth,action:'buat_rekap_submisi'}).status,'error');
+  const payload={...auth,action:'submit_rekap_final',confirmed:true,revision:saved.revision};
+  assert.equal(f.rawCall({...payload,revision:'stale'}).status,'error');
+  assert.equal(f.rawCall({...payload,adminKey:undefined}).status,'error');
+  assert.equal(f.rawCall(payload).submitted,true);assert.equal(roster().submitted,true);
+  assert.equal(f.rawCall(payload).submitted,true);
+  assert.equal(f.rawCall({...auth,action:'klaim_spt',sourceUrl:f.spt.getUrl()}).status,'success');
+  assert.equal(roster().submitted,false);assert.equal(f.rawCall(payload).status,'error');
+});
+
+test('server rejects missing, duplicate and outside dates before presensi writes', () => {
+  const f=fixture(), rows=fullJulyAttendance(f.working.rows.slice(5,-1)), before=JSON.stringify(f.master.getSheetByName('REKAP_UANG_MAKAN').rows);
+  for(const sheetData of [rows.slice(1),rows.filter((_,i)=>i!==14),[...rows,rows[0]],[rows[1],...rows.slice(1)],rows.map((row,i)=>i?row:row.map((v,col)=>col===2?'2026-08-01':v))]) {
+    const result=f.call({sheetData});assert.equal(result.status,'error');assert.match(result.message,/tanggal|Tanggal/);
+    assert.equal(JSON.stringify(f.master.getSheetByName('REKAP_UANG_MAKAN').rows),before);assert.equal(f.spreadsheet.trashed,false);
+  }
+  assert.doesNotThrow(()=>f.context.validateTab2Data_({...f.scope,sheetData:rows}));
+});
+
+function fullJulyAttendance(rows) {
+  return Array.from({length:31}, (_, index) => {
+    const date = `2026-07-${String(index+1).padStart(2,'0')}`;
+    const original = rows.find(row => row[2] === date);
+    if (original) return [...original];
+    const row = Array(22).fill(''), day = new Date(date).getUTCDay();
+    row[0]=index+1; row[1]=['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][day]; row[2]=date;
+    row[3]='07:30'; row[4]='17:00'; row[21]=day===0||day===6?'Libur':'WFO';
+    return row;
+  });
+}
 test('employee annual cards expose only own saved net amounts, preserve zero and invalidate stale amounts', () => {
   const f = profileFixture(), sessionToken = f.rawCall({action:'login_pegawai', pin:'012345'}).sessionToken;
   const sheet = f.master.getSheetByName('REKAP_UANG_MAKAN');
@@ -737,7 +814,7 @@ test('saving after manual recap removal repairs master row without duplicating i
     const evidence = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}).document;
     if (permanent) f.files.delete(f.spreadsheet.id); else f.spreadsheet.trashed = true;
     assert.equal(f.call({action:'check_status'}).exists, false);
-    const result = f.call({sheetData:f.working.rows.slice(5,-1),ringkasan:{}});
+    const result = f.call({sheetData:fullJulyAttendance(f.working.rows.slice(5,-1)),ringkasan:{}});
     assert.equal(result.status,'success',result.message);
     assert.equal(result.folderId,f.destination.id);
     assert.equal(f.master.getSheetByName('REKAP_UANG_MAKAN').rows.length,2);
@@ -823,7 +900,7 @@ test('direct upload retains archive and rekap after event copy is deleted; retry
 test('tab 2 creates only a recap, replaces old recap and preserves legacy original/evidence', () => {
   const f = fixture();
   const copy = f.call({action:'klaim_spt',sourceUrl:f.spt.getUrl()}).document;
-  const result = f.call({sheetData:f.working.rows.slice(5,-1),ringkasan:{}});
+  const result = f.call({sheetData:fullJulyAttendance(f.working.rows.slice(5,-1)),ringkasan:{}});
   assert.equal(result.status, 'success', result.message);
   assert.equal(result.folderId, f.destination.id);
   assert.equal(f.files.get(copy.fileId).trashed, false);
@@ -1515,6 +1592,7 @@ test('missing or zero rates are distinct and client monetary payload cannot over
 });
 test('note is reused after tab 2 replacement, but moved note and service failures cannot overwrite other files', () => {
   const f=fixture(); payrollFixture(f);
+  f.working.rows = [...f.working.rows.slice(0,5), ...fullJulyAttendance(f.working.rows.slice(5,-1)), ['TOTAL']];
   let preview=f.call({action:'proses_bukti'});
   const result=f.call({action:'simpan_rekap_final',revision:preview.revision,confirmed:true});
   const note=f.files.get(result.note.fileId), originalContent=note.content;

@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { attendanceExcelClocks, attendancePdfRows, extractCutiPeriod } from '../src/document-parsers.js';
 import { recognizeCutiImage, cutiOcrRegions } from '../src/cuti-ocr.js';
+import { validateAttendancePeriod } from '../src/attendance-period.js';
 
 const letter = `Jakarta, 21 Agustus 2026
 I. DATA PEGAWAI
@@ -57,7 +58,7 @@ const holidayContext=vm.createContext({});
 vm.runInContext(appSource.slice(appSource.indexOf('const DAFTAR_LIBUR_NASIONAL ='),appSource.indexOf('const removeTitlesFromName ='))+'\nglobalThis.holidays = DAFTAR_LIBUR_NASIONAL; globalThis.workdays = hitungHariKerjaAktif;',holidayContext);
 function reader(sheets, ocrText=letter, digitalText='', pdfPages=null) {
   const context=vm.createContext({
-    attendanceExcelClocks,attendancePdfRows,extractCutiPeriod,recognizeCutiImage,console,
+    attendanceExcelClocks,attendancePdfRows,extractCutiPeriod,recognizeCutiImage,validateAttendancePeriod,console,
     DAFTAR_LIBUR_NASIONAL:holidayContext.holidays,
     localStorage:{getItem:()=>JSON.stringify([{NIP:'199001012020011001',Nama:'Pegawai Uji'}])},
     parseIndoDate:value=>{const parts=value.split(' '), months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];return new Date(+parts[2],months.indexOf(parts[1].slice(0,3)),+parts[0]);},
@@ -79,6 +80,16 @@ const splitPdf = () => [
   [pdfItem('NIP: 199001012020011001',30,590),pdfItem('Total Data: 4 hari',700,590),...pdfHeaders(),pdfDate('Rabu, 9 September 2026',510),...pdfPunches('07:35 WIB','17:36 WIB',506),pdfDate('Selasa, 8 September 2026',70),pdfItem('Kantor 09:00',228,70),pdfItem('Halaman 1 dari 2',430,25)],
   [...pdfHeaders(),...pdfPunches('07:17 WIB','16:31 WIB',520),pdfDate('Senin, 7 September 2026',500),...pdfPunches('-','16:41 WIB',496),pdfDate('Minggu, 6 September 2026',480),...pdfPunches('-','-',476,'-'),pdfItem('TOTAL',400,450),pdfItem('20:00',158,450),pdfItem('Halaman 2 dari 2',430,25)],
 ];
+
+test('real PDF reader retains out-of-period rows and rejects incomplete selected periods', async () => {
+  const parse=reader({},'','',splitPdf());
+  const valid=await parse('presensi.pdf','uang-makan',{periodeEvent:'06-09-2026 s/d 09-09-2026'});
+  assert.equal(valid.isValid,true);
+  for (const periodeEvent of ['01-09-2026 s/d 30-09-2026','06-09-2026 s/d 08-09-2026']) {
+    const result=await parse('presensi.pdf','uang-makan',{periodeEvent});
+    assert.equal(result.rows.length,4); assert.equal(result.isValid,false); assert.equal(result.isDateMismatch,true);
+  }
+});
 
 test('digital PDF carries a split row across page headers and isolates arrival/departure from summary clocks',()=>{
   const rows=attendancePdfRows(splitPdf());
