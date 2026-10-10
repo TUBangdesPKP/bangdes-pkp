@@ -6,6 +6,7 @@ import { PkpLogo } from './pkp-logo.jsx';
 import { WrapPublication } from './wrap-publication.jsx';
 import { EmployeePhoto } from './employee-photo.jsx';
 import { subunitBadge, recapUnitLabels } from './subunit-badge.js';
+import { scrollRecapSection } from './monthly-recap-scroll.js';
 
 const dateLabel = value => value ? new Date(`${value}T12:00:00Z`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) : '—';
 const number = value => Number(value || 0).toLocaleString('id-ID');
@@ -32,7 +33,7 @@ function PunctualCard({ row, index }) {
 }
 
 export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
-  const wrapper = useRef(null), header = useRef(null);
+  const wrapper = useRef(null), header = useRef(null), content = useRef(null);
   const [month, setMonth] = useState(''), [unit, setUnit] = useState('');
   const [data, setData] = useState(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [reload, setReload] = useState(0);
   const [activeSection, setActiveSection] = useState('ringkasan');
@@ -40,10 +41,15 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
   const canChoosePeriod = !publicView && isRecapAdmin(role);
   useEffect(() => {
     if (!header.current) return;
-    const updateOffset = () => wrapper.current?.style.setProperty('--wrap-scroll-offset', `${header.current.getBoundingClientRect().height + 20}px`);
+    const updateOffset = () => {
+      wrapper.current?.style.setProperty('--wrap-scroll-offset', publicView ? `${header.current.getBoundingClientRect().height + 20}px` : '0px');
+      // Let even the last section align at the top of the body on tall screens.
+      if (!publicView && content.current) wrapper.current?.style.setProperty('--wrap-content-height', `${content.current.clientHeight}px`);
+    };
     updateOffset();
     const observer = new ResizeObserver(updateOffset);
     observer.observe(header.current);
+    if (!publicView && content.current) observer.observe(content.current);
     return () => observer.disconnect();
   }, [publicView]);
   useEffect(() => {
@@ -90,19 +96,32 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
     <button aria-label="Muat ulang rekap" title={publicView ? 'Muat ulang rekap yang dipublikasikan admin' : 'Muat ulang data terbaru'} disabled={loading || busy} onClick={() => setReload(value => value + 1)} className="p-2 border rounded-full bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''}/></button>
   </>;
 
-  return <div ref={wrapper} className={`${publicView ? 'w-full' : 'max-w-7xl mx-auto'} text-slate-800 [&_section[id]]:scroll-mt-[var(--wrap-scroll-offset,12rem)]`} aria-label="Rekap Bulanan">
-    <header ref={header} className={`sticky top-0 z-30 bg-[#F8FAFC] border-b border-slate-200 shadow-sm ${publicView ? '' : 'rounded-t-2xl'}`}>
+  const navigateSection = (event, id) => {
+    event.preventDefault();
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+    if (publicView) {
+      const section = wrapper.current?.querySelector(`[id="rekap-${id}"]`);
+      if (!section) return;
+      section.scrollIntoView({ behavior, block: 'start' });
+    } else if (!scrollRecapSection(content.current, id, behavior)) return;
+    setActiveSection(id);
+  };
+
+  return <div ref={wrapper} className={`${publicView ? 'w-full' : 'w-full flex-1 min-h-0 flex flex-col overflow-hidden'} text-slate-800 [&_section[id]]:scroll-mt-[var(--wrap-scroll-offset,12rem)]`} aria-label="Rekap Bulanan">
+    <header ref={header} data-testid="monthly-recap-banner" className={`${publicView ? 'sticky top-0' : 'shrink-0 relative'} z-30 bg-[#F8FAFC] border-b border-slate-200 shadow-sm`}>
       <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">{publicView && <PkpLogo className="!h-10 !w-10"/>}<div><h1 className={`${publicView ? 'text-sm md:text-base' : 'text-lg'} font-extrabold text-[#1C465F]`}>{publicView ? 'Direktorat Pembangunan Perumahan Perdesaan' : 'Rekap Kinerja & Kedisiplinan'}</h1>{!publicView && <p className="text-[11px] text-slate-500">Direktorat Pembangunan Perumahan Perdesaan</p>}</div></div>
         {publicView ? <a href="#/" className="flex items-center gap-2 text-xs font-medium text-slate-500 hover:text-[#0E5B73] py-2"><ArrowLeft size={14}/>Kembali ke Beranda</a> : <div className="flex flex-wrap items-center gap-2 text-xs">{periodControls}{filterControls}</div>}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Bagian rekap" className="flex gap-1 overflow-auto text-xs font-semibold max-w-full">{navigation.map(([id, label, Icon]) => <a key={id} href={`#rekap-${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={event => { event.preventDefault(); setActiveSection(id); document.getElementById(`rekap-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className={`flex items-center gap-2 px-3 py-2 rounded-full shrink-0 ${activeSection === id ? 'bg-cyan-100 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-100'}`}><Icon size={14}/>{label}</a>)}</nav>
+        <nav aria-label="Bagian rekap" className="flex gap-1 overflow-auto text-xs font-semibold max-w-full">{navigation.map(([id, label, Icon]) => <a key={id} href={`#rekap-${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={event => navigateSection(event, id)} className={`flex items-center gap-2 px-3 py-2 rounded-full shrink-0 ${activeSection === id ? 'bg-cyan-100 text-[#1C465F]' : 'text-slate-500 hover:bg-slate-100'}`}><Icon size={14}/>{label}</a>)}</nav>
         {publicView && <div className="flex flex-wrap items-center gap-2 text-xs">{filterControls}</div>}
       </div>
       </div>
     </header>
+    <div ref={content} data-testid="monthly-recap-content" className={publicView ? '' : 'flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar px-6 md:px-10 py-6'}>
+    <div className={publicView ? '' : 'max-w-7xl mx-auto'}>
     {loading && !data && <p role="status" className="p-8 text-slate-500">Memuat rekap bulanan...</p>}
     {error && <div role="alert" className="bg-amber-50 text-amber-900 rounded-xl p-4 my-4 text-sm max-w-7xl mx-auto">{error}{data && <p className="mt-1">Hasil terakhir tetap ditampilkan. Gunakan tombol muat ulang untuk mencoba lagi.</p>}</div>}
     {canChoosePeriod && <WrapPublication endpoint={endpoint} data={data} month={selectedMonth} loading={loading} onBusy={setBusy} onSaved={savePublication}/>}
@@ -150,7 +169,7 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
           <SectionTitle title="Saya Kalah Absen, Output Kerja Belum Tentu Kalah" detail="Catatan untuk evaluasi dan peningkatan kedisiplinan"/>
           <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4"><LeaderList title="Terlambat" rows={top('terlambat')} metric="terlambat" suffix="hari"/><LeaderList title="Pulang sebelum waktu" rows={top('psw')} metric="psw" suffix="hari"/><LeaderList title="Tidak Absen" rows={top('unadjusted')} metric="unadjusted" suffix="kejadian"/><LeaderList title="Lupa Absen dengan Adjustment" rows={top('adjustmentReported')} metric="adjustmentReported" suffix="catatan"/></div>
         </section>
-        <section id="rekap-dinas" className="scroll-mt-48 text-center">
+        <section id="rekap-dinas" className="scroll-mt-48 text-center" style={publicView ? undefined : { minHeight: 'var(--wrap-content-height, 0px)' }}>
           <SectionTitle title="Tujuan Perjalanan Dinas" detail="Tujuan pada surat tugas yang diklaim untuk rekap bulan ini"/>
           <div className="flex flex-wrap justify-center gap-3">{destinations.map(([name, count]) => <span key={name} className="border bg-white rounded-full px-4 py-2 text-xs">{name} <strong className="ml-2 bg-cyan-50 rounded-full px-2 py-1 text-[#1C465F]">{count}×</strong></span>)}</div>
           {!destinations.length && <p className="text-sm text-slate-500">Belum ada surat tugas yang tercatat untuk pilihan ini.</p>}
@@ -160,5 +179,7 @@ export function MonthlyRecap({ endpoint, publicView = false, role = '' }) {
       </div>}
       </div>
     </>}
+    </div>
+    </div>
   </div>;
 }

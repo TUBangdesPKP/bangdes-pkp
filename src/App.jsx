@@ -3494,8 +3494,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
         </div>
       </aside>
 
-      <main className={`flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full ${activeTab !== 'rekap' ? 'flex flex-col overflow-hidden' : 'p-6 md:p-10 overflow-y-auto'}`}>
-        <div className={`w-full ${activeTab !== 'rekap' ? 'h-full min-h-0 flex flex-col' : ''}`}>
+      <main className="flex-1 min-w-0 bg-[#F8FAFC] text-gray-900 h-full flex flex-col overflow-hidden">
+        <div className="w-full h-full min-h-0 flex flex-col">
           {currentView === 'penghitungan' && !isSubmissionAdmin ? <p role="alert" className="p-6">Halaman penghitungan hanya tersedia untuk Admin.</p> : activeTab === 'profil-saya' || (activeTab === 'rekap' && !isRecapAdmin(loggedInUser?.Akun_Role)) ? (
             <div className="overflow-y-auto h-full"><MyProfile endpoint={APPS_SCRIPT_URL} user={loggedInUser} onUpdate={onProfileUpdate} onRelogin={() => navigate('login')}/></div>
           ) : activeTab === 'rekap' ? (
