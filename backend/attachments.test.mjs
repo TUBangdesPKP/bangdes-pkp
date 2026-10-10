@@ -1709,7 +1709,7 @@ test('tukin template uses percentage points in I, preserves formulas and rolls p
   const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');
   const payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'}, period=f.context.submissionPeriod_(payload);
   assert.equal(period.label,'Januari 2027');
-  const plan=f.context.templateRecapPlan_(sheet,[{nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5,besaranTukin:6349000}],payload,period,[],46305);
+  const plan=f.context.templateRecapPlan_(sheet,[{nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5,besaranTukin:6349000,persenPotongan:0.75,nominalPotongan:47618}],payload,period,[],46305);
   assert.equal(plan.find(x=>x.row===10&&x.col===9).value,2.5);
   assert.equal(plan.find(x=>x.row===10&&x.col===12).value,6349000);
   assert.equal(plan.find(x=>x.row===10&&x.col===8).value,46305);
@@ -1721,19 +1721,20 @@ test('tukin template uses percentage points in I, preserves formulas and rolls p
   assert.equal(plan.find(x=>x.row===4&&x.col===4).value,payload.periode);
   assert.equal(f.context.templateRecapPlan_(sheet,[],payload,period,[]).find(x=>x.row===10&&x.col===9).value,'');
   assert.throws(()=>f.context.submissionPeriod_({modul:'tukin',periode:'01-11-2026 s/d 30-11-2026'}),/11 sampai 10/);
-  const director={nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:2.5,besaranTukin:6349000,directorExempt:true};
+  const director={nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:0,potonganSkp:0,besaranTukin:6349000,directorExempt:true};
   sheet.rows[9][10]='=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))';
-  sheet.rows[9][12]='=L10*(100-K10)/100';
+  sheet.rows[9][12]='=IF(N("PKP_DIREKTUR_NETTO")=0,L10,(L10*K10/100))';
   const directorPlan=f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305);
-  assert.equal(directorPlan.find(x=>x.row===10&&x.col===9).value,2.5);
+  assert.equal(directorPlan.find(x=>x.row===10&&x.col===9).value,0);
+  assert.equal(directorPlan.find(x=>x.row===10&&x.col===10).value,0);
   assert.equal(directorPlan.find(x=>x.row===10&&x.col===11).value,'=I10*30%+J10*70%');
   const exemption=directorPlan.find(x=>x.row===10&&x.col===13);
-  assert.equal(exemption.value,'=IF(N("PKP_DIREKTUR_NETTO")=0,L10,(L10*(100-K10)/100))');
-  sheet.rows[9][12]=exemption.value;
+  assert.equal(exemption.value,'=L10*K10/100');
+  sheet.rows[9][12]=0;
   assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===13).value,exemption.value);
   director.directorExempt=false;
   assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===11).value,'=I10*30%+J10*70%');
-  assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===13).value,'=L10*(100-K10)/100');
+  assert.equal(f.context.templateRecapPlan_(sheet,[director],payload,period,[],46305).find(x=>x.row===10&&x.col===13).value,'=L10*K10/100');
 });
 test('aggregate export restores existing spreadsheets after a second-file write failure', () => {
   const f=consolidatedFixture(), payload=recapRequest(f);
@@ -1745,6 +1746,26 @@ test('aggregate export restores existing spreadsheets after a second-file write 
   secondSheet.getRange=(...args)=>{const range=original(...args), write=range.setValues;range.setValues=values=>{if(fail){fail=false;throw Error('Injected second-file write failure');}return write(values);};return range;};
   assert.equal(f.call(payload).status,'error');assert.equal(JSON.stringify(firstSheet.rows),before);
   assert.equal(f.files.get(first.files[0].fileId).trashed,false);
+});
+
+test('restored Tukin formulas follow the employee row and preserve ordinary formulas',()=>{
+  const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');
+  const payload={modul:'tukin',periode:'11-11-2026 s/d 10-12-2026'}, period=f.context.submissionPeriod_(payload);
+  sheet.rows[10]=[...sheet.rows[9]];sheet.rows[9]=Array(14).fill('');
+  sheet.rows[10][10]=0;sheet.rows[10][12]=0;
+  const person={nip:f.scope.nip,nama:f.scope.nama,potonganAbsensi:0,potonganSkp:0,besaranTukin:6349000,directorExempt:true};
+  const plan=f.context.templateRecapPlan_(sheet,[person],payload,period,[],46305);
+  assert.equal(plan.find(x=>x.row===11&&x.col===10).value,0);
+  assert.equal(plan.find(x=>x.row===11&&x.col===11).value,'=I11*30%+J11*70%');
+  assert.equal(plan.find(x=>x.row===11&&x.col===13).value,'=L11*K11/100');
+  sheet.rows[10][9]='=100-G11';sheet.rows[10][10]='=((I11*30%)+(J11*70%))';sheet.rows[10][12]='=(K11/100)*L11';
+  person.directorExempt=false;person.potonganAbsensi=2.5;
+  const ordinary=f.context.templateRecapPlan_(sheet,[person],payload,period,[],46305);
+  assert.equal(ordinary.some(x=>[10,11,13].includes(x.col)),false);
+  person.directorExempt=true;person.potonganAbsensi=0;
+  const director=f.context.templateRecapPlan_(sheet,[person],payload,period,[],46305);
+  assert.equal(director.find(x=>x.row===11&&x.col===10).value,0);
+  assert.equal(director.some(x=>[11,13].includes(x.col)),false);
 });
 test('aggregate generation refuses stale sources and ambiguous template identities without writes', () => {
   const f=consolidatedFixture(), sheet=f.books.get(f.context.SUBMISSION_TEMPLATES['uang-makan'].PNS).getSheetByName('UM_BULAN');
@@ -1830,28 +1851,53 @@ test('Tukin export writes saved deduction to I and retains K formula on repeated
   assert.equal(f.call(payload).files[0].fileId,result.files[0].fileId);
 });
 
-test('Director export includes explicit zero percentages and full amount, migrates old tab/wrapper and restores nonexempt formulas',()=>{
+test('Director uses ordinary K/M formulas with saved zero I/J inputs and repairs old wrappers or literal zeros',()=>{
   const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
   f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
   const employee=f.master.getSheetByName('Data_Pegawai').rows[1];employee[13]='Direktur Pembangunan';employee[18]='70%';
   f.working.rows[7][3]='11:00';f.recapBook.getSheetByName(f.context.BASELINE_SHEET).rows[7][3]='11:00';
   const saved=confirmRecap(f);assert.equal(saved.status,'success',saved.message);
   assert.equal(saved.calculation.totals.potonganAbsensi,0);assert.equal(saved.calculation.amount.persenPotongan,0);assert.equal(saved.calculation.amount.potongan,0);
-  const template=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');template.rows[9][12]='=L10*(100-K10)/100';
+  const template=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');template.rows[9][12]='=L10*K10/100';
+  template.rows[9][6]=70; // Even a non-100 SKP must not penalize an exempt Director.
   const request=recapRequest(f), first=f.call(request);assert.equal(first.status,'success',first.message);
   const book=f.books.get(first.files[0].fileId), tab=book.getSheetByName('Tukin_Agustus'), id=tab.getSheetId();
   assert.equal(tab.rows[9][8],0);assert.equal(typeof tab.rows[9][8],'number');
-  assert.equal(tab.rows[9][10],'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))');
-  assert.equal(tab.rows[9][12],'=IF(N("PKP_DIREKTUR_NETTO")=0,L10,(L10*(100-K10)/100))');
+  assert.equal(tab.rows[9][9],0);
+  assert.equal(tab.rows[9][10],template.rows[9][10]);
+  assert.equal(tab.rows[9][12],template.rows[9][12]);
   tab.setName('TUKIN_BULAN');tab.rows[9][10]='=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))';
   employee[13]='Analis';employee[16]=9999999;
   const again=f.call(request);assert.equal(again.status,'success',again.message);
   assert.equal(again.files[0].fileId,first.files[0].fileId);assert.equal(tab.getSheetId(),id);assert.equal(tab.getName(),'Tukin_Agustus');
-  assert.equal(tab.rows[9][11],saved.calculation.amount.tarif);assert.match(tab.rows[9][12],/PKP_DIREKTUR_NETTO/);
-  assert.equal(tab.rows[9][10],'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))');
-  const resubmitted=confirmRecap(f);assert.equal(resubmitted.status,'success',resubmitted.message);
-  assert.equal(f.call(request).status,'success');assert.equal(tab.rows[9][12],'=L10*(100-K10)/100');
+  assert.equal(tab.rows[9][11],saved.calculation.amount.tarif);assert.equal(tab.rows[9][12],'=L10*K10/100');
   assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');
+  // Repair either old wrapper separator and the previous literal-zero export.
+  for(const separator of [',',';',null]) {
+    tab.rows[9][10]='=IF(N("PKP_DIREKTUR_TUKIN")=0'+separator+'0'+separator+'(I10*30%+J10*70%))';
+    tab.rows[9][12]='=IF(N("PKP_DIREKTUR_NETTO")=0'+separator+'L10'+separator+'(L10*K10/100))';
+    if(separator===null){tab.rows[9][10]=0;tab.rows[9][12]=0;}
+    const repaired=f.call(request);assert.equal(repaired.status,'success',repaired.message);
+    assert.equal(repaired.files[0].fileId,first.files[0].fileId);
+    assert.equal(tab.getSheetId(),id);
+    assert.equal(tab.rows[9][8],0);assert.equal(tab.rows[9][9],0);
+    assert.equal(tab.rows[9][11],saved.calculation.amount.tarif);
+    assert.equal(tab.getRange(10,11).getFormulas()[0][0],'=I10*30%+J10*70%');
+    assert.equal(tab.getRange(10,13).getFormulas()[0][0],'=L10*K10/100');
+    const percentage=tab.rows[9][8]*0.3+tab.rows[9][9]*0.7;
+    assert.equal(percentage,0);assert.equal(tab.rows[9][11]*percentage/100,0);
+  }
+  assert.equal(template.rows[9][10],'=I10*30%+J10*70%');
+  assert.equal(template.rows[9][12],'=L10*K10/100');
+  assert.equal(template.rows[9][9],'=100-G10');
+  const resubmitted=confirmRecap(f);assert.equal(resubmitted.status,'success',resubmitted.message);
+  assert.equal(f.call(request).status,'success');assert.equal(tab.rows[9][12],'=L10*K10/100');
+  assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');
+  assert.equal(tab.rows[9][9],resubmitted.calculation.amount.potonganSkp);
+  assert.equal(tab.rows[9][8],resubmitted.calculation.totals.potonganAbsensi);
+  assert.ok(tab.rows[9][9]>0);
+  const percentage=tab.rows[9][8]*0.3+tab.rows[9][9]*0.7;
+  assert.ok(Math.abs(percentage-resubmitted.calculation.amount.persenPotongan)<0.0001);
 });
 
 test('Director zero percentage survives six-step submit, personal recap, legacy reload and aggregate generation',()=>{
@@ -1880,7 +1926,7 @@ test('Director zero percentage survives six-step submit, personal recap, legacy 
   assert.equal(restored.calculation.amount.persenPotongan,0);assert.equal(restored.calculation.amount.potonganSkp,0);
   const exported=f.rawCall(request);assert.equal(exported.status,'success',exported.message);assert.equal(exported.employees,1);
   const tab=f.books.get(exported.files[0].fileId).getSheetByName('Tukin_Agustus');
-  assert.equal(tab.rows[9][8],0);assert.match(tab.rows[9][10],/PKP_DIREKTUR_TUKIN/);assert.equal(tab.rows[9][11],6349000);
+  assert.equal(tab.rows[9][8],0);assert.equal(tab.rows[9][9],0);assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');assert.equal(tab.rows[9][12],'=L10*K10/100');assert.equal(tab.rows[9][11],6349000);
 });
 
 test('explicit Director resubmit repairs old snapshot and notes without changing historical pay, attendance or evidence',()=>{

@@ -2297,7 +2297,7 @@ function submissionRecapFolder_(records) {
 function templateRecapPlan_(sheet, records, payload, period, holidays, generatedDate) {
   var meal=payload.modul==='uang-makan', first=meal?5:10, nipCol=meal?2:6, nameCol=meal?3:14;
   var values=sheet.getDataRange().getDisplayValues(), header=values[first-2]||[];
-  var totalFormulas=meal?[]:sheet.getRange(1,11,values.length,3).getFormulas();
+  var totalFormulas=meal?[]:sheet.getRange(1,10,values.length,4).getFormulas();
   if(text_(header[nipCol-1]).toUpperCase()!=='NIP'||text_(header[nameCol-1]).toLowerCase()!=='nama')throw new Error('Header NIP/Nama template tidak sesuai.');
   var byId={}, byName={}, seen={}, matched={}, changes=[];
   records.forEach(function(r){byId[r.nip]=r;var name=r.nama.toLowerCase().replace(/\s+/g,' ');(byName[name]||(byName[name]=[])).push(r);});
@@ -2327,22 +2327,22 @@ function templateRecapPlan_(sheet, records, payload, period, holidays, generated
       changes.push({row:i+1,col:8,value:person?generatedDate:'',format:'dd/mm/yyyy'});
       changes.push({row:i+1,col:9,value:person?person.potonganAbsensi:'',format:'0.00'});
       changes.push({row:i+1,col:12,value:person?person.besaranTukin:'',format:'#,##0'});
-      // Persist an explicit zero percentage for zero-deduction snapshots, while
-      // preserving original formulas for later non-exempt submissions.
-      var totalFormula=totalFormulas[i][0];
-      var directorFormula=/^=IF\(N\("PKP_DIREKTUR_TUKIN"\)=0,0,\(([\s\S]*)\)\)$/.exec(totalFormula);
-      if(person&&person.directorExempt===true&&person.persenPotongan===0){
-        var originalTotal=directorFormula?directorFormula[1]:totalFormula?totalFormula.slice(1):Number(values[i][10]||0);
-        if(!totalFormula&&!Number.isFinite(originalTotal))throw new Error('Kolom persentase potongan Tukin tidak valid: '+id);
-        changes.push({row:i+1,col:11,value:'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,('+originalTotal+'))'});
-      }else if(directorFormula)changes.push({row:i+1,col:11,value:'='+directorFormula[1]});
-      var receivedFormula=totalFormulas[i][2];
-      var receivedWrapper=/^=IF\(N\("PKP_DIREKTUR_NETTO"\)=0,L\d+,\(([\s\S]*)\)\)$/.exec(receivedFormula);
-      if(person&&person.directorExempt===true){
-        var original=receivedWrapper?receivedWrapper[1]:receivedFormula?receivedFormula.slice(1):Number(values[i][12]||0);
-        if(!receivedFormula&&!Number.isFinite(original))throw new Error('Kolom nominal diterima Tukin tidak valid: '+id);
-        changes.push({row:i+1,col:13,value:'=IF(N("PKP_DIREKTUR_NETTO")=0,L'+(i+1)+',('+original+'))'});
-      }else if(receivedWrapper)changes.push({row:i+1,col:13,value:'='+receivedWrapper[1]});
+      // Keep the same K/M formulas for every employee. The Director exemption
+      // belongs in the saved I/J inputs, never in a special result formula.
+      var skpFormula=totalFormulas[i][0];
+      if((person&&person.directorExempt===true)||!skpFormula){
+        if(person&&(!Number.isFinite(person.potonganSkp)||person.potonganSkp<0))throw new Error('Potongan SKP saat submit belum tersedia: '+id);
+        changes.push({row:i+1,col:10,value:person?person.potonganSkp:'',format:'0.00'});
+      }
+      var totalFormula=totalFormulas[i][1];
+      var directorFormula=/^=IF\(N\("PKP_DIREKTUR_TUKIN"\)=0[,;]0[,;]\(([\s\S]*)\)\)$/.exec(totalFormula);
+      if(directorFormula)changes.push({row:i+1,col:11,value:'='+directorFormula[1]});
+      else if(!totalFormula)changes.push({row:i+1,col:11,value:'=I'+(i+1)+'*30%+J'+(i+1)+'*70%',format:'0.00'});
+      var receivedFormula=totalFormulas[i][3];
+      var receivedWrapper=/^=IF\(N\("PKP_DIREKTUR_NETTO"\)=0[,;]L\d+[,;]\(([\s\S]*)\)\)$/.exec(receivedFormula);
+      if(receivedWrapper)changes.push({row:i+1,col:13,value:'='+receivedWrapper[1]});
+      // Recover ordinary formulas when the previous exporter wrote literal zeros.
+      else if(!receivedFormula)changes.push({row:i+1,col:13,value:'=L'+(i+1)+'*K'+(i+1)+'/100',format:'#,##0.00'});
       changes.push({row:i+1,col:4,value:period.monthName});changes.push({row:i+1,col:5,value:period.year});
     }
   }
@@ -2390,6 +2390,7 @@ function createSubmissionRecaps_(payload) {
     if(!snapshot||!snapshot.calculation.complete)throw new Error('Hasil tersimpan belum tersedia untuk '+record.nama+'. Periksa dan submit kembali.');
     record.potonganAbsensi=snapshot.calculation.totals.potonganAbsensi;
     record.persenPotongan=snapshot.calculation.amount.persenPotongan;
+    record.potonganSkp=snapshot.calculation.amount.potonganSkp;
     record.besaranTukin=snapshot.calculation.amount.tarif;
     record.directorExempt=snapshot.calculation.directorExempt===true;
     record.presenceByStatus=snapshot.calculation.presenceByStatus===true;
