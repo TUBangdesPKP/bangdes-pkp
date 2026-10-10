@@ -2076,6 +2076,7 @@ function ownArchive_(payload) {
 }
 function archiveActor_(payload) {
   if (payload.modul !== 'spt' && payload.modul !== 'cuti') throw new Error('Modul arsip tidak valid.');
+  if (payload.modul === 'cuti' && payload.scope === 'pribadi' && !payload.sessionToken) throw new Error('Rekap cuti pribadi memerlukan login akun pegawai dengan NIP.');
   if (payload.modul === 'spt' && !payload.sessionToken && payload.adminSessionToken) {
     requireSubmissionReader_({adminSessionToken:payload.adminSessionToken});
     return {nip:'Admin',admin:true};
@@ -2119,11 +2120,11 @@ function managedArchiveList_(payload) {
   var items = [];
   var owners = payload.modul === 'spt' ? archiveUploaders_() : {};
   rows.slice(1).forEach(function(row,i) {
-    if (!nip_(row[1]) || (payload.modul !== 'spt' && !actor.admin && nip_(row[1]) !== actor.nip)) return;
+    if (!nip_(row[1]) || (payload.modul !== 'spt' && (payload.scope === 'pribadi' || !actor.admin) && nip_(row[1]) !== actor.nip)) return;
     var canDelete = payload.modul === 'spt' ? owners[driveId_(row[9])] === actor.nip : actor.admin || nip_(row[1]) === actor.nip;
     items.push({archiveId:managedArchiveId_(payload.modul,i+2,row), canDelete:canDelete, timestamp:row[0], nip:nip_(row[1]), nama:row[2], tujuan:row[3], tanggalBerangkat:row[4], tanggalPulang:row[5], jumlahHari:row[6], bulan:row[7], tahun:row[8], linkAkses:row[9]});
   });
-  return {status:'success',items:items,canDeleteAll:payload.modul !== 'spt' && actor.admin};
+  return {status:'success',items:items,canDeleteAll:payload.modul !== 'spt' && payload.scope !== 'pribadi' && actor.admin};
 }
 function deleteManagedArchive_(payload) {
   var actor = archiveActor_(payload), ids = payload.archiveIds;
@@ -2139,7 +2140,7 @@ function deleteManagedArchive_(payload) {
     if (!Number.isInteger(rowNumber) || rowNumber < 2 || !row || !nip_(row[1]) || id !== managedArchiveId_(payload.modul,rowNumber,row)) throw new Error('Arsip sudah berubah. Muat ulang daftar sebelum menghapus.');
     if (payload.modul === 'spt') {
       if (owners[driveId_(row[9])] !== actor.nip) throw new Error('Hanya akun pengunggah yang boleh menghapus arsip surat tugas ini.');
-    } else if (!actor.admin && nip_(row[1]) !== actor.nip) throw new Error('Pegawai hanya boleh menghapus arsip miliknya sendiri.');
+    } else if ((payload.scope === 'pribadi' || !actor.admin) && nip_(row[1]) !== actor.nip) throw new Error('Pegawai hanya boleh menghapus arsip miliknya sendiri.');
     return {rowNumber:rowNumber, row:row};
   });
   var transaction = Utilities.getUuid(), now = new Date().toISOString();

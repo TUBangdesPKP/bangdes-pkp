@@ -4,6 +4,7 @@ import { isRecapAdmin } from './monthly-recap-model.js';
 import { MONTH_NAMES, submissionPeriodCard } from './submission-period-model.js';
 import { EmployeeRecapPeriods } from './employee-recap-periods.jsx';
 import { YearSelect } from './year-select.jsx';
+import { submissionTheme } from './submission-theme.js';
 
 export function SubmissionPeriods(props) {
   return props.adminMode && isRecapAdmin(props.user?.Akun_Role || props.user?.Role)
@@ -11,12 +12,13 @@ export function SubmissionPeriods(props) {
 }
 
 export function AdminPeriodCards({ modul, year, onSelect }) {
+  const theme = submissionTheme(modul, true);
   return <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 lg:gap-8">
     {MONTH_NAMES.map((name, index) => {
       const period = submissionPeriodCard(modul, year, index + 1, 'DIBUKA');
       return <section key={period.id} className="min-h-44 lg:min-h-48 rounded-[2rem] border border-slate-300 bg-white px-4 py-5 text-center flex flex-col items-center justify-between gap-4">
         <h3 className="text-xl lg:text-2xl font-extrabold text-slate-950">{name.toUpperCase()}</h3>
-        <button type="button" aria-label={`Pilih & Lanjut ${name} ${year}`} onClick={() => onSelect(period)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#143E50] px-5 py-3 text-sm font-bold text-white hover:bg-[#084C61] focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#084C61]"><UploadCloud size={17}/>Pilih &amp; Lanjut</button>
+        <button type="button" aria-label={`Pilih & Lanjut ${name} ${year}`} onClick={() => onSelect(period)} className={`flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold focus-visible:ring-2 focus-visible:ring-offset-2 ${theme.buttonClass}`}><UploadCloud size={17}/>Pilih &amp; Lanjut</button>
         <p className="flex items-center justify-center gap-1.5 text-xs text-slate-500"><Calendar size={13} className="shrink-0"/>{period.periodeLabel}</p>
       </section>;
     })}

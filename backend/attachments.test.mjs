@@ -695,6 +695,22 @@ function profileFixture() {
   return {...f,people:sheet};
 }
 
+test('admin personal leave lists only authenticated NIP and never expands after deleting',()=>{
+  const f=profileFixture(),sheet=f.master.getSheetByName('REKAP_CUTI');
+  f.people.rows[0][3]='Role';f.people.rows[1][3]='Admin';
+  const other=[...sheet.rows[1]];other[1]='654321';other[2]=sheet.rows[1][2];sheet.rows.push(other);
+  const sessionToken=f.call({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const auth={modul:'cuti',scope:'pribadi',sessionToken};
+  const list=f.call({...auth,action:'list_arsip',nip:'654321'});
+  assert.equal(list.status,'success');assert.equal(list.items.length,1);assert.equal(list.items[0].nip,'123456');assert.equal(list.canDeleteAll,false);
+  const foreign=f.context.managedArchiveId_('cuti',3,sheet.rows[2].map(String));
+  assert.equal(f.call({...auth,action:'hapus_arsip',archiveIds:[foreign]}).status,'error');
+  const deleted=f.call({...auth,action:'hapus_arsip',archiveIds:[list.items[0].archiveId]});
+  assert.equal(deleted.status,'success');assert.equal(deleted.items.length,0);assert.equal(sheet.rows[1][1],'654321');
+  assert.equal(f.call({...auth,scope:undefined,action:'list_arsip'}).items.length,1);
+  assert.equal(f.rawCall({action:'list_arsip',modul:'cuti',scope:'pribadi',adminKey:wrapKey}).status,'error');
+});
+
 for (const modul of ['cuti']) {
   test(`archive ${modul}: employee deletes only own row, preserving shared file and another employee`, () => {
     const f=profileFixture(), sheet=f.master.getSheetByName(modul==='spt'?'REKAP_SPT':'REKAP_CUTI');

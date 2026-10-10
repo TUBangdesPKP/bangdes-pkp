@@ -1,5 +1,13 @@
 import { BASE_LEAVE_TYPES } from './leave-recap-model.js';
 
+// Personal dashboard scope is independent of role; never match by display name.
+export function personalLeaveItems(items, user) {
+  const normalize = value => String(value || '').trim().replace(/^'/, '').trim();
+  const nip = normalize(user?.NIP);
+  if (!user?.sessionToken || !/^\d+$/.test(nip)) return [];
+  return items.filter(item => normalize(item.nip) === nip);
+}
+
 export function filterArchiveItems(items, { year = 'Semua', month = 'Semua', search = '' } = {}) {
   const query = search.trim().toLowerCase();
   return items.filter(item => (year === 'Semua' || String(item.tahun) === year) &&

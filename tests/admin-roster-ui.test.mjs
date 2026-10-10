@@ -4,6 +4,19 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
+import { submissionTheme } from '../src/submission-theme.js';
+
+test('admin Tukin cards and banner use khaki/black, while meal and personal recap keep teal', async()=>{
+  const {AdminPeriodCards}=await component('src/submission-periods.jsx');
+  const tukin=renderToStaticMarkup(React.createElement(AdminPeriodCards,{modul:'tukin',year:2026,onSelect:()=>{}}));
+  const meal=renderToStaticMarkup(React.createElement(AdminPeriodCards,{modul:'uang-makan',year:2026,onSelect:()=>{}}));
+  assert.equal((tukin.match(/bg-\[#D5C58A\] text-black/g)||[]).length,12);
+  assert.equal((meal.match(/bg-\[#143E50\] text-white/g)||[]).length,12);
+  assert.equal(submissionTheme('tukin',true).bannerStyle.backgroundColor,'#D5C58A');
+  assert.equal(submissionTheme('tukin',true).bannerStyle.color,'#000000');
+  assert.equal(submissionTheme('tukin',false).bannerStyle.backgroundColor,'#084C61');
+  assert.equal(submissionTheme('uang-makan',true).bannerStyle.backgroundColor,'#084C61');
+});
 
 async function component(path) {
   const bundle = await build({configFile:false,plugins:[react()],logLevel:'error',ssr:{noExternal:true},build:{ssr:path,write:false,emptyOutDir:false,rollupOptions:{external:['react','react/jsx-runtime','lucide-react']}}});

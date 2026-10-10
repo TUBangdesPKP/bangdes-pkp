@@ -2,9 +2,10 @@ import { useSubmissionDocuments } from './submission-documents.jsx';
 import { FinalRecap, FinalRecapSaved } from './final-recap.jsx';
 import { SubmissionSummary } from './submission-summary.jsx';
 import { SubmissionPeriods } from './submission-periods.jsx';
+import { submissionTheme } from './submission-theme.js';
 import { dashboardModules, canManageSubmission } from './dashboard-navigation.js';
 import { ArchiveLeaveSummary } from './archive-leave-summary.jsx';
-import { filterArchiveItems } from './archive-leave-summary-model.js';
+import { filterArchiveItems, personalLeaveItems } from './archive-leave-summary-model.js';
 import { ClosedSubmission } from './closed-submission.jsx';
 import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee, submissionViewerIsReadOnly } from './submission-period-model.js';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
@@ -264,7 +265,7 @@ const fetchLiveCutiData = async ({ throwOnError = false, loggedInUser } = {}) =>
     const rawCsvUrl = "https://docs.google.com/spreadsheets/d/1bIQbiWAQ67TYFmvb3WZkvjJaN1moP1fQlmegsFZJWfI/export?format=csv&gid=185022342";
     
     let text = '';
-    if (loggedInUser && !isRecapAdmin(loggedInUser.Akun_Role || loggedInUser.Role)) {
+    if (loggedInUser) {
       const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'arsip_saya', modul: 'cuti', sessionToken: loggedInUser.sessionToken });
       text = ownArchiveCsv(result.items || []);
     } else try {
@@ -1502,9 +1503,9 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [archiveNotice, setArchiveNotice] = useState('');
-  const needsArchiveKey = isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken && !(isSpt && loggedInUser?.adminSessionToken);
+  const needsArchiveKey = isSpt && isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken && !loggedInUser?.adminSessionToken;
   const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : isSpt && loggedInUser?.adminSessionToken ? {adminSessionToken: loggedInUser.adminSessionToken} : { adminKey: archiveAdminKey };
-  const normalizeArchiveItems = items => items.map(item => ({ ...item,
+  const normalizeArchiveItems = items => (isSpt ? items : personalLeaveItems(items, loggedInUser)).map(item => ({ ...item,
     tanggalBerangkat: standardizeDate(item.tanggalBerangkat), tanggalPulang: standardizeDate(item.tanggalPulang),
     tahun: String(item.tahun || ''), jumlahHari: item.jumlahHari,
   }));
@@ -1516,13 +1517,18 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     try {
       setArchiveError('');
       setCanDeleteAll(false);
+      if (!isSpt && !loggedInUser?.sessionToken) {
+        setSptDataList([]);
+        setArchiveNotice('Rekap cuti pribadi hanya tersedia untuk akun pegawai dengan NIP. Rekap seluruh pegawai tersedia di halaman Kepegawaian.');
+        return;
+      }
       if (needsArchiveKey && !archiveAdminKey) {
         const options = { loggedInUser, throwOnError: true };
         setSptDataList(isSpt ? await fetchLiveSptData(options) : await fetchLiveCutiData(options));
       } else {
-        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'list_arsip', modul, ...archiveAuth() });
+        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'list_arsip', modul, ...(!isSpt ? {scope:'pribadi'} : {}), ...archiveAuth() });
         setSptDataList(normalizeArchiveItems(result.items));
-        setCanDeleteAll(result.canDeleteAll === true);
+        setCanDeleteAll(isSpt && result.canDeleteAll === true);
       }
     } catch (e) {
       console.error(`Gagal memuat data ${labelSatuan}:`, e);
@@ -1535,7 +1541,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   useEffect(() => {
     loadData();
-  }, [modul, loggedInUser?.NIP]);
+  }, [modul, loggedInUser?.NIP, loggedInUser?.sessionToken]);
 
   const askDelete = (items, event) => {
     event.stopPropagation();
@@ -1547,9 +1553,9 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     setIsDeleting(true); setDeleteError('');
     try {
       const result = await sendClaimRequest(APPS_SCRIPT_URL, {
-        action: 'hapus_arsip', modul, ...archiveAuth(), archiveIds: deleteTargets.map(item => item.archiveId),
+        action: 'hapus_arsip', modul, ...(!isSpt ? {scope:'pribadi'} : {}), ...archiveAuth(), archiveIds: deleteTargets.map(item => item.archiveId),
       });
-      setSptDataList(normalizeArchiveItems(result.items)); setCanDeleteAll(result.canDeleteAll === true);
+      setSptDataList(normalizeArchiveItems(result.items)); setCanDeleteAll(isSpt && result.canDeleteAll === true);
       setDeleteTargets(null);
       setArchiveNotice(`${result.deleted} data arsip dihapus. File Drive dan klaim submisi sebelumnya tetap disimpan.`);
     } catch (error) {
@@ -1557,12 +1563,13 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     } finally { setIsDeleting(false); }
   };
 
+  const scopedArchiveItems = useMemo(() => isSpt ? sptDataList : personalLeaveItems(sptDataList, loggedInUser), [isSpt, sptDataList, loggedInUser?.NIP, loggedInUser?.sessionToken]);
   const availableYears = useMemo(() => {
-    const years = new Set(sptDataList.map(item => item.tahun).filter(y => y && y !== '-'));
+    const years = new Set(scopedArchiveItems.map(item => item.tahun).filter(y => y && y !== '-'));
     return Array.from(years).sort((a, b) => b - a);
-  }, [sptDataList]);
+  }, [scopedArchiveItems]);
 
-  const filteredArchiveItems = useMemo(() => filterArchiveItems(sptDataList, {year:filterYear,month:filterMonth,search:searchQuery}), [sptDataList,filterYear,filterMonth,searchQuery]);
+  const filteredArchiveItems = useMemo(() => filterArchiveItems(scopedArchiveItems, {year:filterYear,month:filterMonth,search:searchQuery}), [scopedArchiveItems,filterYear,filterMonth,searchQuery]);
   const filteredAndGroupedData = useMemo(() => {
     const filtered = filteredArchiveItems;
 
@@ -1654,6 +1661,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   return (
     <div className="pt-4">
+      {!isSpt && <p className="mb-4 text-sm text-[#084C61]">Rekap Cuti Pribadi — hanya menampilkan cuti akun yang sedang login. Rekap seluruh pegawai tersedia di halaman Kepegawaian.</p>}
       {needsArchiveKey && <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-sm">
         <label htmlFor="archive-admin-key" className="block font-bold mb-2">Kunci admin untuk menghapus arsip</label>
         <input id="archive-admin-key" type="password" autoComplete="off" value={archiveAdminKey} onChange={e => { setArchiveAdminKey(e.target.value); setSptDataList(items => items.map(({ archiveId, ...item }) => item)); setCanDeleteAll(false); }} className="border rounded-lg px-3 py-2 mr-2" />
@@ -3042,6 +3050,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   const documentModule = activeTab === 'cuti' ? 'cuti' : 'spt';
   const isPeriodSpt = activeTab === 'uang-makan' || activeTab === 'tukin';
   const isSubmissionAdmin = canManageSubmission(currentView, loggedInUser.Akun_Role || loggedInUser.Role);
+  const calculationTheme = submissionTheme(activeTab, isSubmissionAdmin);
   const viewingEmployee = selectedSubmissionEmployee(selectedRecap, activeTab, selectedPeriod, isSubmissionAdmin);
   const readOnlyPeriod = isPeriodSpt && submissionViewerIsReadOnly(selectedPeriod, isSubmissionAdmin, null);
 
@@ -3535,8 +3544,8 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
               {/* HEADER: banner + tab 1-5 — TIDAK ikut scroll */}
               <div className="shrink-0 bg-[#F8FAFC] pt-3 px-6 md:px-10 pb-3 border-b border-gray-200/60 shadow-[0_10px_20px_-15px_rgba(0,0,0,0.05)] z-20 relative">
                 <div 
-                  data-testid="submission-banner" className="rounded-2xl px-4 py-2 text-white mb-3 relative shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-2"
-                  style={{ backgroundColor: PALETTE_PKP.midnightGreen, borderBottom: `1px solid ${PALETTE_PKP.darkAqua}` }}
+                  data-testid="submission-banner" className="rounded-2xl px-4 py-2 mb-3 relative shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-2"
+                  style={calculationTheme.bannerStyle}
                 >
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -3547,7 +3556,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                       {isSubmissionAdmin ? `Penghitungan ${activeTab === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja'}` : `Rekap ${activeTab === 'uang-makan' ? 'Uang Makan' : 'Tunjangan Kinerja'}`}
                     </h2>
                   </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-200">
+                    <div className={`flex items-center gap-2 text-xs ${calculationTheme.mutedTextClass}`}>
                       <Calendar size={14} />
                       <span>
                         {selectedPeriod ? selectedPeriod.periodeLabel : isSubmissionAdmin ? 'Pilih bulan untuk mengelola rekap dan bukti dukung pegawai.' : 'Pilih bulan untuk melihat rekap pembayaran Anda.'}
@@ -3564,10 +3573,10 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   {selectedPeriod && isSubmissionAdmin && (
                     <div className="hidden lg:flex items-center gap-2 shrink-0">
                       <div className="text-right flex-1 hidden xl:block">
-                        <p className="text-xs text-gray-200 leading-snug font-medium">
-                          <strong className="text-white font-bold">{firstName}</strong>, lengkapi bukti dukung Anda
+                        <p className={`text-xs leading-snug font-medium ${calculationTheme.mutedTextClass}`}>
+                          <strong className="font-bold">{firstName}</strong>, lengkapi bukti dukung Anda
                         </p>
-                        <p className="text-[9px] text-teal-200 mt-0.5">Agar Rekening Makin Cuan</p>
+                        <p className={`text-[9px] mt-0.5 ${calculationTheme.khaki ? 'text-black' : 'text-teal-200'}`}>Agar Rekening Makin Cuan</p>
                       </div>
                       {loggedInUser?.Foto_Pegawai ? (
                         <img src={getDriveDirectUrl(loggedInUser.Foto_Pegawai)} alt="Avatar" className="w-8 h-8 rounded-full object-cover border border-white/40 shrink-0" />
@@ -3604,8 +3613,9 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                             : 'bg-[#D9EDF7] text-[#245D77] cursor-pointer hover:bg-[#C2E0F0]'
                         }`}
                         style={{ 
-                        backgroundColor: isActive ? PALETTE_PKP.midnightGreen : undefined,
-                        ringColor: isActive ? `${PALETTE_PKP.midnightGreen}30` : undefined 
+                        backgroundColor: isActive ? calculationTheme.bannerStyle.backgroundColor : undefined,
+                        color: isActive ? calculationTheme.bannerStyle.color : undefined,
+                        ringColor: isActive ? `${calculationTheme.bannerStyle.backgroundColor}30` : undefined
                       }}
                     >
                       {num}

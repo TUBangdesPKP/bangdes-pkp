@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { archiveLeaveSummary, filterArchiveItems } from '../src/archive-leave-summary-model.js';
+import { archiveLeaveSummary, filterArchiveItems, personalLeaveItems } from '../src/archive-leave-summary-model.js';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
+
+test('personal leave is NIP-scoped for all roles, never matching by name or falling back to all staff',()=>{
+  const rows=[{nip:"'001",nama:'Same',jumlahHari:3,tujuan:'Cuti Tahunan'},{nip:'002',nama:'Same',jumlahHari:5,tujuan:'Cuti Tahunan'}];
+  for(const Role of ['pegawai','admin','Super Administrator']) {
+    const personal=personalLeaveItems(rows,{NIP:'001',Nama:'Same',Role,sessionToken:'test'});
+    assert.equal(personal.length,1);assert.equal(archiveLeaveSummary(personal).rows[0].total,3);
+  }
+  assert.deepEqual(personalLeaveItems(rows,{NIP:'SUPERADMIN',adminSessionToken:'test'}),[]);
+  assert.deepEqual(personalLeaveItems(rows,{NIP:'001'}),[]);
+  assert.equal(archiveLeaveSummary(rows).rows.length,2);
+});
 
 test('leave archive summary separates identical names by NIP, combines types and preserves decimal/zero days',()=>{
   const rows=[{nip:'001',nama:'Same',tujuan:'Cuti Tahunan',jumlahHari:'2',bulan:'Mei',tahun:'2026'},
