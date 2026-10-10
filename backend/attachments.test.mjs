@@ -1830,27 +1830,57 @@ test('Tukin export writes saved deduction to I and retains K formula on repeated
   assert.equal(f.call(payload).files[0].fileId,result.files[0].fileId);
 });
 
-test('Director export retains submitted percentages and full amount, migrates old tab/wrapper and restores nonexempt formulas',()=>{
+test('Director export includes explicit zero percentages and full amount, migrates old tab/wrapper and restores nonexempt formulas',()=>{
   const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
   f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
   const employee=f.master.getSheetByName('Data_Pegawai').rows[1];employee[13]='Direktur Pembangunan';employee[18]='70%';
   f.working.rows[7][3]='11:00';f.recapBook.getSheetByName(f.context.BASELINE_SHEET).rows[7][3]='11:00';
   const saved=confirmRecap(f);assert.equal(saved.status,'success',saved.message);
-  assert.ok(saved.calculation.totals.potonganAbsensi>0);assert.ok(saved.calculation.amount.persenPotongan>0);assert.equal(saved.calculation.amount.potongan,0);
+  assert.equal(saved.calculation.totals.potonganAbsensi,0);assert.equal(saved.calculation.amount.persenPotongan,0);assert.equal(saved.calculation.amount.potongan,0);
   const template=f.books.get(f.context.SUBMISSION_TEMPLATES.tukin.PNS).getSheetByName('TUKIN_BULAN');template.rows[9][12]='=L10*(100-K10)/100';
   const request=recapRequest(f), first=f.call(request);assert.equal(first.status,'success',first.message);
   const book=f.books.get(first.files[0].fileId), tab=book.getSheetByName('Tukin_Agustus'), id=tab.getSheetId();
-  assert.equal(tab.rows[9][8],saved.calculation.totals.potonganAbsensi);
-  assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');
+  assert.equal(tab.rows[9][8],0);assert.equal(typeof tab.rows[9][8],'number');
+  assert.equal(tab.rows[9][10],'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))');
   assert.equal(tab.rows[9][12],'=IF(N("PKP_DIREKTUR_NETTO")=0,L10,(L10*(100-K10)/100))');
   tab.setName('TUKIN_BULAN');tab.rows[9][10]='=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))';
   employee[13]='Analis';employee[16]=9999999;
   const again=f.call(request);assert.equal(again.status,'success',again.message);
   assert.equal(again.files[0].fileId,first.files[0].fileId);assert.equal(tab.getSheetId(),id);assert.equal(tab.getName(),'Tukin_Agustus');
   assert.equal(tab.rows[9][11],saved.calculation.amount.tarif);assert.match(tab.rows[9][12],/PKP_DIREKTUR_NETTO/);
-  assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');
+  assert.equal(tab.rows[9][10],'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,(I10*30%+J10*70%))');
   const resubmitted=confirmRecap(f);assert.equal(resubmitted.status,'success',resubmitted.message);
   assert.equal(f.call(request).status,'success');assert.equal(tab.rows[9][12],'=L10*(100-K10)/100');
+  assert.equal(tab.rows[9][10],'=I10*30%+J10*70%');
+});
+
+test('Director zero percentage survives six-step submit, personal recap, legacy reload and aggregate generation',()=>{
+  const f=consolidatedFixture();f.scope.modul='tukin';f.scope.periode='11-06-2026 s/d 10-07-2026';
+  f.master.getSheetByName('REKAP_TUKIN').rows[1][3]=f.scope.periode;
+  const people=f.master.getSheetByName('Data_Pegawai');
+  people.rows[0][4]='PIN';people.rows[1][4]='012345';people.rows[1][13]='Direktur Pembangunan Perumahan Perdesaan';people.rows[1][18]='';
+  const sheetData=Array.from({length:30},(_,i)=>{
+    const day=new Date(Date.UTC(2026,5,11+i)), row=Array(22).fill('');
+    row[0]=i+1;row[1]='Hari';row[2]=day.toISOString().slice(0,10);row[3]='-';row[4]='-';row[21]=[0,6].includes(day.getUTCDay())?'Libur':'WFO';return row;
+  });
+  const auth={adminKey:wrapKey};
+  assert.equal(f.rawCall({...auth,sheetData,ringkasan:{}}).status,'success');
+  const preview=f.rawCall({...auth,action:'proses_bukti'});assert.equal(preview.status,'success',preview.message);
+  const saved=f.rawCall({...auth,action:'simpan_rekap_final',sixStep:true,confirmed:true,revision:preview.revision,adjustments:{invalid:'ignored for director'}});
+  assert.equal(saved.status,'success',saved.message);assert.equal(saved.calculation.complete,true);assert.deepEqual(saved.adjustments,{});
+  assert.equal(saved.calculation.amount.persenPotongan,0);assert.equal(saved.calculation.amount.netto,6349000);
+  assert.equal(f.rawCall({...auth,action:'submit_rekap_final',confirmed:true,revision:saved.revision}).submitted,true);
+  const request=recapRequest(f), roster=f.rawCall({...request,action:'list_pegawai_submisi'});
+  assert.equal(roster.employees[0].submitted,true);
+  const token=f.rawCall({action:'login_pegawai',pin:'012345'}).sessionToken;
+  const annual=f.rawCall({action:'rekap_pegawai_tahunan',sessionToken:token,year:2026});
+  assert.equal(annual.months.find(month=>month.month===8).netto,6349000);
+  f.recapBook.sheets.delete('_HASIL_PERHITUNGAN');
+  const restored=f.context.readSavedFinalResult_(f.context.finalState_(f.scope));
+  assert.equal(restored.calculation.amount.persenPotongan,0);assert.equal(restored.calculation.amount.potonganSkp,0);
+  const exported=f.rawCall(request);assert.equal(exported.status,'success',exported.message);assert.equal(exported.employees,1);
+  const tab=f.books.get(exported.files[0].fileId).getSheetByName('Tukin_Agustus');
+  assert.equal(tab.rows[9][8],0);assert.match(tab.rows[9][10],/PKP_DIREKTUR_TUKIN/);assert.equal(tab.rows[9][11],6349000);
 });
 
 test('meal regeneration migrates previous long tab names and rejects ambiguous target sheets',()=>{
@@ -1922,17 +1952,14 @@ test('Director title words exempt only Tukin deductions, preserving final claim 
   const f=fixture();
   const rows=[attendanceDay({datang:'11:00',pulang:'12:00'}),attendanceDay({datang:'-',pulang:'-',adjusted:1,adjustments:{datang:{fileId:'x',time:'09:00'}}}),
     ...['Dinas','Cuti','Libur','TB','WFA','WFH'].map(keterangan=>attendanceDay({keterangan,datang:'-',pulang:'-'}))];
-  for(const jabatan of ['Direktur','DIREKTUR PEMBANGUNAN PERUMAHAN PERDESAAN','Plt. Direktur Pembangunan',' direktur ']) for(const skp of [70,100]) {
+  for(const jabatan of ['Direktur','DIREKTUR PEMBANGUNAN PERUMAHAN PERDESAAN','Plt. Direktur Pembangunan',' direktur ']) for(const skp of [null,70,100]) {
     const calc=f.context.calculateAttendance_(rows,{...employeeRate,jabatan,skp},'tukin');
     f.context.addAdjustmentEvidenceCounts_(calc,[{jenisDokumen:'lupa_absen',fileId:'x'}]);
     assert.equal(calc.directorExempt,true);assert.equal(calc.complete,true);
     assert.equal(calc.totals.masuk,4);assert.equal(calc.totals.dinas,1);assert.equal(calc.totals.cuti,1);assert.equal(calc.totals.tb,1);assert.equal(calc.totals.libur,1);
-    const normal=f.context.calculateAttendance_(rows,{...employeeRate,jabatan:'Analis',skp},'tukin');
-    assert.equal(calc.totals.potonganAbsensi,normal.totals.potonganAbsensi);
-    assert.equal(calc.amount.persenPotongan,normal.amount.persenPotongan);
-    assert.ok(calc.totals.potonganAbsensi>0);assert.ok(calc.totals.terlambat>0);assert.ok(calc.totals.psw>0);
-    assert.equal(calc.totals.adjustmentReported,1);assert.equal(calc.totals.adjustmentDocuments,1);
-    assert.equal(calc.amount.netto,employeeRate.tukin);assert.equal(calc.amount.potongan,0);assert.equal(calc.amount.potonganSkp,100-skp);
+    for(const key of ['flexi','terlambat','psw','tidakMasuk','menitTelat','menitPsw','menitTanpaPresensi','totalMenit','potonganAbsensi','lupaAbsen','adjusted','unadjusted','adjustmentReported','adjustmentDocuments']) assert.equal(calc.totals[key],0,key);
+    assert.equal(calc.amount.persenPotongan,0);assert.equal(calc.amount.netto,employeeRate.tukin);assert.equal(calc.amount.potongan,0);assert.equal(calc.amount.potonganSkp,0);
+    assert.ok(calc.days.every(day=>day.flexiMenit===0&&day.tl===0&&day.psw===0&&day.potongan===0));
   }
   for(const jabatan of ['Analis Direktorat','Direktural','Admin','']) {
     const calc=f.context.calculateAttendance_([rows[0]],{...employeeRate,jabatan},'tukin');
@@ -1941,7 +1968,7 @@ test('Director title words exempt only Tukin deductions, preserving final claim 
   const missing=f.context.calculateAttendance_([rows[0]],{...employeeRate,jabatan:'Direktur',tukin:null},'tukin');
   assert.equal(missing.complete,false);assert.equal(missing.amount.netto,null);
   const noSkp=f.context.calculateAttendance_([rows[0]],{...employeeRate,jabatan:'Direktur',skp:null},'tukin');
-  assert.equal(noSkp.complete,false);assert.equal(noSkp.amount.persenPotongan,null);
+  assert.equal(noSkp.complete,true);assert.equal(noSkp.amount.persenPotongan,0);
 });
 
 test('Director meal pay uses WFO/WFA status without clocks, excludes Dinas and retains tax',()=>{
@@ -1969,7 +1996,9 @@ test('Director rules are server-derived, survive save/reload, and honor SPT clai
     if(modul==='tukin') {
       assert.deepEqual(saved.adjustments,{});
       const note=f.files.get(saved.note.fileId).content;assert.match(note,/Rumus Direktur/);assert.match(note,/potongan rupiah Rp0/);
-      assert.ok(saved.calculation.amount.persenPotongan>0);assert.ok(saved.calculation.totals.potonganAbsensi>0);
+      assert.equal(saved.calculation.amount.persenPotongan,0);assert.equal(saved.calculation.totals.potonganAbsensi,0);
+      const master=f.master.getSheetByName('REKAP_TUKIN');
+      for(const key of ['Hitung_Potongan_Absensi_Persen','Hitung_Potongan_Persen','Hitung_Potongan_Rp','Hitung_Hari_Flexi','Hitung_Hari_Terlambat','Hitung_Hari_PSW','Hitung_Tidak_Absen']) assert.equal(master.rows[1][master.rows[0].indexOf(key)],0,key);
     }
     person[13]='Analis';person[16]=9999999;
     const reopened=call({action:'preview_rekap_final'}).savedResult;

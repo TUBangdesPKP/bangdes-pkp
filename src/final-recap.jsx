@@ -54,7 +54,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     const other = punch === 'datang' ? 'pulang' : 'datang';
     const missing = !original || original === '-';
     const correction = adjustments[row.tanggal]?.[punch];
-    if (!missing || row.libur || !['WFO','WFA','WFH'].includes(status.toUpperCase())) return displayAttendanceTime(original);
+    if (directorExempt || !missing || row.libur || !['WFO','WFA','WFH'].includes(status.toUpperCase())) return displayAttendanceTime(original);
     return <div className="space-y-2 min-w-[170px]">
       <span className="text-gray-500">Asli: {original || '-'}</span>
       <label className="flex gap-2 items-center"><input type="checkbox" aria-label={`Koreksi ${punch} ${row.tanggal}`} checked={!!correction} disabled={saving || !preview?.adjustmentDocuments?.length || (!correction && !!adjustments[row.tanggal]?.[other])} onChange={e => changeCorrection(row.tanggal,punch,e.target.checked ? {time:'',fileId:preview.adjustmentDocuments[0].fileId} : null)}/>Koreksi {punch}</label>
@@ -71,7 +71,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
   const unresolved = conflicts.filter(row => !row.libur && !resolutions[row.tanggal]);
   const moduleLabel = context.modul === 'tukin' ? 'Tunjangan Kinerja' : 'Uang Makan';
   const previousResult = savedResult || preview?.savedResult;
-  const unchanged = previousResult?.revision === preview?.revision && !!previousResult?.calculation?.directorExempt === directorExempt && !!previousResult?.calculation?.presenceByStatus === presenceByStatus && (!directorExempt || previousResult?.calculation?.version === '2026-10-10-director-percent') && sameFinalReview(previousResult, { schedules, resolutions, adjustments });
+  const unchanged = previousResult?.revision === preview?.revision && !!previousResult?.calculation?.directorExempt === directorExempt && !!previousResult?.calculation?.presenceByStatus === presenceByStatus && (!directorExempt || previousResult?.calculation?.version === '2026-10-10-director-zero') && sameFinalReview(previousResult, { schedules, resolutions, adjustments });
   const save = async () => {
     if (readOnly) return;
     if (unchanged && !saving && !loading) { onSaved(previousResult); return; }
@@ -79,7 +79,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
     setSaving(true); setError('');
     try {
       const result = await sendClaimRequest(endpoint, { ...context, action: 'simpan_rekap_final',
-        revision: preview.revision, confirmed: true, resolutions, schedules, adjustments });
+        revision: preview.revision, confirmed: true, resolutions, schedules, adjustments: directorExempt ? {} : adjustments });
       if (result.spreadsheetId !== preview.spreadsheetId || !Array.isArray(result.rows)) throw new Error('Server belum mengonfirmasi spreadsheet rekap yang diperbarui.');
       if (!result.calculation) throw new Error('Backend belum menyediakan perhitungan. Deploy versi terbaru Code.gs terlebih dahulu.');
       if (alive.current) onSaved({ ...preview, ...result, revision: result.revision || null,
@@ -92,7 +92,7 @@ export function FinalRecap({ endpoint, context, onBack, onSaved, cachedPreview, 
       <h2 className="text-lg font-extrabold text-[#084C61]">Preview Bukti {moduleLabel}</h2>
       {presenceByStatus && context.modul === 'uang-makan' && <p className="text-sm text-teal-800">Uang makan Direktur mengikuti status WFO/WFA/WFH meskipun jam kosong. Hari yang diklaim sebagai Dinas dicatat terpisah dan tidak dibayar uang makan.</p>}
       <p className="text-sm text-gray-600">{readOnly ? 'Menampilkan presensi dan penyesuaian yang sudah tersimpan. Seluruh isian hanya dapat dilihat.' : 'Keterangan mengikuti klaim SPT/Cuti. Jam asli dipertahankan kecuali presensi kosong yang Anda koreksi dengan surat lupa absen. Sabtu, Minggu, dan Libur tetap Libur.'}</p>
-      {directorExempt && <p className="text-xs text-teal-800">Pengecualian Direktur: persentase potongan dan rincian kehadiran tetap dicatat, tetapi nominal potongan Tukin Rp0. Jumlah masuk mengikuti keterangan akhir setelah klaim.</p>}
+      {directorExempt && <p className="text-xs text-teal-800">Pengecualian Direktur: flexi, terlambat, PSW, tidak absen, dan adjustment tidak dihitung. Persentase potongan dicatat 0% dan nominal potongan Tukin Rp0. Jumlah masuk mengikuti keterangan akhir setelah klaim.</p>}
       {!readOnly && <p className="text-xs text-gray-500">Lanjut Proses telah memperbarui spreadsheet rekap presensi. Periksa hasil di bawah; jika ada konflik, tentukan keterangan akhirnya sebelum melanjutkan.</p>}
       <button type="button" disabled={loading || saving} onClick={() => setReload(v => v + 1)} className="flex gap-2 items-center text-sm text-[#084C61] disabled:opacity-50"><RefreshCw size={16}/>Muat ulang preview</button>
     </div>
@@ -155,6 +155,7 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadA
   if (!calc) return <div role="alert" className="p-6 bg-amber-50 rounded-2xl">{readOnly ? 'Rincian perhitungan tersimpan belum tersedia untuk periode ini.' : 'Perbarui backend lalu lakukan perhitungan kembali melalui preview.'}<button onClick={onBack} className="block mt-3 underline">Kembali ke preview</button></div>;
   const { totals: t, amount: a } = calc, tukin = calc.modul === 'tukin';
   const directorExempt = tukin && calc.directorExempt === true;
+  const directorZero = directorExempt && a.persenPotongan === 0;
   const reportedAdjustments = t.adjustmentReported ?? t.adjusted ?? 0;
   return <section ref={top} aria-label={'Hasil perhitungan ' + moduleLabel} className="space-y-4 max-w-6xl mx-auto">
     <header className="bg-[#0E5B73] text-white rounded-2xl px-5 py-4"><h2 className="font-extrabold text-lg">{result.nama}</h2><p className="text-sm mt-1">NIP {result.nip}</p><p className="text-sm">{calc.jabatan || 'Jabatan belum tersedia'}</p><p className="text-xs mt-2 text-cyan-100">{result.periode} · {moduleLabel}</p></header>
@@ -166,13 +167,13 @@ export function FinalRecapSaved({ result, moduleLabel, onBack, onDone, onUploadA
         {tukin && <div className="flex justify-between gap-3 text-sm"><span>Besaran Tunjangan</span><strong>{rupiah(a.tarif)}</strong></div>}
         <div className="rounded-xl bg-white border border-slate-300 p-4 space-y-3 text-sm flex-1">
           <h4 className="font-bold">Rincian {moduleLabel}</h4>
-          {tukin ? <><div className="flex justify-between gap-3"><span>Persentase SKP</span><strong>{percent(a.skp)}</strong></div><div className="flex justify-between gap-3"><span>Potongan SKP (100% − SKP)</span><span>{percent(a.potonganSkp)}</span></div><div className="flex justify-between gap-3"><span>Potongan Absensi</span><span>{percent(t.potonganAbsensi)}</span></div><div className="border-t border-dashed pt-3 text-xs text-slate-600 space-y-2"><p>Bobot SKP 70% + Kehadiran 30%</p><p>(70% × {percent(a.potonganSkp)}) + (30% × {percent(t.potonganAbsensi)})</p><p className="bg-slate-100 p-2 rounded">Total potongan: {percent(a.persenPotongan)}</p></div></> : <><div className="flex justify-between gap-3"><span>Jumlah Hari Masuk Kerja</span><strong>{t.masuk} Hari</strong></div><div className="flex justify-between gap-3"><span>Besaran Uang Makan</span><strong>{rupiah(a.tarif)}</strong></div><div className="border-t border-dashed pt-3 text-xs text-slate-600"><p>Hari Masuk Kerja × Besaran Uang Makan</p><p className="mt-2">{t.masuk} × {rupiah(a.tarif)} = <strong>{rupiah(a.bruto)}</strong></p></div></>}
+          {directorZero ? <p className="text-teal-800">Pengecualian Direktur: potongan absensi 0%, potongan SKP 0%, dan total potongan 0%. Besaran Tukin diterima penuh.</p> : tukin ? <><div className="flex justify-between gap-3"><span>Persentase SKP</span><strong>{percent(a.skp)}</strong></div><div className="flex justify-between gap-3"><span>Potongan SKP (100% − SKP)</span><span>{percent(a.potonganSkp)}</span></div><div className="flex justify-between gap-3"><span>Potongan Absensi</span><span>{percent(t.potonganAbsensi)}</span></div><div className="border-t border-dashed pt-3 text-xs text-slate-600 space-y-2"><p>Bobot SKP 70% + Kehadiran 30%</p><p>(70% × {percent(a.potonganSkp)}) + (30% × {percent(t.potonganAbsensi)})</p><p className="bg-slate-100 p-2 rounded">Total potongan: {percent(a.persenPotongan)}</p></div></> : <><div className="flex justify-between gap-3"><span>Jumlah Hari Masuk Kerja</span><strong>{t.masuk} Hari</strong></div><div className="flex justify-between gap-3"><span>Besaran Uang Makan</span><strong>{rupiah(a.tarif)}</strong></div><div className="border-t border-dashed pt-3 text-xs text-slate-600"><p>Hari Masuk Kerja × Besaran Uang Makan</p><p className="mt-2">{t.masuk} × {rupiah(a.tarif)} = <strong>{rupiah(a.bruto)}</strong></p></div></>}
         </div>
         <div className="flex justify-between gap-3 text-sm border-b pb-3"><span>Potongan ({percent(a.persenPotongan)}){!tukin && ' sesuai Data_Pegawai'}</span><strong className="text-red-600">{a.potongan === null ? 'Belum dapat dihitung' : '− ' + rupiah(a.potongan)}</strong></div>
         <div className="flex justify-between gap-3 items-center py-2"><strong className="text-sm">{tukin ? 'Tunjangan' : 'Uang Makan'} diterima</strong><strong className="text-xl text-[#0E5B73]">{rupiah(a.netto)}</strong></div>
       </div>
       <div className="space-y-4">
-        {directorExempt && <div className="rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-900"><h3 className="font-bold mb-2">Pengecualian Direktur</h3><p>Persentase potongan tetap tercatat. Nominal potongan Tukin Rp0 dan besaran Tukin diterima penuh. Jumlah masuk mengikuti keterangan akhir setelah klaim SPT/Cuti.</p></div>}
+        {directorExempt && <div className="rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-900"><h3 className="font-bold mb-2">Pengecualian Direktur</h3><p>Persentase potongan tersimpan: {percent(a.persenPotongan)}. {directorZero ? 'Flexi, terlambat, PSW, tidak absen, dan adjustment tidak dihitung.' : 'Hasil ini memakai aturan saat disimpan. Hitung dan submit ulang untuk menerapkan aturan Direktur 0%.'} Nominal potongan Tukin Rp0 dan besaran Tukin diterima penuh. Jumlah masuk mengikuti keterangan akhir setelah klaim SPT/Cuti.</p></div>}
         <div className="rounded-xl border border-slate-300 bg-slate-50 p-4"><h3 className="font-bold flex items-center gap-2 mb-3"><AlertCircle size={18}/>Catatan Perbaikan Diri</h3><div className="grid grid-cols-2 gap-3"><SummaryStat value={t.flexi} label="Datang Flexi (hari)"/><SummaryStat value={t.terlambat} label="Terlambat (hari)"/><SummaryStat value={t.psw} label="Pulang Sebelum Waktunya (hari)"/><div className="rounded-2xl border border-slate-300 bg-white p-3 text-center text-xs space-y-2">
           <strong className="text-xl">{reportedAdjustments}</strong><p>Lupa Absen dengan Adjustment</p>
           <p className="font-semibold text-red-700">{t.unadjusted ?? 0} Tidak Absen (kejadian)</p>

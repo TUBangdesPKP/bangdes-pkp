@@ -43,13 +43,16 @@ test('closed preview disables editing and saved recap has no save/upload/editor 
       assert.match(directorHtml,/text-teal-700">1 Hari/);
       if(modul==='tukin') {
         assert.match(directorHtml,/Pengecualian Direktur/);
-        assert.match(directorHtml,/aria-label="Koreksi/);
+        assert.doesNotMatch(directorHtml,/aria-label="Koreksi/);
         assert.doesNotMatch(directorHtml,/Adjustment maksimal/);
         const directorSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:{...result,calculation:{...result.calculation,directorExempt:true,presenceByStatus:true}},moduleLabel:modul}));
         assert.match(directorSaved,/besaran Tukin diterima penuh/);
         assert.match(directorSaved,/Bobot SKP 70%/);
         assert.match(directorSaved,/Nominal potongan Tukin Rp0/);
         assert.match(directorSaved,/Catatan Perbaikan Diri/);
+        const zeroSaved=renderToStaticMarkup(React.createElement(FinalRecapSaved,{result:{...result,calculation:{...result.calculation,directorExempt:true,amount:{tarif:6349000,skp:70,persenPotongan:0,potonganSkp:0,potongan:0,netto:6349000}}},moduleLabel:modul}));
+        assert.match(zeroSaved,/total potongan 0%/);assert.match(zeroSaved,/Potongan \(0,00%\)/);
+        assert.doesNotMatch(zeroSaved,/Bobot SKP 70%/);
       } else {
         assert.match(directorHtml,/Dinas dicatat terpisah dan tidak dibayar uang makan/);
         assert.match(directorHtml,/aria-label="Koreksi/);
