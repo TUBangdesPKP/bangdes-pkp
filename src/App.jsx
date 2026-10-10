@@ -7,7 +7,7 @@ import { dashboardModules, canManageSubmission } from './dashboard-navigation.js
 import { ArchiveLeaveSummary } from './archive-leave-summary.jsx';
 import { filterArchiveItems, personalLeaveItems } from './archive-leave-summary-model.js';
 import { ClosedSubmission } from './closed-submission.jsx';
-import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee, submissionViewerIsReadOnly } from './submission-period-model.js';
+import { submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, submissionInternalStep, submissionRouteStep, submissionTabAvailable, selectedSubmissionEmployee, submissionViewerIsReadOnly } from './submission-period-model.js';
 import { ownArchiveCsv, sameFinalReview } from './recap-review.js';
 import { MonthlyRecap } from './monthly-recap.jsx';
 import { isRecapAdmin } from './monthly-recap-model.js';
@@ -1503,9 +1503,11 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [archiveNotice, setArchiveNotice] = useState('');
-  const needsArchiveKey = isSpt && isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role) && !loggedInUser?.sessionToken && !loggedInUser?.adminSessionToken;
-  const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : isSpt && loggedInUser?.adminSessionToken ? {adminSessionToken: loggedInUser.adminSessionToken} : { adminKey: archiveAdminKey };
-  const normalizeArchiveItems = items => (isSpt ? items : personalLeaveItems(items, loggedInUser)).map(item => ({ ...item,
+  const archiveAdmin = isRecapAdmin(loggedInUser?.Akun_Role || loggedInUser?.Role);
+  const needsArchiveKey = archiveAdmin && !loggedInUser?.sessionToken && !loggedInUser?.adminSessionToken;
+  const archiveScope = !isSpt && !archiveAdmin ? {scope:'pribadi'} : {};
+  const archiveAuth = () => loggedInUser?.sessionToken ? { sessionToken: loggedInUser.sessionToken } : loggedInUser?.adminSessionToken ? {adminSessionToken: loggedInUser.adminSessionToken} : { adminKey: archiveAdminKey };
+  const normalizeArchiveItems = items => (isSpt || archiveAdmin ? items : personalLeaveItems(items, loggedInUser)).map(item => ({ ...item,
     tanggalBerangkat: standardizeDate(item.tanggalBerangkat), tanggalPulang: standardizeDate(item.tanggalPulang),
     tahun: String(item.tahun || ''), jumlahHari: item.jumlahHari,
   }));
@@ -1517,18 +1519,18 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     try {
       setArchiveError('');
       setCanDeleteAll(false);
-      if (!isSpt && !loggedInUser?.sessionToken) {
+      if (!isSpt && !archiveAdmin && !loggedInUser?.sessionToken) {
         setSptDataList([]);
         setArchiveNotice('Rekap cuti pribadi hanya tersedia untuk akun pegawai dengan NIP. Rekap seluruh pegawai tersedia di halaman Kepegawaian.');
         return;
       }
       if (needsArchiveKey && !archiveAdminKey) {
         const options = { loggedInUser, throwOnError: true };
-        setSptDataList(isSpt ? await fetchLiveSptData(options) : await fetchLiveCutiData(options));
+        setSptDataList(isSpt ? await fetchLiveSptData(options) : []);
       } else {
-        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'list_arsip', modul, ...(!isSpt ? {scope:'pribadi'} : {}), ...archiveAuth() });
+        const result = await sendClaimRequest(APPS_SCRIPT_URL, { action: 'list_arsip', modul, ...archiveScope, ...archiveAuth() });
         setSptDataList(normalizeArchiveItems(result.items));
-        setCanDeleteAll(isSpt && result.canDeleteAll === true);
+        setCanDeleteAll(result.canDeleteAll === true);
       }
     } catch (e) {
       console.error(`Gagal memuat data ${labelSatuan}:`, e);
@@ -1541,7 +1543,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   useEffect(() => {
     loadData();
-  }, [modul, loggedInUser?.NIP, loggedInUser?.sessionToken]);
+  }, [modul, loggedInUser?.NIP, loggedInUser?.sessionToken, loggedInUser?.adminSessionToken, archiveAdmin]);
 
   const askDelete = (items, event) => {
     event.stopPropagation();
@@ -1553,9 +1555,9 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     setIsDeleting(true); setDeleteError('');
     try {
       const result = await sendClaimRequest(APPS_SCRIPT_URL, {
-        action: 'hapus_arsip', modul, ...(!isSpt ? {scope:'pribadi'} : {}), ...archiveAuth(), archiveIds: deleteTargets.map(item => item.archiveId),
+        action: 'hapus_arsip', modul, ...archiveScope, ...archiveAuth(), archiveIds: deleteTargets.map(item => item.archiveId),
       });
-      setSptDataList(normalizeArchiveItems(result.items)); setCanDeleteAll(isSpt && result.canDeleteAll === true);
+      setSptDataList(normalizeArchiveItems(result.items)); setCanDeleteAll(result.canDeleteAll === true);
       setDeleteTargets(null);
       setArchiveNotice(`${result.deleted} data arsip dihapus. File Drive dan klaim submisi sebelumnya tetap disimpan.`);
     } catch (error) {
@@ -1563,13 +1565,13 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
     } finally { setIsDeleting(false); }
   };
 
-  const scopedArchiveItems = useMemo(() => isSpt ? sptDataList : personalLeaveItems(sptDataList, loggedInUser), [isSpt, sptDataList, loggedInUser?.NIP, loggedInUser?.sessionToken]);
+  const scopedArchiveItems = useMemo(() => isSpt || archiveAdmin ? sptDataList : personalLeaveItems(sptDataList, loggedInUser), [isSpt, archiveAdmin, sptDataList, loggedInUser?.NIP, loggedInUser?.sessionToken]);
   const availableYears = useMemo(() => {
     const years = new Set(scopedArchiveItems.map(item => item.tahun).filter(y => y && y !== '-'));
     return Array.from(years).sort((a, b) => b - a);
   }, [scopedArchiveItems]);
 
-  const filteredArchiveItems = useMemo(() => filterArchiveItems(scopedArchiveItems, {year:filterYear,month:filterMonth,search:searchQuery}), [scopedArchiveItems,filterYear,filterMonth,searchQuery]);
+  const filteredArchiveItems = useMemo(() => filterArchiveItems(scopedArchiveItems, {year:filterYear,month:isSpt ? filterMonth : 'Semua',search:searchQuery}), [scopedArchiveItems,filterYear,filterMonth,searchQuery,isSpt]);
   const filteredAndGroupedData = useMemo(() => {
     const filtered = filteredArchiveItems;
 
@@ -1661,7 +1663,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
 
   return (
     <div className="pt-4">
-      {!isSpt && <p className="mb-4 text-sm text-[#084C61]">Rekap Cuti Pribadi — hanya menampilkan cuti akun yang sedang login. Rekap seluruh pegawai tersedia di halaman Kepegawaian.</p>}
+      {!isSpt && <ArchiveLeaveSummary items={sptDataList} user={loggedInUser}/>}
       {needsArchiveKey && <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 text-sm">
         <label htmlFor="archive-admin-key" className="block font-bold mb-2">Kunci admin untuk menghapus arsip</label>
         <input id="archive-admin-key" type="password" autoComplete="off" value={archiveAdminKey} onChange={e => { setArchiveAdminKey(e.target.value); setSptDataList(items => items.map(({ archiveId, ...item }) => item)); setCanDeleteAll(false); }} className="border rounded-lg px-3 py-2 mr-2" />
@@ -1735,8 +1737,7 @@ const ArsipRekapitulasiList = ({ modul, loggedInUser }) => {
         </div>
       </div>
 
-      <div className="mb-4"><label className="text-xs font-bold">Bulan <select aria-label="Filter bulan arsip" value={filterMonth} onChange={event => setFilterMonth(event.target.value)} className="ml-2 border rounded-xl bg-white p-2"><option value="Semua">Semua bulan</option>{['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map(month => <option key={month}>{month}</option>)}</select></label></div>
-      {!isSpt && <ArchiveLeaveSummary items={filteredArchiveItems}/>}
+      {isSpt && <div className="mb-4"><label className="text-xs font-bold">Bulan <select aria-label="Filter bulan arsip" value={filterMonth} onChange={event => setFilterMonth(event.target.value)} className="ml-2 border rounded-xl bg-white p-2"><option value="Semua">Semua bulan</option>{['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map(month => <option key={month}>{month}</option>)}</select></label></div>}
       {/* List Arsip dengan Style Timeline */}
       <div className="relative pl-6 sm:pl-10">
         <div className="absolute left-[11px] sm:left-[19px] top-4 bottom-8 w-[2px] bg-gray-200 z-0"></div>
@@ -2987,10 +2988,10 @@ const useArchiveClaims = ({ documentModule, activeTab, activeStep, identity, sel
 };
 
 export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpdate, navigate: navigateRoute, currentView, activeStep: routeStep }) => {
-  // Keep the shared five-stage workflow intact for personal recaps. Admin inserts a roster before presensi.
-  const calculationView = currentView === 'penghitungan';
-  const activeStep = calculationView ? (routeStep === 2 ? 0 : routeStep > 2 ? routeStep - 1 : routeStep) : routeStep;
-  const navigate = React.useCallback((view, step = 1) => navigateRoute(view, view === 'penghitungan' && step >= 2 ? step + 1 : step), [navigateRoute]);
+  // Six displayed tabs for both calculation and personal recap; stage 0 is identity/roster.
+  const sixStepView = ['penghitungan','absensi-uang-makan','absensi-tunjangan-kinerja'].includes(currentView);
+  const activeStep = sixStepView ? submissionInternalStep(routeStep) : routeStep;
+  const navigate = React.useCallback((view, step = 1) => navigateRoute(view, ['penghitungan','absensi-uang-makan','absensi-tunjangan-kinerja'].includes(view) ? submissionRouteStep(step) : step), [navigateRoute]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [calculationModule, setCalculationModule] = useState('uang-makan');
   const [submissionAdminKey, setSubmissionAdminKey] = useState('');
@@ -3057,10 +3058,12 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
   useEffect(() => {
     if (activeTab !== 'spt' && activeTab !== 'cuti' && routeStep > 1 && !selectedPeriod) {
       navigate(currentView, 1);
+    } else if (sixStepView && !isSubmissionAdmin && routeStep === 2) {
+      navigateRoute(currentView, 3);
     } else if (isSubmissionAdmin && routeStep > 2 && !viewingEmployee) {
       navigateRoute(currentView, 2);
     }
-  }, [routeStep, currentView, navigate, navigateRoute, selectedPeriod, activeTab, isSubmissionAdmin, viewingEmployee]);
+  }, [routeStep, currentView, navigate, navigateRoute, selectedPeriod, activeTab, isSubmissionAdmin, viewingEmployee, sixStepView]);
 
   useEffect(() => {
     if (!isSubmissionAdmin || !viewingEmployee || !selectedPeriod) return;
@@ -3590,10 +3593,10 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
               </div>
 
               <div className="flex items-center justify-center gap-3">
-                {(isSubmissionAdmin ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map((num) => {
+                {[1, 2, 3, 4, 5, 6].map((num) => {
                   const isActive = routeStep === num;
-                  const internalStep = isSubmissionAdmin ? (num === 2 ? 0 : num > 2 ? num - 1 : num) : num;
-                    const isDisabled = isParsing || isSubmitting || isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) ||
+                  const internalStep = submissionInternalStep(num);
+                    const isDisabled = !submissionTabAvailable(num, isSubmissionAdmin) || isParsing || isSubmitting || isProcessingEvidence || evidenceBusy || (!selectedPeriod && num > 1) ||
                       (isSubmissionAdmin && num > 2 && !viewingEmployee) ||
                       (!readOnlyPeriod && ((internalStep === 3 && (!parsedData?.isValid || !!selectedFile || !isAlreadyUploaded)) || (internalStep >= 4 && !canOpenFinal)));
                     return (
@@ -3604,7 +3607,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                         onClick={() => {
                           navigateRoute(currentView, num);
                         }}
-                        title={isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : !viewingEmployee && isSubmissionAdmin ? 'Pilih pegawai di tab 2' : 'Selesaikan tahap sebelumnya terlebih dahulu') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
+                        title={!submissionTabAvailable(num, isSubmissionAdmin) ? 'Tab pemilihan pegawai hanya tersedia pada penghitungan admin' : isDisabled ? (!selectedPeriod ? 'Pilih periode terlebih dahulu' : !viewingEmployee && isSubmissionAdmin ? 'Pilih pegawai di tab 2' : 'Selesaikan tahap sebelumnya terlebih dahulu') : (!isActive ? `Ke Tahap ${num}` : 'Tahap Saat Ini')}
                         className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs transition-all shadow-xs ${
                           isActive
                             ? 'text-white ring-4 shadow-sm scale-105'
@@ -3639,7 +3642,7 @@ export const UserDashboardView = ({ loggedInUser, onLogoutRequest, onProfileUpda
                   resetUploadState(); setSelectedRecap({ modul: activeTab, periode: selectedPeriod.periodeEvent, employee }); navigate(currentView, 2);
                 }}/>
               ) : readOnlyPeriod && !(isSubmissionAdmin && activeStep === 2) ? (
-                <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} viewingEmployee={viewingEmployee} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => { if (step <= 2) setSelectedRecap(null); navigate(currentView, step); }} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
+                <ClosedSubmission key={submissionKey} endpoint={APPS_SCRIPT_URL} context={submission} viewingEmployee={viewingEmployee} step={readOnlySubmissionStep(activeStep) ? activeStep : 5} onStep={step => { if (step === 0 || step === 1) setSelectedRecap(null); navigate(currentView, step); }} onPreview={file => { setPreviewPdfName(file.fileName); setPreviewPdfUrl('https://drive.google.com/file/d/' + file.fileId + '/preview'); }}/>
               ) : activeStep === 2 && selectedPeriod ? (
                 <div className="space-y-5">
                 {viewingEmployee && <div className="flex flex-wrap justify-between gap-3 text-sm"><p className="font-bold text-[#084C61]">{viewingEmployee.nama} <span className="font-normal text-xs text-slate-500">NIP {viewingEmployee.nip}</span></p><button disabled={isParsing || isSubmitting} onClick={() => navigateRoute(currentView, 2)} className="underline text-[#084C61] disabled:opacity-40">Pilih pegawai lain</button></div>}

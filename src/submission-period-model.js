@@ -1,8 +1,11 @@
 export const MONTH_NAMES = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
 export const submissionIsReadOnly = period => !!period && period.status !== 'DIBUKA';
-export const submissionEntryStep = (period, admin) => admin ? 2 : 5;
-export const readOnlySubmissionStep = step => [1, 2, 3, 4, 5].includes(step);
+export const submissionEntryStep = (period, admin) => admin ? 2 : 6;
+export const readOnlySubmissionStep = step => [0, 1, 2, 3, 4, 5].includes(step);
+export const submissionInternalStep = step => step === 2 ? 0 : step > 2 ? step - 1 : step;
+export const submissionRouteStep = step => step === 0 ? 2 : step >= 2 ? step + 1 : step;
+export const submissionTabAvailable = (step, admin) => [1,2,3,4,5,6].includes(step) && (admin || step !== 2);
 export const submissionViewerIsReadOnly = (period, admin, viewingEmployee) => !admin || submissionIsReadOnly(period) || !!viewingEmployee;
 
 export function validateEmployeeRecaps(data, { modul, year, nip }) {

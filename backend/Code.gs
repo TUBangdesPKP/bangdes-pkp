@@ -1014,12 +1014,12 @@ function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
     if (payload.employeeReadOnly) {
-      if (['list_pendukung','preview_rekap_final'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
+      if (['list_pendukung','preview_rekap_final','presensi_tersimpan'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
       var reader = requireProfileSession_(payload);
       payload.nip = reader.nip;
     }
     if (payload.adminReadOnly) {
-      if (['list_pendukung','preview_rekap_final'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
+      if (['list_pendukung','preview_rekap_final','presensi_tersimpan'].indexOf(payload.action) === -1) throw new Error('Mode lihat rekap tidak mengizinkan perubahan.');
       requireSubmissionReader_(payload);
     }
     if (payload.action === 'agenda_dashboard') return json_(dashboardAgenda_(payload));
@@ -1713,7 +1713,7 @@ function previewFromState_(state) {
   return { status: 'success', spreadsheetId: state.record.spreadsheetId, revision: state.revision,
     nama: state.record.nama, nip: state.record.nip, periode: state.record.periode,
     spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/' + state.record.spreadsheetId + '/edit', rows: previewRows,
-    directorExempt: directorExempt, presenceByStatus: presenceByStatus, adjustments: directorExempt ? {} : adjustments, adjustmentDocuments: state.documents.filter(function(doc) { return doc.jenisDokumen === 'lupa_absen'; }),
+    directorExempt: directorExempt, presenceByStatus: presenceByStatus, adjustments: adjustments, adjustmentDocuments: state.documents.filter(function(doc) { return doc.jenisDokumen === 'lupa_absen'; }),
     savedResult: readSavedFinalResult_(state) };
 }
 function saveFinal_(payload) {
@@ -1736,7 +1736,7 @@ function saveFinal_(payload) {
   result = result.map(function(row) { return Object.assign({}, row, { jamKerja: schedules[row.tanggal] }); });
   var employee = payrollEmployee_(state.record);
   var directorExempt = directorTukinExempt_(employee, state.record.modul);
-  var corrections = directorExempt ? {} : validateAdjustments_(state, result, payload.adjustments || {});
+  var corrections = validateAdjustments_(state, result, payload.adjustments || {});
   result = applyAdjustments_(result, corrections);
   result = result.map(function(row){return Object.assign({},row,{datang:normalizedClock_(row.datang),pulang:normalizedClock_(row.pulang)});});
   // Financial inputs are read on the server, never accepted from a browser payload.
@@ -1911,7 +1911,6 @@ function legacySavedFinalResult_(state) {
   Object.keys(amounts).forEach(function(key){var value=field('Hitung_'+amounts[key]);amount[key]=value===null?null:Number(value);});
   amount.potonganSkp=amount.skp===null?null:100-amount.skp;
   var directorExempt = field('Hitung_Pengecualian_Direktur') === true;
-  if (directorExempt) amount.potonganSkp = 0;
   var schedules=savedSchedules_(state.saved,state.rows), corrections=savedAdjustments_(state), decisions=JSON.parse(text_(state.saved.baseline.getRange(2,2).getValue())||'{}');
   var rows=state.rows.map(function(row,i){return Object.assign({},row,{datang:normalizedClock_(state.saved.current[i][3]),pulang:normalizedClock_(state.saved.current[i][4]),keterangan:state.saved.current[i][21],jamKerja:schedules[row.tanggal],penyelesaian:decisions[row.tanggal]||''});});
   return {status:'success',nip:state.record.nip,nama:state.record.nama,periode:state.record.periode,spreadsheetId:state.record.spreadsheetId,spreadsheetUrl:'https://docs.google.com/spreadsheets/d/'+state.record.spreadsheetId+'/edit',revision:state.revision,rows:rows,adjustments:corrections,
@@ -2268,7 +2267,8 @@ function attendanceReferenceView_(record) {
   return { fileId: file.getId(), fileName: file.getName(), fileUrl: file.getUrl() };
 }
 function storedAttendance_(payload) {
-  requireSubmissionReader_(payload);
+  if (payload.employeeReadOnly) payload.nip = requireProfileSession_(payload).nip;
+  else requireSubmissionReader_(payload);
   submissionPeriod_(payload);
   if(!nip_(payload.nip))throw new Error('Pilih NIP pegawai terlebih dahulu.');
   var record=submissionRecord_(payload);
@@ -2296,7 +2296,7 @@ function submissionRecapFolder_(records) {
 function templateRecapPlan_(sheet, records, payload, period, holidays, generatedDate) {
   var meal=payload.modul==='uang-makan', first=meal?5:10, nipCol=meal?2:6, nameCol=meal?3:14;
   var values=sheet.getDataRange().getDisplayValues(), header=values[first-2]||[];
-  var totalFormulas=meal?[]:sheet.getRange(1,11,values.length,1).getFormulas();
+  var totalFormulas=meal?[]:sheet.getRange(1,11,values.length,3).getFormulas();
   if(text_(header[nipCol-1]).toUpperCase()!=='NIP'||text_(header[nameCol-1]).toLowerCase()!=='nama')throw new Error('Header NIP/Nama template tidak sesuai.');
   var byId={}, byName={}, seen={}, matched={}, changes=[];
   records.forEach(function(r){byId[r.nip]=r;var name=r.nama.toLowerCase().replace(/\s+/g,' ');(byName[name]||(byName[name]=[])).push(r);});
@@ -2326,15 +2326,18 @@ function templateRecapPlan_(sheet, records, payload, period, holidays, generated
       changes.push({row:i+1,col:8,value:person?generatedDate:'',format:'dd/mm/yyyy'});
       changes.push({row:i+1,col:9,value:person?person.potonganAbsensi:'',format:'0.00'});
       changes.push({row:i+1,col:12,value:person?person.besaranTukin:'',format:'#,##0'});
-      // Keep the original template formula inside a reversible zero-deduction
-      // wrapper. Regenerating a later, non-exempt submission restores it.
+      // Restore legacy K: percentages must remain visible. Exempt only the
+      // received amount in M, preserving its original formula for regeneration.
       var totalFormula=totalFormulas[i][0];
       var directorFormula=/^=IF\(N\("PKP_DIREKTUR_TUKIN"\)=0,0,\(([\s\S]*)\)\)$/.exec(totalFormula);
+      if(directorFormula)changes.push({row:i+1,col:11,value:'='+directorFormula[1]});
+      var receivedFormula=totalFormulas[i][2];
+      var receivedWrapper=/^=IF\(N\("PKP_DIREKTUR_NETTO"\)=0,L\d+,\(([\s\S]*)\)\)$/.exec(receivedFormula);
       if(person&&person.directorExempt===true){
-        var original=directorFormula?directorFormula[1]:totalFormula?totalFormula.slice(1):Number(values[i][10]||0);
-        if(!totalFormula&&!Number.isFinite(original))throw new Error('Kolom total potongan Tukin tidak valid: '+id);
-        changes.push({row:i+1,col:11,value:'=IF(N("PKP_DIREKTUR_TUKIN")=0,0,('+original+'))'});
-      }else if(directorFormula)changes.push({row:i+1,col:11,value:'='+directorFormula[1]});
+        var original=receivedWrapper?receivedWrapper[1]:receivedFormula?receivedFormula.slice(1):Number(values[i][12]||0);
+        if(!receivedFormula&&!Number.isFinite(original))throw new Error('Kolom nominal diterima Tukin tidak valid: '+id);
+        changes.push({row:i+1,col:13,value:'=IF(N("PKP_DIREKTUR_NETTO")=0,L'+(i+1)+',('+original+'))'});
+      }else if(receivedWrapper)changes.push({row:i+1,col:13,value:'='+receivedWrapper[1]});
       changes.push({row:i+1,col:4,value:period.monthName});changes.push({row:i+1,col:5,value:period.year});
     }
   }
@@ -2401,10 +2404,12 @@ function createSubmissionRecaps_(payload) {
       if(file&&(file.isTrashed()||!hasOnlyParent_(file,folder.getId())||file.getMimeType()!=='application/vnd.google-apps.spreadsheet'))throw new Error('File rekap lama tidak valid.');
       if(!file){file=DriveApp.getFileById(plan.templateId).makeCopy(title,folder);created.push(file);}
       var destination=SpreadsheetApp.openById(file.getId());
-      var outputSheetName=payload.modul==='uang-makan'?'Uang Makan '+period.label:plan.sheetName;
-      var sheet=destination.getSheetByName(outputSheetName), legacySheet=destination.getSheetByName(plan.sheetName);
-      if(sheet&&legacySheet&&sheet.getSheetId()!==legacySheet.getSheetId())throw new Error('Ada dua sheet rekap tujuan. Periksa sheet '+outputSheetName+' dan '+plan.sheetName+'.');
-      sheet=sheet||legacySheet;
+      var outputSheetName=(payload.modul==='uang-makan'?'Uang Makan_':'Tukin_')+period.monthName;
+      var candidates=[outputSheetName,plan.sheetName];
+      if(payload.modul==='uang-makan')candidates.push('Uang Makan '+period.label);
+      var matchesSheets=candidates.map(function(name){return destination.getSheetByName(name);}).filter(function(sheet){return !!sheet;});
+      if(matchesSheets.length>1)throw new Error('Ada dua sheet rekap tujuan. Periksa sheet '+candidates.join(' / ')+'.');
+      var sheet=matchesSheets[0];
       if(!sheet)throw new Error('Sheet rekap tujuan tidak ditemukan.');
       // Re-match destination IDs so manual row sorting cannot assign another employee's data.
       var changes=templateRecapPlan_(sheet,records.filter(function(r){return r.jenisAsn===plan.type;}),payload,period,holidays,generatedDate);
@@ -2541,7 +2546,7 @@ function calculateAttendance_(rows, employee, module) {
     var start = ramadan ? 480 : 450, friday = parseDate_(row.tanggal).getUTCDay() === 5;
     var end = (ramadan ? 900 : 960) + (friday ? 30 : 0);
     var result = { tanggal: row.tanggal, status: status, jamKerja: ramadan ? 'ramadan' : 'biasa', datang: row.datang, pulang: row.pulang,
-      wajibPulang: directorExempt ? '-' : attendanceClock_(end), flexiMenit: 0, tl: 0, psw: 0, menitTelat: 0, menitPsw: 0, menitTanpaPresensi: 0, potongan: 0 };
+      wajibPulang: attendanceClock_(end), flexiMenit: 0, tl: 0, psw: 0, menitTelat: 0, menitPsw: 0, menitTanpaPresensi: 0, potongan: 0 };
     if (status === 'Libur') { totals.libur++; return result; }
     totals.hariKerja++;
     if (status === 'Dinas') { totals.dinas++; return result; }
@@ -2549,13 +2554,6 @@ function calculateAttendance_(rows, employee, module) {
     if (status === 'TB') { totals.tb++; return result; }
     if (['WFO','WFA','WFH'].indexOf(status) === -1) {
       warnings.push(row.tanggal + ': keterangan ' + (status || '-') + ' belum mempunyai aturan perhitungan.'); return result;
-    }
-    if (directorExempt) {
-      // Count the final presence status after claims, even without clock punches.
-      // Dinas/Cuti/TB/Libur have already been counted in their own categories.
-      totals.masuk++;
-      result.adjusted = 0; result.lupaAbsen = 0; result.adjustments = {};
-      return result;
     }
     var arrival = attendanceMinutes_(row.datang), departure = attendanceMinutes_(row.pulang);
     result.adjusted = row.adjusted || 0;
@@ -2596,18 +2594,15 @@ function calculateAttendance_(rows, employee, module) {
   } else {
     amount.tarif = employee.tukin; amount.bruto = employee.tukin;
     if (employee.tukin === null) warnings.push('Besaran Tunjangan Kinerja belum tersedia/valid pada Data_Pegawai.');
-    if (directorExempt) { amount.potonganSkp = 0; amount.persenPotongan = 0; }
-    else {
-      if (employee.skp === null) warnings.push('Nilai SKP belum tersedia/valid pada Data_Pegawai.');
-      if (employee.skp !== null) amount.persenPotongan = 0.7 * (100 - employee.skp) + 0.3 * totals.potonganAbsensi;
-    }
+    if (employee.skp === null) warnings.push('Nilai SKP belum tersedia/valid pada Data_Pegawai.');
+    if (employee.skp !== null) amount.persenPotongan = 0.7 * (100 - employee.skp) + 0.3 * totals.potonganAbsensi;
     if (totals.potonganAbsensi > 100) warnings.push('Akumulasi potongan absensi melampaui 100%; perlu pemeriksaan aturan sebelum nominal ditetapkan.');
   }
   if (!warnings.length && amount.bruto !== null && amount.persenPotongan !== null) {
-    amount.potongan = Math.round(amount.bruto * amount.persenPotongan / 100);
+    amount.potongan = directorExempt ? 0 : Math.round(amount.bruto * amount.persenPotongan / 100);
     amount.netto = amount.bruto - amount.potongan;
   }
-  return { version: '2026-10-10', directorExempt: directorExempt, presenceByStatus: presenceByStatus, modul: module, jabatan: employee.jabatan, golongan: employee.golongan,
+  return { version: '2026-10-10-director-percent', directorExempt: directorExempt, presenceByStatus: presenceByStatus, modul: module, jabatan: employee.jabatan, golongan: employee.golongan,
     sources: employee.sources || {}, totals: totals, amount: amount, days: days, warnings: warnings, complete: !warnings.length };
 }
 function payrollHeader_(value) { return text_(value).toLowerCase().replace(/[^a-z0-9]/g, ''); }
@@ -2616,10 +2611,6 @@ function payrollHeader_(value) { return text_(value).toLowerCase().replace(/[^a-
 // its corrected punch events, not counted again as an additional adjustment.
 function addAdjustmentEvidenceCounts_(calculation, documents) {
   var letters = {}, used = {}, t = calculation.totals;
-  if (calculation.directorExempt) {
-    t.adjustmentDocuments = 0; t.adjustmentDocumentsUsed = 0; t.adjustmentDocumentsUnclaimed = 0; t.adjustmentReported = 0;
-    return calculation;
-  }
   (documents || []).forEach(function(doc) {
     if (doc.jenisDokumen === 'lupa_absen' && doc.fileId && (!doc.status || doc.status === 'active')) letters[doc.fileId] = true;
   });
@@ -2738,9 +2729,9 @@ function saveCalculationNote_(state, calculation) {
     'TL: 0,5% / 0,75% / 1,25%. PSW: 0,5% / 0,75% / 1% / 1,25%. Dinas/Cuti/TB/Libur bebas TL/PSW.',
     'Potongan rupiah dibulatkan ke rupiah terdekat. Jam asli disimpan di baseline; koreksi disertai surat.', ''];
   var notedDays = calculation.days.filter(function(day) { return day.tl || day.psw || day.menitTanpaPresensi; });
-  if (calculation.directorExempt) lines = lines.slice(0,4).concat([
-    'Pengecualian jabatan Direktur: Tukin penuh tanpa potongan SKP/absensi, flexi, TL, PSW, kekurangan jam, atau adjustment.',
-    'Jumlah masuk mengikuti keterangan akhir WFO/WFA/WFH setelah klaim. Dinas, Cuti, TB, dan Libur dicatat terpisah.', '']);
+  if (calculation.directorExempt) lines.push(
+    'Pengecualian jabatan Direktur: persentase SKP/absensi, flexi, TL, PSW, kekurangan jam, dan adjustment tetap dicatat; potongan rupiah Rp0.',
+    'Jumlah masuk mengikuti keterangan akhir WFO/WFA/WFH setelah klaim. Dinas, Cuti, TB, dan Libur dicatat terpisah.');
   else if (calculation.presenceByStatus) lines.push('Direktur: uang makan mengikuti keterangan akhir WFO/WFA/WFH meskipun jam kosong; Dinas/Cuti/TB/Libur tidak dibayar uang makan.');
   lines.push('CATATAN TANGGAL DENGAN TL, PSW, ATAU TIDAK ABSEN');
   if (!notedDays.length) lines.push('Tidak ada catatan TL, PSW, atau Tidak Absen.');
@@ -2772,8 +2763,7 @@ function saveCalculationNote_(state, calculation) {
     'Potongan: ' + money(a.potongan) + ' (' + (a.persenPotongan === null ? 'belum tersedia' : a.persenPotongan + '%') + ')',
     'Diterima: ' + money(a.netto));
   if (calculation.directorExempt) {
-    lines = lines.filter(function(line) { return !/^Surat lupa absen:|^Koreksi jam per bulan:/.test(line); });
-    lines.push('Rumus Direktur: diterima = besaran Tukin saat perhitungan; potongan 0%.');
+    lines.push('Rumus Direktur: persentase tercatat = 70% × (100% − SKP ' + a.skp + '%) + 30% × potongan absensi ' + t.potonganAbsensi + '%. Diterima = besaran Tukin saat perhitungan; potongan rupiah Rp0.');
   }
   else if (state.record.modul === 'tukin') lines.push('Rumus: 70% × (100% − SKP ' + a.skp + '%) + 30% × potongan absensi ' + t.potonganAbsensi + '%.');
   else lines.push('Rumus: ' + t.masuk + ' hari masuk × ' + money(a.tarif) + ', dikurangi potongan sesuai Data_Pegawai.');

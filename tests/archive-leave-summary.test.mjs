@@ -37,11 +37,15 @@ test('invalid recorded days never become fabricated durations, and no unseen emp
   assert.equal(archiveLeaveSummary([]).rows.length,0);
 });
 
-test('leave recap renders a per-person scrollable type matrix and clear empty state',async()=>{
+test('personal leave cards ignore list filters and exclude other employees for every role',async()=>{
   const bundle=await build({configFile:false,plugins:[react()],logLevel:'error',ssr:{noExternal:true},build:{ssr:'src/archive-leave-summary.jsx',write:false,emptyOutDir:false,rollupOptions:{external:['react','react/jsx-runtime']}}});
   const code=bundle.output.find(item=>item.type==='chunk').code.replace(/from (["'])(react(?:\/jsx-runtime)?)\1/g,(_,quote,specifier)=>`from ${JSON.stringify(import.meta.resolve(specifier))}`);
   const {ArchiveLeaveSummary}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
-  const html=renderToStaticMarkup(React.createElement(ArchiveLeaveSummary,{items:[{nip:'001',nama:'Pegawai Uji',tujuan:'Cuti Tahunan',jumlahHari:3}]}));
-  for(const text of ['Rekap Cuti per Pegawai','Pegawai Uji','001','Cuti Tahunan','Cuti Sakit','Cuti Karena Alasan Penting','Total Hari','overflow-x-auto'])assert.ok(html.includes(text));
-  assert.match(renderToStaticMarkup(React.createElement(ArchiveLeaveSummary,{items:[]})),/Belum ada data cuti/);
+  const items=[{nip:'001',nama:'Pegawai Uji',tujuan:'Cuti Tahunan',jumlahHari:3,tahun:'2025'}, {nip:'001',nama:'Pegawai Uji',tujuan:'Cuti Tahunan',jumlahHari:2,tahun:'2026'}, {nip:'002',nama:'Pegawai Lain',tujuan:'Cuti Rahasia',jumlahHari:99}];
+  for(const Role of ['pegawai','admin']) {
+    const html=renderToStaticMarkup(React.createElement(ArchiveLeaveSummary,{items,user:{NIP:'001',sessionToken:'test',Role},year:'2026',search:'Pegawai Lain'}));
+    for(const text of ['Data Cuti Saya','Cuti Tahunan','Cuti Sakit','Cuti Karena Alasan Penting','Total Hari','>5 '])assert.ok(html.includes(text));
+    assert.doesNotMatch(html,/Pegawai Lain|Cuti Rahasia|Rekap Cuti per Pegawai|<select|<input/);
+  }
+  assert.match(renderToStaticMarkup(React.createElement(ArchiveLeaveSummary,{items:[]})),/Belum ada data cuti pribadi/);
 });

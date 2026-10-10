@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, selectedSubmissionEmployee, submissionViewerIsReadOnly, validateEmployeeRecaps} from '../src/submission-period-model.js';
+import {submissionPeriodCard, submissionIsReadOnly, submissionEntryStep, readOnlySubmissionStep, submissionInternalStep, submissionRouteStep, submissionTabAvailable, selectedSubmissionEmployee, submissionViewerIsReadOnly, validateEmployeeRecaps} from '../src/submission-period-model.js';
 
 test('employees enter saved recap for every month; closed periods remain readable without upload',()=>{
   for (const modul of ['uang-makan','tukin']) {
@@ -8,13 +8,21 @@ test('employees enter saved recap for every month; closed periods remain readabl
     const open=submissionPeriodCard(modul,2027,1,'DIBUKA');
     assert.equal(submissionIsReadOnly(closed),true);
     assert.equal(submissionIsReadOnly(open),false);
-    assert.equal(submissionEntryStep(closed,false),5);
+    assert.equal(submissionEntryStep(closed,false),6);
     assert.equal(submissionEntryStep(closed,true),2);
-    assert.equal(submissionEntryStep(open,false),5);
+    assert.equal(submissionEntryStep(open,false),6);
     assert.equal(submissionEntryStep(open,true),2);
   }
-  assert.deepEqual([1,2,3,4,5].filter(readOnlySubmissionStep),[1,2,3,4,5]);
+  assert.deepEqual([0,1,2,3,4,5].filter(readOnlySubmissionStep),[0,1,2,3,4,5]);
   assert.equal(readOnlySubmissionStep(6),false);
+});
+
+test('six displayed tabs map to the shared workflow for personal recaps and admin',()=>{
+  const routes=[1,2,3,4,5,6];
+  assert.deepEqual(routes.map(submissionInternalStep),[1,0,2,3,4,5]);
+  assert.deepEqual(routes.map(submissionInternalStep).map(submissionRouteStep),routes);
+  assert.deepEqual(routes.filter(step=>submissionTabAvailable(step,false)),[1,3,4,5,6]);
+  assert.deepEqual(routes.filter(step=>submissionTabAvailable(step,true)),routes);
 });
 
 test('employees are always read-only; admin editing is retained only for open periods outside employee review', () => {
